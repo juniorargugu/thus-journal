@@ -4,11 +4,18 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260315-1773508528 -->
+<!-- build:20260321-1774082438 --> -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script>
+window._supabaseClient=supabase.createClient(
+  'https://wtfwynvvkiuottjnmozu.supabase.co',
+  'sb_publishable_ICP8BWTGJ5UmY3gARldr5g_KpdnLVi2'
+);
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -75,6 +82,59 @@ const EXIT_REASONS=["SL Hit","TP Hit","Manual","Other"];
 const ls={
   get:(k,def)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):def;}catch{return def;}},
   set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v));}catch{}}
+};
+const SUPA=window._supabaseClient;
+
+// ─── Supabase DB helpers ──────────────────────────────────────────────────
+const db={
+  async loadAll(uid){
+    try{
+      const[t,p,pr]=await Promise.all([
+        SUPA.from("trades").select("raw").eq("user_id",uid),
+        SUPA.from("portfolio").select("data").eq("user_id",uid).maybeSingle(),
+        SUPA.from("products").select("data").eq("user_id",uid).maybeSingle(),
+      ]);
+      return{
+        trades:  t.data?.map(r=>r.raw)||null,
+        portfolio: p.data?.data||null,
+        products: pr.data?.data||null,
+      };
+    }catch(e){console.warn("[db] loadAll error",e);return{};}
+  },
+  async saveTrades(uid,trades){
+    try{
+      await SUPA.from("trades").delete().eq("user_id",uid);
+      if(trades.length>0){
+        await SUPA.from("trades").insert(
+          trades.map(t=>({
+            id:t.id, user_id:uid,
+            product_id:t.productId, direction:t.direction,
+            status:t.status, contracts:t.contracts,
+            remaining_contracts:t.remainingContracts||t.contracts,
+            entry_price:t.entryPrice, exit_price:t.exitPrice,
+            entry_date:t.entryDate, exit_date:t.exitDate,
+            note:t.note||null, raw:t,
+          }))
+        );
+      }
+    }catch(e){console.warn("[db] saveTrades error",e);}
+  },
+  async savePortfolio(uid,data){
+    try{
+      await SUPA.from("portfolio").upsert(
+        {user_id:uid,data,updated_at:new Date().toISOString()},
+        {onConflict:"user_id"}
+      );
+    }catch(e){console.warn("[db] savePortfolio error",e);}
+  },
+  async saveProducts(uid,data){
+    try{
+      await SUPA.from("products").upsert(
+        {user_id:uid,data,updated_at:new Date().toISOString()},
+        {onConflict:"user_id"}
+      );
+    }catch(e){console.warn("[db] saveProducts error",e);}
+  },
 };
 
 const calcPL=(product,contracts,entryPrice,exitPrice,direction)=>{
@@ -1476,14 +1536,11 @@ function UpdatePriceModal({trade,product,onSubmit,onCancel}){
 
 const fetchYahooPrice=async(sym)=>{
   try{
-    // Use Yahoo Finance chart API directly — no Netlify function needed
-    const url=`https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1m&range=1d&corsDomain=finance.yahoo.com`;
-    const r=await fetch(url,{cache:"no-store",headers:{"User-Agent":"Mozilla/5.0"}});
+    const r=await fetch(`/.netlify/functions/price?sym=${encodeURIComponent(sym)}`,{cache:"no-store"});
     if(!r.ok)throw new Error("status "+r.status);
     const d=await r.json();
-    const price=d?.chart?.result?.[0]?.meta?.regularMarketPrice;
-    if(price!=null&&!isNaN(price))return+price;
-    throw new Error("no price");
+    if(d?.price!=null&&!isNaN(d.price))return+d.price;
+    throw new Error("no price in response");
   }catch(e){throw new Error("price fetch failed: "+e.message);}
 };
 
@@ -2631,6 +2688,37 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTr
             className={`${clsBtn("ghost","sm")} self-end mb-0.5`}>Reset</button>
           <button onClick={()=>setShowImport(true)}
             className={`${clsBtn("default","sm")} self-end mb-0.5`}>📥 Import Excel</button>
+          <button onClick={()=>{
+            loadXLSX(()=>{
+              var wb=window.XLSX.utils.book_new();
+              var headers=["Date","Product","Direction","Contracts","Entry","Exit","Ticks","Gross P/L","Net P/L","Commission","Setup","Note"];
+              var rows=filteredTrades.map(function(t){
+                var p=(products||[]).find(function(x){return x.id===t.productId;});
+                var tks=(p&&t.exitPrice!=null)?((+t.exitPrice-+t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1):null;
+                var gross=p&&t.exitPrice!=null?calcPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
+                var net=p&&t.exitPrice!=null?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
+                var comm=p?getRoundTripComm(p)*t.contracts:null;
+                return[
+                  t.openDateTime||t.entryDate||"",
+                  t.contractCode||(p?p.currentContract:t.productId)||"",
+                  t.direction||"",
+                  t.contracts||"",
+                  t.entryPrice||"",
+                  t.exitPrice!=null?t.exitPrice:"",
+                  tks!=null?+tks.toFixed(1):"",
+                  gross!=null?+gross.toFixed(0):"",
+                  net!=null?+net.toFixed(0):"",
+                  comm!=null?+comm.toFixed(0):"",
+                  t.setupType||"",
+                  t.preNote||t.note||"",
+                ];
+              });
+              var ws=window.XLSX.utils.aoa_to_sheet([headers,...rows]);
+              ws["!cols"]=headers.map(function(_,i){return{wch:i===0?18:i===1?14:i===11?30:10};});
+              window.XLSX.utils.book_append_sheet(wb,ws,"Trades");
+              window.XLSX.writeFile(wb,"THUS_Journal_Export.xlsx");
+            });
+          }} className={`${clsBtn("green","sm")} self-end mb-0.5`}>📤 Export Excel</button>
           {!mergeActive?(
             <button onClick={()=>setMergeActive(true)}
               className={`${clsBtn("ghost","sm")} self-end mb-0.5`}>⊕ Merge</button>
@@ -4435,9 +4523,10 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
             return(
               <div key={p.id} className="bg-input/20 border border-border rounded-xl p-4 space-y-3">
                 <div className="flex items-start justify-between gap-2">
-                  <div>
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="font-bold text-base text-txt">{p.baseSymbol}</span>
-                    <span className="text-muted text-xs ml-2">{p.name}</span>
+                    <span className="text-muted text-xs">{p.name}</span>
+                    {p._isLegacy&&<span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-muted/15 text-muted border border-muted/20 leading-none">LEGACY</span>}
                   </div>
                   <div className="flex gap-1.5 flex-shrink-0">
                     <button onClick={()=>{setAddMode(false);setEditProduct(p);setEditField({currentContract:p.currentContract,nextContract:p.nextContract||"",initialMargin:p.initialMargin,commissionPerLeg:p.commissionPerLeg,vatEnabled:p.vatEnabled??true});}}
@@ -4666,7 +4755,7 @@ function useTFEXMarketStatus(){
 function SetupJourney({onComplete,products,onProductsChange,onBalanceSet}){
   const[step,setStep]=useState(0);
   // Step 0: Welcome  Step 1: Balance  Step 2: Products
-  const TOTAL=3;
+  const TOTAL=4;
 
   // Balance step state
   const today=new Date();
@@ -4684,6 +4773,13 @@ function SetupJourney({onComplete,products,onProductsChange,onBalanceSet}){
     return m;
   });
 
+  // Series step state
+  const[seriesEdits,setSeriesEdits]=useState(()=>{
+    var m={};
+    (products||[]).filter(function(p){return !p._isLegacy;}).forEach(function(p){m[p.id]=p.series||"";});
+    return m;
+  });
+
   function handleBalanceNext(){
     var n=parseFloat(String(balAmt).replace(/,/g,""));
     if(n>0&&!balanceSavedRef.current){
@@ -4697,9 +4793,19 @@ function SetupJourney({onComplete,products,onProductsChange,onBalanceSet}){
   function handleProductSave(){
     onProductsChange&&onProductsChange(function(prev){
       return prev.map(function(p){
+        if(p._isLegacy)return p;
         var newComm=parseFloat(comms[p.id]);
-        if(!isNaN(newComm)&&newComm>=0)return{...p,commissionPerLeg:newComm};
-        return p;
+        var newSeries=seriesEdits[p.id]||p.series||"";
+        var CYCLE=["H","M","U","Z"];
+        var newContract=p.baseSymbol+newSeries;
+        var ni=(CYCLE.indexOf(newSeries[0])+1)%4;
+        var yy=newSeries.slice(1);
+        var ny=ni===0?(+yy+1)%100:"";
+        var nextSer=CYCLE[ni]+(ni===0?String(ny).padStart(2,"0"):yy);
+        var nextContract=p.baseSymbol+nextSer;
+        var out={...p,series:newSeries,currentContract:newContract,nextContract:nextContract};
+        if(!isNaN(newComm)&&newComm>=0)out.commissionPerLeg=newComm;
+        return out;
       });
     });
   }
@@ -4796,8 +4902,47 @@ function SetupJourney({onComplete,products,onProductsChange,onBalanceSet}){
     );
   }
 
-  var stepContent=[renderStep0,renderStep1,renderStep2];
-  var stepTitles=["ยินดีต้อนรับ","เงินทุน","ค่าคอม"];
+
+  function renderStep3(){
+    return(
+      <div className="flex flex-col gap-3 px-2 py-2">
+        <div className="text-center">
+          <div className="text-4xl mb-2">📅</div>
+          <h2 className="text-lg font-bold text-txt">อัปเดต Series</h2>
+          <p className="text-muted text-sm mt-1">เลือก series ปัจจุบันของแต่ละ product<br/><span className="text-muted/60 text-xs">เปลี่ยนได้ภายหลังใน Settings → Products</span></p>
+        </div>
+        <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
+          {(products||[]).filter(function(p){return !p._isLegacy;}).map(function(p){
+            var CYCLE=["H","M","U","Z"];
+            var seriesOpts=CYCLE.map(function(c){
+              var yy=String(new Date().getFullYear()).slice(-2);
+              var codes=[c+yy];
+              var ny=String(+yy+1).padStart(2,"0");
+              codes.push(c+ny);
+              return codes;
+            }).flat();
+            return(
+              <div key={p.id} className="flex items-center gap-3 bg-input/30 border border-border/60 rounded-xl px-3 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <div className="font-semibold text-txt text-sm">{p.baseSymbol}</div>
+                  <div className="text-xs text-muted font-mono">{p.currentContract}</div>
+                </div>
+                <select
+                  value={seriesEdits[p.id]||p.series||""}
+                  onChange={function(e){var id=p.id;var v=e.target.value;setSeriesEdits(function(prev){return{...prev,[id]:v};});}}
+                  className="bg-input border border-border rounded-lg px-2 py-1 text-txt text-xs outline-none focus:border-yellow/50 tabular-nums">
+                  {seriesOpts.map(function(s){return(<option key={s} value={s}>{p.baseSymbol+s}</option>);})}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-center text-muted/60 text-xs">Series คือ เดือน+ปีที่ contract จะหมดอายุ เช่น H26=มี.ค.26</p>
+      </div>
+    );
+  }
+  var stepContent=[renderStep0,renderStep1,renderStep2,renderStep3];
+  var stepTitles=["ยินดีต้อนรับ","เงินทุน","ค่าคอม","Series"];
 
   return(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -4859,6 +5004,13 @@ function SetupJourney({onComplete,products,onProductsChange,onBalanceSet}){
           {step===2&&(
             <div className="flex gap-2">
               <button onClick={()=>setStep(1)} className={clsBtn("default")}>← กลับ</button>
+              <button onClick={()=>setStep(3)}
+                className={clsBtn("yellow")+" flex-1"}>ถัดไป →</button>
+            </div>
+          )}
+          {step===3&&(
+            <div className="flex gap-2">
+              <button onClick={()=>setStep(2)} className={clsBtn("default")}>← กลับ</button>
               <button onClick={finish}
                 className={clsBtn("yellow")+" flex-1"}>เสร็จสิ้น เริ่มใช้งาน 🚀</button>
             </div>
@@ -5867,7 +6019,7 @@ function PageCalendar({trades,products}){
 }
 
 
-function App(){
+function App({session,onSignOut}){
   const[trades,   setTrades]   =useState(()=>ls.get("tj_trades",[]));
   const[portfolio,setPortfolio]=useState(()=>{
     const saved=ls.get("tj_portfolio",null);
@@ -6059,6 +6211,46 @@ function App(){
   useEffect(()=>{ls.set("tj_trades",   trades);   },[trades]);
   useEffect(()=>{ls.set("tj_portfolio",portfolio); },[portfolio]);
   useEffect(()=>{ls.set("tj_products", products);  },[products]);
+
+  // ─── Supabase sync ───────────────────────────────────────────────────────
+  const uid=session?.user?.id;
+  const dbTimers=useRef({});
+  // Load from Supabase on login
+  useEffect(()=>{
+    if(!uid)return;
+    db.loadAll(uid).then(data=>{
+      if(data.trades!==null)   { setTrades(data.trades);    ls.set("tj_trades",   data.trades);   }
+      if(data.portfolio!==null){
+        // Merge stepHistory: keep local events not yet in Supabase (generated before first save)
+        setPortfolio(local=>{
+          const remoteEvents=data.portfolio.stepHistory||[];
+          const localEvents=local.stepHistory||[];
+          const remoteIds=new Set(remoteEvents.map(e=>e.date+e.step+e.event));
+          const newLocal=localEvents.filter(e=>!remoteIds.has(e.date+e.step+e.event));
+          const merged={...data.portfolio,stepHistory:[...remoteEvents,...newLocal]};
+          ls.set("tj_portfolio",merged);
+          return merged;
+        });
+      }
+      if(data.products!==null) { setProducts(data.products);  ls.set("tj_products", data.products);  }
+    });
+  },[uid]);
+  // Save to Supabase on changes (1.5 s debounce)
+  useEffect(()=>{
+    if(!uid)return;
+    clearTimeout(dbTimers.current.trades);
+    dbTimers.current.trades=setTimeout(()=>db.saveTrades(uid,trades),1500);
+  },[trades,uid]);
+  useEffect(()=>{
+    if(!uid)return;
+    clearTimeout(dbTimers.current.portfolio);
+    dbTimers.current.portfolio=setTimeout(()=>db.savePortfolio(uid,portfolio),1500);
+  },[portfolio,uid]);
+  useEffect(()=>{
+    if(!uid)return;
+    clearTimeout(dbTimers.current.products);
+    dbTimers.current.products=setTimeout(()=>db.saveProducts(uid,products),1500);
+  },[products,uid]);
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),1000);return()=>clearInterval(t);},[]);
 
   const txBalance=useMemo(()=>(portfolio.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-(t.amount)),0),[portfolio]);
@@ -6118,8 +6310,18 @@ function App(){
   const addTrades  =useCallback(ts=>setTrades(p=>[...p,...ts]),[]);
   const handleImportBalance=useCallback(({amount,date})=>{
     if(!amount||amount<=0)return;
-    const tx={id:uid(),type:"deposit",date:date||new Date().toISOString().slice(0,16),amount,note:"เงินเริ่มต้น (จาก Import)"};
-    setPortfolio(p=>({...p,transactions:[...(p.transactions||[]),tx]}));
+    setPortfolio(p=>{
+      // Idempotent: skip if a setup deposit with same amount+date already exists
+      const txDate=(date||new Date().toISOString().slice(0,16)).slice(0,10);
+      const already=(p.transactions||[]).some(t=>
+        t.note==="เงินเริ่มต้น (จาก Import)"&&
+        Math.abs(t.amount-amount)<1&&
+        (t.date||"").slice(0,10)===txDate
+      );
+      if(already)return p;
+      const tx={id:uid(),type:"deposit",date:date||new Date().toISOString().slice(0,16),amount,note:"เงินเริ่มต้น (จาก Import)"};
+      return{...p,transactions:[...(p.transactions||[]),tx]};
+    });
   },[]);
   const updateTrade=useCallback(t=>setTrades(p=>p.map(x=>x.id===t.id?t:x)),[]);
   const deleteTrade=useCallback(id=>setTrades(p=>p.filter(x=>x.id!==id)),[]);
@@ -6163,7 +6365,7 @@ function App(){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.13.6</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.15.0</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
@@ -6196,6 +6398,15 @@ function App(){
               <span className="text-muted text-xs">Portfolio Balance</span>
               <span className="font-semibold text-yellow">{fmtTHB(balance,0)} ฿</span>
             </div>
+            {session&&(
+              <button onClick={onSignOut} title={session.user.email}
+                style={{padding:"5px 11px",borderRadius:7,border:"1px solid #2B3139",background:"transparent",
+                  color:"#848E9C",cursor:"pointer",fontSize:12,display:"flex",alignItems:"center",gap:5,transition:"all .18s"}}
+                onMouseOver={e=>{e.currentTarget.style.color="#F6465D";e.currentTarget.style.borderColor="#F6465D";}}
+                onMouseOut={e=>{e.currentTarget.style.color="#848E9C";e.currentTarget.style.borderColor="#2B3139";}}>
+                👤 ออก
+              </button>
+            )}
           </div>
         </div>
       {mobileMenu&&(
@@ -6231,7 +6442,119 @@ function App(){
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+// ─── Supabase Auth ────────────────────────────────────────────────────────────
+function useAuth(){
+  const[session,setSession]=useState(null);
+  const[loading,setLoading]=useState(true);
+  useEffect(()=>{
+    SUPA.auth.getSession().then(({data})=>{
+      setSession(data.session);
+      setLoading(false);
+    });
+    const{data:{subscription}}=SUPA.auth.onAuthStateChange((_e,s)=>setSession(s));
+    return()=>subscription.unsubscribe();
+  },[]);
+  return{session,loading};
+}
+
+function AuthScreen(){
+  const[mode,setMode]=useState("login");
+  const[email,setEmail]=useState("");
+  const[pw,setPw]=useState("");
+  const[err,setErr]=useState("");
+  const[msg,setMsg]=useState("");
+  const[busy,setBusy]=useState(false);
+
+  const switchMode=m=>{ setMode(m);setErr("");setMsg(""); };
+
+  const handleAuth=async()=>{
+    if(!email||!pw)return;
+    setErr("");setMsg("");setBusy(true);
+    try{
+      if(mode==="login"){
+        const{error}=await SUPA.auth.signInWithPassword({email,password:pw});
+        if(error)setErr(error.message);
+      }else{
+        const{error}=await SUPA.auth.signUp({email,password:pw});
+        if(error)setErr(error.message);
+        else setMsg("ส่งอีเมลยืนยันแล้ว — กรุณาตรวจสอบ inbox");
+      }
+    }catch(e){setErr(e.message);}
+    setBusy(false);
+  };
+
+  return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0E11",padding:"16px"}}>
+      <div style={{width:"100%",maxWidth:380,background:"#1E2329",borderRadius:16,border:"1px solid #2B3139",padding:"32px 28px"}}>
+        <div style={{textAlign:"center",marginBottom:28}}>
+          <div style={{background:"#6B3FA0",borderRadius:8,padding:"6px 14px",display:"inline-block",marginBottom:8}}>
+            <span style={{color:"white",fontWeight:800,fontSize:18,letterSpacing:3}}>THUS</span>
+          </div>
+          <div style={{fontSize:12,color:"#848E9C"}}>Trading Journal • TFEX</div>
+        </div>
+        <div style={{display:"flex",background:"#0B0E11",borderRadius:8,padding:3,gap:3,marginBottom:22}}>
+          {["login","signup"].map(m=>(
+            <button key={m} onClick={()=>switchMode(m)}
+              style={{flex:1,padding:"8px 0",borderRadius:6,border:"none",cursor:"pointer",fontSize:13,fontWeight:600,
+                background:mode===m?"#F0B90B":"transparent",color:mode===m?"#0B0E11":"#848E9C",transition:"all .18s"}}>
+              {m==="login"?"เข้าสู่ระบบ":"สมัครสมาชิก"}
+            </button>
+          ))}
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:13}}>
+          <div>
+            <div style={{fontSize:11,color:"#848E9C",marginBottom:5}}>อีเมล</div>
+            <input type="email" value={email} onChange={e=>setEmail(e.target.value)} placeholder="your@email.com"
+              style={{width:"100%",padding:"10px 13px",background:"#2B3139",border:"1px solid #3C434E",
+                borderRadius:8,color:"#EAECEF",fontSize:14,outline:"none",boxSizing:"border-box"}}/>
+          </div>
+          <div>
+            <div style={{fontSize:11,color:"#848E9C",marginBottom:5}}>รหัสผ่าน</div>
+            <input type="password" value={pw} onChange={e=>setPw(e.target.value)} placeholder="••••••••"
+              onKeyDown={e=>e.key==="Enter"&&handleAuth()}
+              style={{width:"100%",padding:"10px 13px",background:"#2B3139",border:"1px solid #3C434E",
+                borderRadius:8,color:"#EAECEF",fontSize:14,outline:"none",boxSizing:"border-box"}}/>
+          </div>
+          {err&&<div style={{color:"#F6465D",fontSize:12,padding:"8px 11px",background:"rgba(246,70,93,0.1)",borderRadius:6}}>{err}</div>}
+          {msg&&<div style={{color:"#0ECB81",fontSize:12,padding:"8px 11px",background:"rgba(14,203,129,0.1)",borderRadius:6}}>{msg}</div>}
+          <button onClick={handleAuth} disabled={busy||!email||!pw}
+            style={{width:"100%",padding:"11px 0",background:busy||!email||!pw?"#2B3139":"#F0B90B",
+              border:"none",borderRadius:8,cursor:busy||!email||!pw?"not-allowed":"pointer",
+              fontSize:14,fontWeight:700,color:busy||!email||!pw?"#848E9C":"#0B0E11",transition:"all .18s",marginTop:2}}>
+            {busy?"กำลังดำเนินการ...":(mode==="login"?"เข้าสู่ระบบ":"สมัครสมาชิก")}
+          </button>
+        </div>
+        {mode==="login"&&(
+          <div style={{textAlign:"center",marginTop:16,fontSize:11,color:"#848E9C"}}>
+            ลืมรหัสผ่าน?{" "}
+            <button onClick={async()=>{
+              if(!email){setErr("กรุณาใส่อีเมลก่อน");return;}
+              const{error}=await SUPA.auth.resetPasswordForEmail(email);
+              if(error)setErr(error.message);
+              else setMsg("ส่งลิงก์รีเซ็ตรหัสผ่านไปที่อีเมลแล้ว");
+            }} style={{background:"none",border:"none",color:"#F0B90B",cursor:"pointer",fontSize:11,padding:0}}>
+              รีเซ็ตรหัสผ่าน
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Root(){
+  const{session,loading}=useAuth();
+  const handleSignOut=async()=>{ await SUPA.auth.signOut(); };
+  if(loading)return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0E11"}}>
+      <div style={{color:"#F0B90B",fontSize:22,fontWeight:800,letterSpacing:3}}>THUS</div>
+    </div>
+  );
+  if(!session)return <AuthScreen/>;
+  return <App session={session} onSignOut={handleSignOut}/>;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);
 </script>
 </body>
 </html>
