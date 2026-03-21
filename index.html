@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260321-1774094448 --> -->
+<!-- build:20260321-1774095365 --> -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -176,15 +176,31 @@ const sheetsSync={
       const open=(trades||[]).filter(t=>t.status==="open"&&t.entryPrice);
       const rows=open.map(t=>{
         const p=(products||[]).find(x=>x.id===t.productId);
+        const posVal=p&&t.entryPrice?((p.contractSize||1)*t.entryPrice*(t.remainingContracts||t.contracts)):0;
+        const margin=p?(p.initialMargin||0)*(t.remainingContracts||t.contracts):0;
+        const sl=t.stopLoss||t.invalidation||null;
+        const tp=t.takeProfit||t.target||null;
+        const slTicks=sl&&p?Math.abs((t.entryPrice-sl)/p.tickSize):null;
+        const tpTicks=tp&&p?Math.abs((tp-t.entryPrice)/p.tickSize):null;
+        const rr=slTicks&&tpTicks&&slTicks>0?(tpTicks/slTicks):null;
+        const slBaht=slTicks!=null&&p?slTicks*p.tickValue*(t.remainingContracts||t.contracts):null;
         return{
           symbol:t.contractCode||(p?p.currentContract:t.productId)||"",
-          side:t.direction||"",
-          entry:t.entryPrice||0,
-          contracts:t.contracts||0,
-          target:t.takeProfit||t.target||"",
-          invalidation:t.stopLoss||t.invalidation||"",
-          timestamp:t.openDateTime||t.entryDate||"",
           product:p?p.name:t.productId,
+          side:t.direction||"",
+          setup_type:t.setupType||"",
+          contracts:t.remainingContracts||t.contracts||0,
+          entry:t.entryPrice||0,
+          stop_loss:sl||"",
+          take_profit:tp||"",
+          rr_ratio:rr?+rr.toFixed(2):"",
+          sl_risk_baht:slBaht?+slBaht.toFixed(0):"",
+          position_value:+posVal.toFixed(0),
+          margin_used:+margin.toFixed(0),
+          pre_note:t.preNote||"",
+          rating:t.tradeRating||"",
+          open_datetime:t.openDateTime||t.entryDate||"",
+          gearing_limit:t.setupType?({"ประคองตลาด":2,"สวนเทรนด์":2,"Sideway":5,"Snow Ball":5,"Scalp":8,"Run-Trend":15,"Other":5}[t.setupType]||5):"","
         };
       });
       // Route through Netlify proxy to avoid CORS/redirect issues with Apps Script
@@ -4668,7 +4684,7 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
         <p className="text-muted text-xs mb-3">Sync open positions ไปที่ Google Sheets อัตโนมัติ</p>
         <div className="flex gap-2 mb-2">
           <input type="text" value={sheetsUrl} onChange={e=>setSheetsUrl(e.target.value)}
-            placeholder="https://script.google.com/macros/s/..."
+            placeholder="https://script.google.com/macros/s/.../exec"
             className="flex-1 bg-input border border-border rounded-lg px-3 py-2 text-txt text-xs outline-none focus:border-yellow/50"/>
           <button onClick={handleSheetsSync} disabled={!sheetsUrl||sheetsSyncing}
             className={clsBtn("yellow","sm")+" disabled:opacity-40 disabled:cursor-not-allowed"}>
@@ -6498,7 +6514,7 @@ function App({session,onSignOut}){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.4</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.5</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
