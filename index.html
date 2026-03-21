@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260321-1774084907 --> -->
+<!-- build:20260321-1774086702 --> -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -53,6 +53,9 @@ tailwind.config={theme:{extend:{colors:{
 </script>
 </head>
 <body>
+<div id="splash" style="position:fixed;inset:0;background:#0B0E11;z-index:9999;display:flex;align-items:center;justify-content:center">
+  <div style="color:#F0B90B;font-size:22px;font-weight:800;letter-spacing:3px;font-family:Inter,sans-serif">THUS</div>
+</div>
 <div id="root"></div>
 <script type="text/babel">
 const{useState,useEffect,useMemo,useCallback,useRef}=React;
@@ -6494,7 +6497,7 @@ function App({session,onSignOut}){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.1</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.2</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
@@ -6697,11 +6700,12 @@ function AuthScreen(){
 function Root(){
   const{session,loading}=useAuth();
   const handleSignOut=async()=>{ await SUPA.auth.signOut(); };
-  if(loading)return(
-    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0E11"}}>
-      <div style={{color:"#F0B90B",fontSize:22,fontWeight:800,letterSpacing:3}}>THUS</div>
-    </div>
-  );
+  // Remove splash overlay once React has mounted
+  useEffect(()=>{
+    const el=document.getElementById("splash");
+    if(el)el.remove();
+  },[]);
+  if(loading)return null;
   if(!session)return <AuthScreen/>;
   return <App session={session} onSignOut={handleSignOut}/>;
 }
