@@ -4,12 +4,12 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260321-1774082438 --> -->
+<!-- build:20260321-1774083977 --> -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
 <script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.0/dist/umd/supabase.js"></script>
 <script>
 window._supabaseClient=supabase.createClient(
   'https://wtfwynvvkiuottjnmozu.supabase.co',
@@ -20,6 +20,7 @@ window._supabaseClient=supabase.createClient(
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#0B0E11;font-family:'Inter',system-ui,sans-serif;color:#EAECEF;}
+body>*:not(#root){display:none!important;}
 ::-webkit-scrollbar{width:4px;height:4px;}
 ::-webkit-scrollbar-track{background:#0B0E11;}
 ::-webkit-scrollbar-thumb{background:#2B3139;border-radius:2px;}
@@ -89,15 +90,18 @@ const SUPA=window._supabaseClient;
 const db={
   async loadAll(uid){
     try{
-      const[t,p,pr]=await Promise.all([
+      const[t,p,pr,n]=await Promise.all([
         SUPA.from("trades").select("raw").eq("user_id",uid),
         SUPA.from("portfolio").select("data").eq("user_id",uid).maybeSingle(),
         SUPA.from("products").select("data").eq("user_id",uid).maybeSingle(),
+        SUPA.from("notes").select("freeform,daily").eq("user_id",uid).maybeSingle(),
       ]);
       return{
-        trades:  t.data?.map(r=>r.raw)||null,
+        trades:    t.data?.map(r=>r.raw)||null,
         portfolio: p.data?.data||null,
-        products: pr.data?.data||null,
+        products:  pr.data?.data||null,
+        notesFreeform: n.data?.freeform||null,
+        notesDaily:    n.data?.daily||null,
       };
     }catch(e){console.warn("[db] loadAll error",e);return{};}
   },
@@ -134,6 +138,55 @@ const db={
         {onConflict:"user_id"}
       );
     }catch(e){console.warn("[db] saveProducts error",e);}
+  },
+  async saveNotes(uid,freeform,daily){
+    try{
+      await SUPA.from("notes").upsert(
+        {user_id:uid,freeform,daily,updated_at:new Date().toISOString()},
+        {onConflict:"user_id"}
+      );
+    }catch(e){console.warn("[db] saveNotes error",e);}
+  },
+  async loadNotes(uid){
+    try{
+      const{data}=await SUPA.from("notes").select("freeform,daily").eq("user_id",uid).maybeSingle();
+      return{freeform:data?.freeform||null,daily:data?.daily||null};
+    }catch(e){console.warn("[db] loadNotes error",e);return{};}
+  },
+};
+
+// ─── Google Sheets sync ───────────────────────────────────────────────────────
+// Writes open positions to a public Google Sheet via Apps Script web app
+// Sheet URL stored in localStorage key: tj_sheets_url
+const sheetsSync={
+  getUrl:()=>{try{return localStorage.getItem("tj_sheets_url")||"";}catch{return"";}},
+  setUrl:(url)=>{try{localStorage.setItem("tj_sheets_url",url);}catch{}},
+  async push(trades,products){
+    const url=sheetsSync.getUrl();
+    if(!url)return{ok:false,err:"no_url"};
+    try{
+      const open=(trades||[]).filter(t=>t.status==="open"&&t.entryPrice);
+      const rows=open.map(t=>{
+        const p=(products||[]).find(x=>x.id===t.productId);
+        return{
+          symbol:t.contractCode||(p?p.currentContract:t.productId)||"",
+          side:t.direction||"",
+          entry:t.entryPrice||0,
+          contracts:t.contracts||0,
+          target:t.takeProfit||t.target||"",
+          invalidation:t.stopLoss||t.invalidation||"",
+          timestamp:t.openDateTime||t.entryDate||"",
+          product:p?p.name:t.productId,
+        };
+      });
+      const r=await fetch(url,{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({action:"sync_positions",rows,ts:new Date().toISOString()}),
+        mode:"no-cors",
+      });
+      return{ok:true,count:rows.length};
+    }catch(e){return{ok:false,err:e.message};}
   },
 };
 
@@ -545,22 +598,42 @@ function ProfitReminderBanner({trades,products,balance}){
   );
 }
 
-function IMAlertBanner({trades,products,balance}){
-  // Warn if total used margin > 80% of balance
+function IMAlertBanner({trades,products,balance,livePrices,liveTimestamps}){
   const usedMargin=(trades||[]).filter(t=>t.status==="open").reduce((s,t)=>{
     const p=(products||[]).find(x=>x.id===t.productId);
     return s+(p?(p.initialMargin||0)*(t.remainingContracts||t.contracts):0);
   },0);
-  if(!balance||balance<=0||usedMargin<=0)return null;
-  const pct=usedMargin/balance*100;
-  if(pct<80)return null;
+  // Stale price warning: any open trade whose live price is >10 min old
+  const staleProducts=useMemo(()=>{
+    const openProds=[...new Set((trades||[]).filter(t=>t.status==="open"&&t.entryPrice).map(t=>t.productId))];
+    return openProds.filter(pid=>{
+      const ts=liveTimestamps&&liveTimestamps[pid];
+      if(!ts)return false;
+      return(Date.now()-new Date(ts).getTime())>10*60*1000;
+    });
+  },[trades,liveTimestamps]);
+  const marginPct=(!balance||balance<=0||usedMargin<=0)?0:usedMargin/balance*100;
+  if(marginPct<80&&staleProducts.length===0)return null;
   return(
-    <div className="flex items-center gap-3 bg-red/5 border border-red/20 rounded-xl px-3 py-2.5 text-sm mb-3">
-      <span className="text-xl">⚠️</span>
-      <div>
-        <span className="font-semibold text-red">Margin Alert</span>
-        <span className="text-muted ml-2">ใช้ margin ไปแล้ว {pct.toFixed(0)}% ({fmtTHB(usedMargin,0)} ฿) — IM เหลือน้อย</span>
-      </div>
+    <div className="space-y-2 mb-3">
+      {marginPct>=80&&(
+        <div className="flex items-center gap-3 bg-red/5 border border-red/20 rounded-xl px-3 py-2.5 text-sm">
+          <span className="text-xl">⚠️</span>
+          <div>
+            <span className="font-semibold text-red">Margin Alert</span>
+            <span className="text-muted ml-2">ใช้ margin ไปแล้ว {marginPct.toFixed(0)}% ({fmtTHB(usedMargin,0)} ฿) — IM เหลือน้อย</span>
+          </div>
+        </div>
+      )}
+      {staleProducts.length>0&&(
+        <div className="flex items-center gap-3 bg-yellow/5 border border-yellow/20 rounded-xl px-3 py-2.5 text-sm">
+          <span className="text-xl">🕐</span>
+          <div>
+            <span className="font-semibold text-yellow">ราคาเก่า</span>
+            <span className="text-muted ml-2">ราคา live อาจค้างนานกว่า 10 นาที — กด 🔄 Refresh เพื่ออัปเดต</span>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2455,6 +2528,7 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
 
       
       <section>
+        <IMAlertBanner trades={trades} products={products} balance={balance} livePrices={livePrices} liveTimestamps={liveTimestamps}/>
         <h2 className="font-semibold text-txt mb-3 flex items-center justify-between">Open Positions <span className="text-muted font-normal text-sm">({openTrades.length})</span><button onClick={()=>fetchPricesFn&&fetchPricesFn()} className="text-xs text-muted hover:text-yellow transition px-2 py-0.5 rounded hover:bg-input font-normal">🔄 Refresh</button></h2>
         {openTrades.length===0
           ?<div className="bg-card border border-border border-dashed rounded-2xl p-10 text-center space-y-3">
@@ -2692,7 +2766,7 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTr
             loadXLSX(()=>{
               var wb=window.XLSX.utils.book_new();
               var headers=["Date","Product","Direction","Contracts","Entry","Exit","Ticks","Gross P/L","Net P/L","Commission","Setup","Note"];
-              var rows=filteredTrades.map(function(t){
+              var rows=filtered.map(function(t){
                 var p=(products||[]).find(function(x){return x.id===t.productId;});
                 var tks=(p&&t.exitPrice!=null)?((+t.exitPrice-+t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1):null;
                 var gross=p&&t.exitPrice!=null?calcPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
@@ -4330,6 +4404,16 @@ function ProfitWithdrawModal({currentBalance,onSubmit,onCancel}){
 function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsChange,showToast,showConfirm}){
   const[txModal,setTxModal]=useState(null);
   const[aiKey,setAiKey]=useState(()=>ls.get("tj_ai_key",""));
+  const[sheetsUrl,setSheetsUrl]=useState(()=>sheetsSync.getUrl());
+  const[sheetsStatus,setSheetsStatus]=useState(null);
+  const[sheetsSyncing,setSheetsSyncing]=useState(false);
+  const handleSheetsSync=async()=>{
+    sheetsSync.setUrl(sheetsUrl);
+    setSheetsSyncing(true);setSheetsStatus(null);
+    const res=await sheetsSync.push(trades,products);
+    setSheetsSyncing(false);
+    setSheetsStatus(res.ok?`OK — sync ${res.count} positions`:`Error: ${res.err}`);
+  };
   const[editProduct,setEditProduct]=useState(null);
   const[editField,setEditField]=useState({});
   const[addMode,setAddMode]=useState(false);
@@ -4568,6 +4652,26 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
             );
           })}
         </div>
+      </section>
+
+      <section className="bg-card border border-border rounded-xl p-5">
+        <h2 className="font-semibold text-txt mb-1">Google Sheets Sync</h2>
+        <p className="text-muted text-xs mb-3">Sync open positions ไปที่ Google Sheets อัตโนมัติ</p>
+        <div className="flex gap-2 mb-2">
+          <input type="text" value={sheetsUrl} onChange={e=>setSheetsUrl(e.target.value)}
+            placeholder="https://script.google.com/macros/s/..."
+            className="flex-1 bg-input border border-border rounded-lg px-3 py-2 text-txt text-xs outline-none focus:border-yellow/50"/>
+          <button onClick={handleSheetsSync} disabled={!sheetsUrl||sheetsSyncing}
+            className={clsBtn("yellow","sm")+" disabled:opacity-40 disabled:cursor-not-allowed"}>
+            {sheetsSyncing?"Syncing...":"🔄 Sync Now"}
+          </button>
+        </div>
+        {sheetsStatus&&(
+          <div className={`text-xs px-3 py-2 rounded-lg ${sheetsStatus.startsWith("OK")?"bg-green/10 text-green":"bg-red/10 text-red"}`}>
+            {sheetsStatus}
+          </div>
+        )}
+        <p className="text-muted/60 text-xs mt-2">ต้องสร้าง Apps Script web app ก่อน — ดู <a href="https://developers.google.com/apps-script" target="_blank" className="text-yellow/70 hover:text-yellow underline">docs</a></p>
       </section>
 
       {txModal&&<PortfolioTxModal type={txModal} onSubmit={handleTx} onCancel={()=>setTxModal(null)} currentBalance={balance}/>}
@@ -5264,7 +5368,7 @@ function MarketPatternModal({pattern,onSave,onCancel}){
     </Modal>
   );
 }
-function PageNotes(){
+function PageNotes({uid,syncNotesToCloud}){
   const[notes,setNotes]=useState(()=>{
     const saved=ls.get("tj_notes",null);
     return saved||STARTER_NOTES;
@@ -5288,7 +5392,10 @@ function PageNotes(){
     }
   },[]);
 
-  useEffect(()=>{ls.set("tj_notes",notes);},[notes]);
+  useEffect(()=>{
+    ls.set("tj_notes",notes);
+    if(syncNotesToCloud)syncNotesToCloud(notes,ls.get("tj_daily_notes",{}));
+  },[notes]);
 
   const saveNote=(n)=>{
     if(editNote){
@@ -5525,7 +5632,7 @@ function DailyNoteModal({dateKey,existing,onSave,onClose}){
   );
 }
 
-function PageCalendar({trades,products}){
+function PageCalendar({trades,products,uid,syncNotesToCloud}){
   const PROD_COLORS={gold:"#F0B90B",s50:"#3B82F6",silver:"#9CA3AF",usdjpy:"#8B5CF6"};
   const[calMode,setCalMode]=useState("heatmap");
   const[calLightbox,setCalLightbox]=useState(null);
@@ -5544,10 +5651,12 @@ function PageCalendar({trades,products}){
       delete updated[dateKey];
       setDailyNotes(updated);
       ls.set("tj_daily_notes",updated);
+      if(syncNotesToCloud)syncNotesToCloud(ls.get("tj_notes",[]),updated);
     }else{
       const updated={...dailyNotes,[dateKey]:{mood,note}};
       setDailyNotes(updated);
       ls.set("tj_daily_notes",updated);
+      if(syncNotesToCloud)syncNotesToCloud(ls.get("tj_notes",[]),updated);
     }
   };
 
@@ -6233,13 +6342,18 @@ function App({session,onSignOut}){
         });
       }
       if(data.products!==null) { setProducts(data.products);  ls.set("tj_products", data.products);  }
+      if(data.notesFreeform!==null){ ls.set("tj_notes",data.notesFreeform); }
+      if(data.notesDaily!==null)   { ls.set("tj_daily_notes",data.notesDaily); }
     });
   },[uid]);
   // Save to Supabase on changes (1.5 s debounce)
   useEffect(()=>{
     if(!uid)return;
     clearTimeout(dbTimers.current.trades);
-    dbTimers.current.trades=setTimeout(()=>db.saveTrades(uid,trades),1500);
+    dbTimers.current.trades=setTimeout(()=>{
+      db.saveTrades(uid,trades);
+      if(sheetsSync.getUrl())sheetsSync.push(trades,products);
+    },1500);
   },[trades,uid]);
   useEffect(()=>{
     if(!uid)return;
@@ -6251,6 +6365,14 @@ function App({session,onSignOut}){
     clearTimeout(dbTimers.current.products);
     dbTimers.current.products=setTimeout(()=>db.saveProducts(uid,products),1500);
   },[products,uid]);
+
+  // Notes & daily notes Supabase sync — driven by custom events from PageNotes/PageCalendar
+  const syncNotesToCloud=useCallback((freeform,daily)=>{
+    if(!uid)return;
+    clearTimeout(dbTimers.current.notes);
+    dbTimers.current.notes=setTimeout(()=>db.saveNotes(uid,freeform,daily),1500);
+  },[uid]);
+
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),1000);return()=>clearInterval(t);},[]);
 
   const txBalance=useMemo(()=>(portfolio.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-(t.amount)),0),[portfolio]);
@@ -6365,7 +6487,7 @@ function App({session,onSignOut}){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.15.0</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.0</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
@@ -6430,11 +6552,28 @@ function App({session,onSignOut}){
         {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio}/>}
-        {page==="calendar" &&<PageCalendar  trades={trades} products={products}/>}
-        {page==="notes"    &&<PageNotes/>}
+        {page==="calendar" &&<PageCalendar  trades={trades} products={products} uid={uid} syncNotesToCloud={syncNotesToCloud}/>}
+        {page==="notes"    &&<PageNotes uid={uid} syncNotesToCloud={syncNotesToCloud}/>}
         {page==="settings" &&<PageSettings portfolio={portfolio} products={products} trades={trades} onPortfolioChange={setPortfolio} onProductsChange={setProducts} showToast={showToast} showConfirm={showConfirm}/>}
       </main>
 
+      {pendingWithdrawal>0&&page!=="settings"&&(
+        <div className="fixed bottom-5 right-5 z-40 fade-in"
+          style={{maxWidth:280,background:"#1E2329",border:"1px solid rgba(240,185,11,0.4)",borderRadius:14,padding:"12px 16px",boxShadow:"0 8px 32px rgba(0,0,0,0.5)"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <span style={{fontSize:22}}>💰</span>
+            <div style={{flex:1}}>
+              <div style={{fontSize:11,color:"#848E9C",marginBottom:2}}>Profit Withdrawal</div>
+              <div style={{fontSize:15,fontWeight:700,color:"#F0B90B"}}>{fmtTHB(pendingWithdrawal,0)} ฿</div>
+              <div style={{fontSize:10,color:"#848E9C"}}>ควรถอนออกจาก port</div>
+            </div>
+            <button onClick={()=>setPage("settings")}
+              style={{padding:"4px 10px",borderRadius:7,border:"1px solid rgba(240,185,11,0.4)",background:"rgba(240,185,11,0.12)",color:"#F0B90B",cursor:"pointer",fontSize:11,fontWeight:600}}>
+              ถอน
+            </button>
+          </div>
+        </div>
+      )}
       <ConfirmDialog state={confirmState} onCancel={hideConfirm}/>
       <ToastContainer toasts={toasts} onDismiss={dismissToast}/>
       {showSetup&&<SetupJourney onComplete={completeSetup} products={products} onProductsChange={setProducts} onBalanceSet={handleImportBalance}/>}
