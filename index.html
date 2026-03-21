@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260321-1774095365 --> -->
+<!-- build:20260321-1774095569 --> -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -200,7 +200,7 @@ const sheetsSync={
           pre_note:t.preNote||"",
           rating:t.tradeRating||"",
           open_datetime:t.openDateTime||t.entryDate||"",
-          gearing_limit:t.setupType?({"ประคองตลาด":2,"สวนเทรนด์":2,"Sideway":5,"Snow Ball":5,"Scalp":8,"Run-Trend":15,"Other":5}[t.setupType]||5):"","
+          gearing_limit:t.setupType?({"ประคองตลาด":2,"สวนเทรนด์":2,"Sideway":5,"Snow Ball":5,"Scalp":8,"Run-Trend":15,"Other":5}[t.setupType]||5):"",
         };
       });
       // Route through Netlify proxy to avoid CORS/redirect issues with Apps Script
@@ -6514,7 +6514,7 @@ function App({session,onSignOut}){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.5</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.6</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
