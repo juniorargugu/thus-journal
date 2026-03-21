@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260321-1774086702 --> -->
+<!-- build:20260321-1774087564 --> -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -6327,12 +6327,12 @@ function App({session,onSignOut}){
   useEffect(()=>{ls.set("tj_products", products);  },[products]);
 
   // ─── Supabase sync ───────────────────────────────────────────────────────
-  const uid=session?.user?.id;
+  const authUid=session?.user?.id;
   const dbTimers=useRef({});
   // Load from Supabase on login
   useEffect(()=>{
-    if(!uid)return;
-    db.loadAll(uid).then(data=>{
+    if(!authUid)return;
+    db.loadAll(authUid).then(data=>{
       if(data.trades!==null)   { setTrades(data.trades);    ls.set("tj_trades",   data.trades);   }
       if(data.portfolio!==null){
         // Merge stepHistory: keep local events not yet in Supabase (generated before first save)
@@ -6350,30 +6350,30 @@ function App({session,onSignOut}){
       if(data.notesFreeform!==null){ ls.set("tj_notes",data.notesFreeform); }
       if(data.notesDaily!==null)   { ls.set("tj_daily_notes",data.notesDaily); }
     });
-  },[uid]);
+  },[authUid]);
   // Save to Supabase on changes (1.5 s debounce)
   useEffect(()=>{
-    if(!uid)return;
+    if(!authUid)return;
     clearTimeout(dbTimers.current.trades);
     dbTimers.current.trades=setTimeout(()=>{
-      db.saveTrades(uid,trades);
+      db.saveTrades(authUid,trades);
       if(sheetsSync.getUrl())sheetsSync.push(trades,products);
     },1500);
   },[trades,uid]);
   useEffect(()=>{
-    if(!uid)return;
+    if(!authUid)return;
     clearTimeout(dbTimers.current.portfolio);
-    dbTimers.current.portfolio=setTimeout(()=>db.savePortfolio(uid,portfolio),1500);
+    dbTimers.current.portfolio=setTimeout(()=>db.savePortfolio(authUid,portfolio),1500);
   },[portfolio,uid]);
   useEffect(()=>{
-    if(!uid)return;
+    if(!authUid)return;
     clearTimeout(dbTimers.current.products);
-    dbTimers.current.products=setTimeout(()=>db.saveProducts(uid,products),1500);
+    dbTimers.current.products=setTimeout(()=>db.saveProducts(authUid,products),1500);
   },[products,uid]);
 
   // Notes & daily notes Supabase sync — driven by custom events from PageNotes/PageCalendar
   const syncNotesToCloud=useCallback((freeform,daily)=>{
-    if(!uid)return;
+    if(!authUid)return;
     clearTimeout(dbTimers.current.notes);
     dbTimers.current.notes=setTimeout(()=>db.saveNotes(uid,freeform,daily),1500);
   },[uid]);
@@ -6497,7 +6497,7 @@ function App({session,onSignOut}){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.2</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.3</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
@@ -6562,8 +6562,8 @@ function App({session,onSignOut}){
         {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio}/>}
-        {page==="calendar" &&<PageCalendar  trades={trades} products={products} uid={uid} syncNotesToCloud={syncNotesToCloud}/>}
-        {page==="notes"    &&<PageNotes uid={uid} syncNotesToCloud={syncNotesToCloud}/>}
+        {page==="calendar" &&<PageCalendar  trades={trades} products={products} uid={authUid} syncNotesToCloud={syncNotesToCloud}/>}
+        {page==="notes"    &&<PageNotes uid={authUid} syncNotesToCloud={syncNotesToCloud}/>}
         {page==="settings" &&<PageSettings portfolio={portfolio} products={products} trades={trades} onPortfolioChange={setPortfolio} onProductsChange={setProducts} showToast={showToast} showConfirm={showConfirm}/>}
       </main>
 
@@ -6702,8 +6702,12 @@ function Root(){
   const handleSignOut=async()=>{ await SUPA.auth.signOut(); };
   // Remove splash overlay once React has mounted
   useEffect(()=>{
-    const el=document.getElementById("splash");
-    if(el)el.remove();
+    // Delay slightly so any injected content (Netlify badge etc) is covered
+    const t=setTimeout(()=>{
+      const el=document.getElementById("splash");
+      if(el){el.style.transition="opacity 0.15s";el.style.opacity="0";setTimeout(()=>el.remove(),150);}
+    },200);
+    return()=>clearTimeout(t);
   },[]);
   if(loading)return null;
   if(!session)return <AuthScreen/>;
