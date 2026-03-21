@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260321-1774095569 --> -->
+<!-- build:20260321-1774096085 --> -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -169,27 +169,52 @@ const db={
 const sheetsSync={
   getUrl:()=>{try{return localStorage.getItem("tj_sheets_url")||"";}catch{return"";}},
   setUrl:(url)=>{try{localStorage.setItem("tj_sheets_url",url);}catch{}},
-  async push(trades,products){
+  _calcMetrics(trades,products){
+    const closed=(trades||[]).filter(t=>t.status==="closed"&&t.exitPrice!=null);
+    const nets=closed.map(t=>{
+      const p=(products||[]).find(x=>x.id===t.productId);
+      return p?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0;
+    });
+    const bePct=0.01;
+    const wins=nets.filter(n=>n>0);const losses=nets.filter(n=>n<0);
+    const winRate=nets.length>0?(wins.length/nets.length*100):0;
+    const totalWin=wins.reduce((s,v)=>s+v,0);
+    const totalLoss=losses.reduce((s,v)=>s+v,0);
+    const pf=totalWin>0&&totalLoss<0?totalWin/Math.abs(totalLoss):null;
+    const avgWin=wins.length?totalWin/wins.length:0;
+    const avgLoss=losses.length?Math.abs(totalLoss)/losses.length:0;
+    const rr=avgLoss>0?avgWin/avgLoss:null;
+    const ticks=closed.map(t=>{
+      const p=(products||[]).find(x=>x.id===t.productId);
+      return p&&t.exitPrice!=null?((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1):null;
+    }).filter(v=>v!=null);
+    const avgTicks=ticks.length?ticks.reduce((s,v)=>s+v,0)/ticks.length:null;
+    return{winRate,pf,rr,avgWin,avgLoss,avgTicks,totalTrades:nets.length,wins:wins.length,losses:losses.length};
+  },
+  async push(trades,products,portfolio,balance,stepData){
     const url=sheetsSync.getUrl();
     if(!url)return{ok:false,err:"no_url"};
     try{
+      const GEARING_MAP={"ประคองตลาด":2,"สวนเทรนด์":2,"Sideway":5,"Snow Ball":5,"Scalp":8,"Run-Trend":15,"Other":5};
+      // ── Tab 1: Open Positions ────────────────────────────────────────────
       const open=(trades||[]).filter(t=>t.status==="open"&&t.entryPrice);
-      const rows=open.map(t=>{
+      const positions=open.map(t=>{
         const p=(products||[]).find(x=>x.id===t.productId);
-        const posVal=p&&t.entryPrice?((p.contractSize||1)*t.entryPrice*(t.remainingContracts||t.contracts)):0;
-        const margin=p?(p.initialMargin||0)*(t.remainingContracts||t.contracts):0;
+        const rc=t.remainingContracts||t.contracts;
+        const posVal=p&&t.entryPrice?((p.contractSize||1)*t.entryPrice*rc):0;
+        const margin=p?(p.initialMargin||0)*rc:0;
         const sl=t.stopLoss||t.invalidation||null;
         const tp=t.takeProfit||t.target||null;
         const slTicks=sl&&p?Math.abs((t.entryPrice-sl)/p.tickSize):null;
         const tpTicks=tp&&p?Math.abs((tp-t.entryPrice)/p.tickSize):null;
         const rr=slTicks&&tpTicks&&slTicks>0?(tpTicks/slTicks):null;
-        const slBaht=slTicks!=null&&p?slTicks*p.tickValue*(t.remainingContracts||t.contracts):null;
+        const slBaht=slTicks!=null&&p?slTicks*p.tickValue*rc:null;
         return{
           symbol:t.contractCode||(p?p.currentContract:t.productId)||"",
           product:p?p.name:t.productId,
           side:t.direction||"",
           setup_type:t.setupType||"",
-          contracts:t.remainingContracts||t.contracts||0,
+          contracts:rc,
           entry:t.entryPrice||0,
           stop_loss:sl||"",
           take_profit:tp||"",
@@ -197,20 +222,80 @@ const sheetsSync={
           sl_risk_baht:slBaht?+slBaht.toFixed(0):"",
           position_value:+posVal.toFixed(0),
           margin_used:+margin.toFixed(0),
-          pre_note:t.preNote||"",
+          gearing_limit:t.setupType?(GEARING_MAP[t.setupType]||5):"",
           rating:t.tradeRating||"",
           open_datetime:t.openDateTime||t.entryDate||"",
-          gearing_limit:t.setupType?({"ประคองตลาด":2,"สวนเทรนด์":2,"Sideway":5,"Snow Ball":5,"Scalp":8,"Run-Trend":15,"Other":5}[t.setupType]||5):"",
+          pre_note:t.preNote||"",
         };
       });
-      // Route through Netlify proxy to avoid CORS/redirect issues with Apps Script
+      // ── Tab 2: Portfolio Summary ─────────────────────────────────────────
+      const m=sheetsSync._calcMetrics(trades,products);
+      const txBal=(portfolio?.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
+      const realPL=(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
+        const p=(products||[]).find(x=>x.id===t.productId);
+        return s+(p?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0);
+      },0);
+      const hwm=portfolio?.peakEquity||0;
+      const ddPct=hwm>0&&balance<hwm?((hwm-balance)/hwm*100):0;
+      const summary={
+        balance:balance||0,
+        realized_pl:+realPL.toFixed(0),
+        hwm:+hwm.toFixed(0),
+        drawdown_pct:+ddPct.toFixed(2),
+        win_rate:+m.winRate.toFixed(1),
+        profit_factor:m.pf?+m.pf.toFixed(2):"",
+        avg_rr:m.rr?+m.rr.toFixed(2):"",
+        avg_ticks:m.avgTicks?+m.avgTicks.toFixed(1):"",
+        total_trades:m.totalTrades,
+        wins:m.wins,losses:m.losses,
+        avg_win:+m.avgWin.toFixed(0),
+        avg_loss:+m.avgLoss.toFixed(0),
+        synced_at:new Date().toISOString(),
+      };
+      // ── Tab 3: 21 Steps ──────────────────────────────────────────────────
+      const stepHistory=(portfolio?.stepHistory||[]).map(e=>({
+        step:e.step,
+        event:e.event,
+        date:e.date?e.date.slice(0,10):"",
+        balance:e.balance?+e.balance.toFixed(0):"",
+        days_from_prev:e.daysFromPrev||"",
+      }));
+      const stepSummary=stepData||{};
+      // ── Tab 4: Closed Trades ─────────────────────────────────────────────
+      const closed=(trades||[]).filter(t=>t.status==="closed");
+      const closedRows=closed.map(t=>{
+        const p=(products||[]).find(x=>x.id===t.productId);
+        const net=p?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
+        const tks=p&&t.exitPrice!=null?((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1):null;
+        return{
+          symbol:t.contractCode||(p?p.currentContract:t.productId)||"",
+          product:p?p.name:t.productId||"",
+          side:t.direction||"",
+          setup_type:t.setupType||"",
+          contracts:t.contracts||0,
+          entry:t.entryPrice||0,
+          exit:t.exitPrice||"",
+          ticks:tks?+tks.toFixed(1):"",
+          net_pl:net?+net.toFixed(0):"",
+          exit_reason:t.exitReason||"",
+          rating:t.tradeRating||"",
+          open_datetime:t.openDateTime||"",
+          exit_datetime:t.exitDateTime||"",
+          pre_note:t.preNote||"",
+          post_note:t.postNote||"",
+        };
+      });
       const proxyRes=await fetch("/.netlify/functions/sheets-proxy",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({url,action:"sync_positions",rows,ts:new Date().toISOString()}),
+        body:JSON.stringify({
+          url,action:"sync_all",
+          positions,summary,stepHistory,stepSummary,closedTrades:closedRows,
+          ts:new Date().toISOString(),
+        }),
       });
       if(!proxyRes.ok)throw new Error("proxy "+proxyRes.status);
-      return{ok:true,count:rows.length};
+      return{ok:true,count:positions.length};
     }catch(e){return{ok:false,err:e.message};}
   },
 };
@@ -4435,7 +4520,7 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
   const handleSheetsSync=async()=>{
     sheetsSync.setUrl(sheetsUrl);
     setSheetsSyncing(true);setSheetsStatus(null);
-    const res=await sheetsSync.push(trades,products);
+    const res=await sheetsSync.push(trades,products,portfolio,balance,null);
     setSheetsSyncing(false);
     setSheetsStatus(res.ok?`OK — sync ${res.count} positions`:`Error: ${res.err}`);
   };
@@ -6374,7 +6459,10 @@ function App({session,onSignOut}){
     clearTimeout(dbTimers.current.trades);
     dbTimers.current.trades=setTimeout(()=>{
       db.saveTrades(authUid,trades);
-      if(sheetsSync.getUrl())sheetsSync.push(trades,products);
+      if(sheetsSync.getUrl()){
+        const sd={currentStep,nextThreshold:stepThresholds[currentStep]||null,stepBase};
+        sheetsSync.push(trades,products,portfolio,balance,sd);
+      }
     },1500);
   },[trades,uid]);
   useEffect(()=>{
@@ -6514,7 +6602,7 @@ function App({session,onSignOut}){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.6</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.17.0</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
