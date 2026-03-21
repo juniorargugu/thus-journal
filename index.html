@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260321-1774087564 --> -->
+<!-- build:20260321-1774094448 --> -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -187,12 +187,13 @@ const sheetsSync={
           product:p?p.name:t.productId,
         };
       });
-      const r=await fetch(url,{
+      // Route through Netlify proxy to avoid CORS/redirect issues with Apps Script
+      const proxyRes=await fetch("/.netlify/functions/sheets-proxy",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({action:"sync_positions",rows,ts:new Date().toISOString()}),
-        mode:"no-cors",
+        body:JSON.stringify({url,action:"sync_positions",rows,ts:new Date().toISOString()}),
       });
+      if(!proxyRes.ok)throw new Error("proxy "+proxyRes.status);
       return{ok:true,count:rows.length};
     }catch(e){return{ok:false,err:e.message};}
   },
@@ -6497,7 +6498,7 @@ function App({session,onSignOut}){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.3</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.16.4</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
