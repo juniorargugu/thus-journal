@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260321-1774096085 --> -->
+<!-- build:20260321-1774194726 --> -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -98,18 +98,24 @@ const SUPA=window._supabaseClient;
 const db={
   async loadAll(uid){
     try{
-      const[t,p,pr,n]=await Promise.all([
+      const[t,p,pr,n,ud]=await Promise.all([
         SUPA.from("trades").select("raw").eq("user_id",uid),
         SUPA.from("portfolio").select("data").eq("user_id",uid).maybeSingle(),
         SUPA.from("products").select("data").eq("user_id",uid).maybeSingle(),
         SUPA.from("notes").select("freeform,daily").eq("user_id",uid).maybeSingle(),
+        SUPA.from("user_data").select("key,value").eq("user_id",uid),
       ]);
+      const udMap={};
+      (ud.data||[]).forEach(r=>{try{udMap[r.key]=JSON.parse(r.value);}catch{udMap[r.key]=r.value;}});
       return{
-        trades:    t.data?.map(r=>r.raw)||null,
-        portfolio: p.data?.data||null,
-        products:  pr.data?.data||null,
+        trades:        t.data?.map(r=>r.raw)||null,
+        portfolio:     p.data?.data||null,
+        products:      pr.data?.data||null,
         notesFreeform: n.data?.freeform||null,
         notesDaily:    n.data?.daily||null,
+        notifHistory:  udMap["tj_notif_history"]||null,
+        patterns:      udMap["tj_patterns"]||null,
+        aiKey:         udMap["tj_ai_key"]||null,
       };
     }catch(e){console.warn("[db] loadAll error",e);return{};}
   },
@@ -160,6 +166,31 @@ const db={
       const{data}=await SUPA.from("notes").select("freeform,daily").eq("user_id",uid).maybeSingle();
       return{freeform:data?.freeform||null,daily:data?.daily||null};
     }catch(e){console.warn("[db] loadNotes error",e);return{};}
+  },
+  async saveUserData(uid,key,value){
+    try{
+      await SUPA.from("user_data").upsert(
+        {user_id:uid,key,value:JSON.stringify(value),updated_at:new Date().toISOString()},
+        {onConflict:"user_id,key"}
+      );
+    }catch(e){console.warn("[db] saveUserData error",e);}
+  },
+  async loadUserData(uid,keys){
+    try{
+      const{data}=await SUPA.from("user_data").select("key,value").eq("user_id",uid).in("key",keys);
+      const out={};
+      (data||[]).forEach(r=>{try{out[r.key]=JSON.parse(r.value);}catch{out[r.key]=r.value;}});
+      return out;
+    }catch(e){console.warn("[db] loadUserData error",e);return{};}
+  },
+  // live_prices: read latest prices polled by Netlify cron
+  async loadLivePrices(){
+    try{
+      const{data}=await SUPA.from("live_prices").select("product_id,price,updated_at");
+      const prices={};const ts={};
+      (data||[]).forEach(r=>{prices[r.product_id]=r.price;ts[r.product_id]=r.updated_at;});
+      return{prices,timestamps:ts};
+    }catch(e){console.warn("[db] loadLivePrices error",e);return{prices:{},timestamps:{}};}
   },
 };
 
@@ -1727,7 +1758,7 @@ const fetchYahooPrice=async(sym)=>{
   }catch(e){throw new Error("price fetch failed: "+e.message);}
 };
 
-// Manual price fetch — ref-based, no stale closure
+// Live prices — Supabase realtime + Netlify cron fallback
 function useLivePrices(products,openTrades){
   const[livePrices,setLivePrices]=useState(()=>{try{return JSON.parse(localStorage.getItem("tj_live_prices")||"{}");}catch{return{};}});
   const[liveTimestamps,setLiveTimestamps]=useState({});
@@ -1737,39 +1768,48 @@ function useLivePrices(products,openTrades){
   const productsRef=useRef(products);
   useEffect(()=>{productsRef.current=products;},[products]);
 
-  const fetchNow=useCallback(async()=>{
-    if(fetchingRef.current)return;
-    fetchingRef.current=true;
-    setFetching(true);
-    const syms=productsRef.current.filter(p=>p.yahooSymbol);
-    const newPrices={};
-    const newTs={};
-    const newErrs={};
-    await Promise.all(syms.map(async(p)=>{
-      try{
-        const price=await fetchYahooPrice(p.yahooSymbol);
-        newPrices[p.id]=price;
-        newTs[p.id]=new Date();
-      }catch{
-        newErrs[p.id]=true;
-      }
-    }));
+  const applyPrices=useCallback((newPrices,newTs)=>{
     try{localStorage.setItem("tj_live_prices",JSON.stringify(newPrices));}catch{}
     setLivePrices(prev=>({...prev,...newPrices}));
     setLiveTimestamps(prev=>({...prev,...newTs}));
-    setLiveErrors(prev=>({...prev,...newErrs}));
-    fetchingRef.current=false;
-    setFetching(false);
   },[]);
 
+  const fetchFromSupabase=useCallback(async()=>{
+    try{
+      const{prices,timestamps}=await db.loadLivePrices();
+      if(Object.keys(prices).length>0){applyPrices(prices,timestamps);return true;}
+    }catch{}
+    return false;
+  },[applyPrices]);
 
+  const fetchNow=useCallback(async()=>{
+    if(fetchingRef.current)return;
+    fetchingRef.current=true;setFetching(true);
+    const fromSupa=await fetchFromSupabase();
+    if(!fromSupa){
+      const syms=productsRef.current.filter(p=>p.yahooSymbol);
+      const newPrices={};const newTs={};const newErrs={};
+      await Promise.all(syms.map(async(p)=>{
+        try{const price=await fetchYahooPrice(p.yahooSymbol);newPrices[p.id]=price;newTs[p.id]=new Date().toISOString();}
+        catch{newErrs[p.id]=true;}
+      }));
+      applyPrices(newPrices,newTs);
+      setLiveErrors(prev=>({...prev,...newErrs}));
+    }
+    fetchingRef.current=false;setFetching(false);
+  },[fetchFromSupabase,applyPrices]);
 
   useEffect(()=>{
-    const t=setInterval(()=>{if(!document.hidden)fetchNow();},3*60*1000);
+    fetchNow();
+    const channel=SUPA.channel("live_prices_rt")
+      .on("postgres_changes",{event:"*",schema:"public",table:"live_prices"},()=>fetchFromSupabase())
+      .subscribe();
+    const t=setInterval(()=>{if(!document.hidden)fetchNow();},60*1000);
     const v=()=>{if(!document.hidden)fetchNow();};
     document.addEventListener("visibilitychange",v);
-    return()=>{clearInterval(t);document.removeEventListener("visibilitychange",v);};
-  },[fetchNow]);
+    return()=>{SUPA.removeChannel(channel);clearInterval(t);document.removeEventListener("visibilitychange",v);};
+  },[fetchNow,fetchFromSupabase]);
+
   return{prices:livePrices,timestamps:liveTimestamps,errors:liveErrors,fetchNow,fetching};
 }
 function TVWidget({tvSymbol,productId}){
@@ -4514,6 +4554,9 @@ function ProfitWithdrawModal({currentBalance,onSubmit,onCancel}){
 function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsChange,showToast,showConfirm}){
   const[txModal,setTxModal]=useState(null);
   const[aiKey,setAiKey]=useState(()=>ls.get("tj_ai_key",""));
+  const handleAiKeyChange=useCallback((k)=>{
+    setAiKey(k);ls.set("tj_ai_key",k);
+  },[]);
   const[sheetsUrl,setSheetsUrl]=useState(()=>sheetsSync.getUrl());
   const[sheetsStatus,setSheetsStatus]=useState(null);
   const[sheetsSyncing,setSheetsSyncing]=useState(false);
@@ -5474,7 +5517,7 @@ function MarketPatternModal({pattern,onSave,onCancel}){
     </Modal>
   );
 }
-function PageNotes({uid,syncNotesToCloud}){
+function PageNotes({uid,syncNotesToCloud,onPatternsChange,initialPatterns}){
   const[notes,setNotes]=useState(()=>{
     const saved=ls.get("tj_notes",null);
     return saved||STARTER_NOTES;
@@ -5485,11 +5528,11 @@ function PageNotes({uid,syncNotesToCloud}){
   const[showForm,setShowForm]=useState(false);
   const[editNote,setEditNote]=useState(null);
   const[randomNote,setRandomNote]=useState(null);
-  const[patterns,setPatterns]=useState(()=>ls.get("tj_patterns",[]));
+  const[patterns,setPatterns]=useState(()=>initialPatterns||ls.get("tj_patterns",[]));
   const[showPM,setShowPM]=useState(false);
   const[editP,setEditP]=useState(null);
-  function savePat(p){const u=editP?patterns.map(x=>x.id===p.id?p:x):[p,...patterns];setPatterns(u);ls.set("tj_patterns",u);setShowPM(false);setEditP(null);}
-  function delPat(id){const u=patterns.filter(x=>x.id!==id);setPatterns(u);ls.set("tj_patterns",u);}
+  function savePat(p){const u=editP?patterns.map(x=>x.id===p.id?p:x):[p,...patterns];setPatterns(u);ls.set("tj_patterns",u);if(onPatternsChange)onPatternsChange(u);setShowPM(false);setEditP(null);}
+  function delPat(id){const u=patterns.filter(x=>x.id!==id);setPatterns(u);ls.set("tj_patterns",u);if(onPatternsChange)onPatternsChange(u);}
 
   useEffect(()=>{
     if(notes.length>0){
@@ -6273,6 +6316,11 @@ function App({session,onSignOut}){
   const hideConfirm=useCallback(()=>setConfirmState(null),[]);
 
   const[showSetup,setShowSetup]=useState(()=>!ls.get("tj_tutorial_done",false));
+  const[appPatterns,setAppPatterns]=useState(()=>ls.get("tj_patterns",[]));
+  const handlePatternsChange=useCallback((p)=>{
+    setAppPatterns(p);ls.set("tj_patterns",p);
+    if(authUid){clearTimeout(dbTimers.current.patterns);dbTimers.current.patterns=setTimeout(()=>db.saveUserData(authUid,"tj_patterns",p),1500);}
+  },[authUid]);
   // ─── Track peak equity separately ─────────────────────────
   useEffect(()=>{
     const txB=(portfolio?.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
@@ -6451,6 +6499,9 @@ function App({session,onSignOut}){
       if(data.products!==null) { setProducts(data.products);  ls.set("tj_products", data.products);  }
       if(data.notesFreeform!==null){ ls.set("tj_notes",data.notesFreeform); }
       if(data.notesDaily!==null)   { ls.set("tj_daily_notes",data.notesDaily); }
+      if(data.notifHistory!==null) { setNotifHistory(data.notifHistory); ls.set("tj_notif_history",data.notifHistory); }
+      if(data.patterns!==null)     { ls.set("tj_patterns",data.patterns); }
+      if(data.aiKey!==null)        { ls.set("tj_ai_key",data.aiKey); }
     });
   },[authUid]);
   // Save to Supabase on changes (1.5 s debounce)
@@ -6474,14 +6525,19 @@ function App({session,onSignOut}){
     if(!authUid)return;
     clearTimeout(dbTimers.current.products);
     dbTimers.current.products=setTimeout(()=>db.saveProducts(authUid,products),1500);
-  },[products,uid]);
+  },[products,authUid]);
+  useEffect(()=>{
+    if(!authUid)return;
+    clearTimeout(dbTimers.current.notif);
+    dbTimers.current.notif=setTimeout(()=>db.saveUserData(authUid,"tj_notif_history",notifHistory),2000);
+  },[notifHistory,authUid]);
 
-  // Notes & daily notes Supabase sync — driven by custom events from PageNotes/PageCalendar
+  // Notes & daily notes Supabase sync
   const syncNotesToCloud=useCallback((freeform,daily)=>{
     if(!authUid)return;
     clearTimeout(dbTimers.current.notes);
-    dbTimers.current.notes=setTimeout(()=>db.saveNotes(uid,freeform,daily),1500);
-  },[uid]);
+    dbTimers.current.notes=setTimeout(()=>db.saveNotes(authUid,freeform,daily),1500);
+  },[authUid]);
 
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),1000);return()=>clearInterval(t);},[]);
 
@@ -6602,7 +6658,7 @@ function App({session,onSignOut}){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.17.0</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.18.0</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
@@ -6668,7 +6724,7 @@ function App({session,onSignOut}){
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio}/>}
         {page==="calendar" &&<PageCalendar  trades={trades} products={products} uid={authUid} syncNotesToCloud={syncNotesToCloud}/>}
-        {page==="notes"    &&<PageNotes uid={authUid} syncNotesToCloud={syncNotesToCloud}/>}
+        {page==="notes"    &&<PageNotes uid={authUid} syncNotesToCloud={syncNotesToCloud} onPatternsChange={handlePatternsChange} initialPatterns={appPatterns}/>}
         {page==="settings" &&<PageSettings portfolio={portfolio} products={products} trades={trades} onPortfolioChange={setPortfolio} onProductsChange={setProducts} showToast={showToast} showConfirm={showConfirm}/>}
       </main>
 
