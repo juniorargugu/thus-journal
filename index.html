@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260321-1774194726 --> -->
+<!-- build:20260321-1774195165 --> -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -4946,6 +4946,10 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
                 ls.set("tj_trades",[]);
                 ls.set("tj_portfolio",{transactions:[],stepBaseMode:"first_deposit"});
                 ls.set("tj_daily_notes",{});
+                ls.set("tj_notes",null);
+                ls.set("tj_notif_history",[]);
+                ls.set("tj_patterns",[]);
+                ls.set("tj_live_prices","{}");
                 window.location.reload();
               }
             })} className={clsBtn("ghost","sm")+" border border-red/30 text-red/70 hover:bg-red/10"}>
@@ -6278,27 +6282,14 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
 
 
 function App({session,onSignOut}){
-  const[trades,   setTrades]   =useState(()=>ls.get("tj_trades",[]));
-  const[portfolio,setPortfolio]=useState(()=>{
-    const saved=ls.get("tj_portfolio",null);
-    if(!saved)return{transactions:[],stepBaseMode:"first_deposit"};
-    if(!saved.transactions)return{...saved,transactions:[]};
-    return saved;
-  });
-  const[products, setProducts] =useState(()=>{
-    const saved=ls.get("tj_products", DEFAULT_PRODUCTS);
-    return saved.map(p=>{
-      if(p.commission&&!p.commissionPerLeg){
-        const{commission:_,...rest}=p;
-        return{...rest,commissionPerLeg:+(p.commission/2/1.07).toFixed(4),vatEnabled:true,vatRate:0.07};
-      }
-      return p;
-    });
-  });
+  const[dbReady,  setDbReady]  =useState(false); // true after Supabase load completes
+  const[trades,   setTrades]   =useState([]);
+  const[portfolio,setPortfolio]=useState({transactions:[],stepBaseMode:"first_deposit"});
+  const[products, setProducts] =useState(DEFAULT_PRODUCTS);
   const[page,     setPage]     =useState("positions");
   const[mobileMenu,setMobileMenu]=useState(false);
   const[showNotif, setShowNotif] =useState(false);
-  const[notifHistory,setNotifHistory]=useState(()=>ls.get("tj_notif_history",[]));
+  const[notifHistory,setNotifHistory]=useState([]);
   const[clock,    setClock]    =useState(new Date());
   const[profitDismissed,setProfitDismissed]=useState(false);
   const tfex=useTFEXMarketStatus();
@@ -6315,8 +6306,8 @@ function App({session,onSignOut}){
   const showConfirm=useCallback((opts)=>setConfirmState({open:true,...opts}),[]);
   const hideConfirm=useCallback(()=>setConfirmState(null),[]);
 
-  const[showSetup,setShowSetup]=useState(()=>!ls.get("tj_tutorial_done",false));
-  const[appPatterns,setAppPatterns]=useState(()=>ls.get("tj_patterns",[]));
+  const[showSetup,setShowSetup]=useState(false); // set after Supabase load
+  const[appPatterns,setAppPatterns]=useState([]);
   const handlePatternsChange=useCallback((p)=>{
     setAppPatterns(p);ls.set("tj_patterns",p);
     if(authUid){clearTimeout(dbTimers.current.patterns);dbTimers.current.patterns=setTimeout(()=>db.saveUserData(authUid,"tj_patterns",p),1500);}
@@ -6463,14 +6454,18 @@ function App({session,onSignOut}){
     ls.set("tj_notif_history",updated);
     return updated;
   });
-  const deleteAllNotifs=()=>{ls.set("tj_notif_history",[]);setNotifHistory([]);};
+  const deleteAllNotifs=()=>{ls.set("tj_notif_history",[]);setNotifHistory([]);if(authUid)db.saveUserData(authUid,"tj_notif_history",[]);};
   const deleteOneNotif=(id)=>setNotifHistory(prev=>{
     const updated=prev.filter(n=>n.id!==id);
     ls.set("tj_notif_history",updated);
     return updated;
   });
 
-  const completeSetup=useCallback(()=>{ls.set("tj_tutorial_done",true);setShowSetup(false);},[]);
+  const completeSetup=useCallback(()=>{
+    ls.set("tj_tutorial_done",true);
+    setShowSetup(false);
+    if(authUid)db.saveUserData(authUid,"tj_tutorial_done",true);
+  },[authUid]);
 
   useEffect(()=>{ls.set("tj_trades",   trades);   },[trades]);
   useEffect(()=>{ls.set("tj_portfolio",portfolio); },[portfolio]);
@@ -6479,13 +6474,17 @@ function App({session,onSignOut}){
   // ─── Supabase sync ───────────────────────────────────────────────────────
   const authUid=session?.user?.id;
   const dbTimers=useRef({});
-  // Load from Supabase on login
+  // Supabase-first load: fetch all data then render
   useEffect(()=>{
     if(!authUid)return;
     db.loadAll(authUid).then(data=>{
-      if(data.trades!==null)   { setTrades(data.trades);    ls.set("tj_trades",   data.trades);   }
+      // Trades
+      if(data.trades!==null){
+        setTrades(data.trades);
+        ls.set("tj_trades",data.trades);
+      }
+      // Portfolio — preserve stepHistory from any local events captured during this session
       if(data.portfolio!==null){
-        // Merge stepHistory: keep local events not yet in Supabase (generated before first save)
         setPortfolio(local=>{
           const remoteEvents=data.portfolio.stepHistory||[];
           const localEvents=local.stepHistory||[];
@@ -6495,13 +6494,43 @@ function App({session,onSignOut}){
           ls.set("tj_portfolio",merged);
           return merged;
         });
+      }else{
+        // First login — keep default empty portfolio, ls stays clean
       }
-      if(data.products!==null) { setProducts(data.products);  ls.set("tj_products", data.products);  }
-      if(data.notesFreeform!==null){ ls.set("tj_notes",data.notesFreeform); }
-      if(data.notesDaily!==null)   { ls.set("tj_daily_notes",data.notesDaily); }
-      if(data.notifHistory!==null) { setNotifHistory(data.notifHistory); ls.set("tj_notif_history",data.notifHistory); }
-      if(data.patterns!==null)     { ls.set("tj_patterns",data.patterns); }
-      if(data.aiKey!==null)        { ls.set("tj_ai_key",data.aiKey); }
+      // Products
+      if(data.products!==null){
+        const normalised=data.products.map(p=>{
+          if(p.commission&&!p.commissionPerLeg){
+            const{commission:_,...rest}=p;
+            return{...rest,commissionPerLeg:+(p.commission/2/1.07).toFixed(4),vatEnabled:true,vatRate:0.07};
+          }
+          return p;
+        });
+        setProducts(normalised);
+        ls.set("tj_products",normalised);
+      }
+      // Notes
+      if(data.notesFreeform!==null) ls.set("tj_notes",data.notesFreeform);
+      if(data.notesDaily!==null)    ls.set("tj_daily_notes",data.notesDaily);
+      // User data
+      if(data.notifHistory!==null){ setNotifHistory(data.notifHistory); ls.set("tj_notif_history",data.notifHistory); }
+      if(data.patterns!==null)    { setAppPatterns(data.patterns); ls.set("tj_patterns",data.patterns); }
+      if(data.aiKey!==null)         ls.set("tj_ai_key",data.aiKey);
+      // Tutorial: show setup if no portfolio transactions (new user)
+      const hasTx=(data.portfolio?.transactions||[]).length>0;
+      const tutorialDone=!!data.aiKey; // use aiKey presence as proxy — or just check txs
+      setShowSetup(!hasTx&&data.portfolio===null);
+      // Mark ready — this triggers full render
+      setDbReady(true);
+    }).catch(()=>{
+      // Supabase unavailable — fall back to localStorage
+      setTrades(ls.get("tj_trades",[]));
+      setPortfolio(()=>{const s=ls.get("tj_portfolio",null);if(!s)return{transactions:[],stepBaseMode:"first_deposit"};if(!s.transactions)return{...s,transactions:[]};return s;});
+      setProducts(()=>{const s=ls.get("tj_products",DEFAULT_PRODUCTS);return s.map(p=>{if(p.commission&&!p.commissionPerLeg){const{commission:_,...rest}=p;return{...rest,commissionPerLeg:+(p.commission/2/1.07).toFixed(4),vatEnabled:true,vatRate:0.07};}return p;});});
+      setNotifHistory(ls.get("tj_notif_history",[]));
+      setAppPatterns(ls.get("tj_patterns",[]));
+      setShowSetup(!ls.get("tj_tutorial_done",false));
+      setDbReady(true);
     });
   },[authUid]);
   // Save to Supabase on changes (1.5 s debounce)
@@ -6515,12 +6544,12 @@ function App({session,onSignOut}){
         sheetsSync.push(trades,products,portfolio,balance,sd);
       }
     },1500);
-  },[trades,uid]);
+  },[trades,authUid]);
   useEffect(()=>{
     if(!authUid)return;
     clearTimeout(dbTimers.current.portfolio);
     dbTimers.current.portfolio=setTimeout(()=>db.savePortfolio(authUid,portfolio),1500);
-  },[portfolio,uid]);
+  },[portfolio,authUid]);
   useEffect(()=>{
     if(!authUid)return;
     clearTimeout(dbTimers.current.products);
@@ -6629,6 +6658,15 @@ function App({session,onSignOut}){
     {k:"settings",l:"Settings"},
   ];
 
+  if(!dbReady)return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0E11"}}>
+      <div style={{textAlign:"center"}}>
+        <div style={{color:"#F0B90B",fontSize:22,fontWeight:800,letterSpacing:3,marginBottom:8}}>THUS</div>
+        <div style={{color:"#848E9C",fontSize:12}}>Loading...</div>
+      </div>
+    </div>
+  );
+
   return(
     <div className="min-h-screen bg-primary text-txt">
             <NotificationCenter
@@ -6658,7 +6696,7 @@ function App({session,onSignOut}){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.18.0</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.19.0</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
