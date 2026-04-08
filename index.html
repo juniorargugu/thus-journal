@@ -1,10 +1,11 @@
+
 <!DOCTYPE html>
 <html lang="th">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
 <title>THUS Trading Journal</title>
-<!-- build:20260321-1774195165 --> -->
+<!-- build:20260408-1775643766 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
@@ -21,10 +22,10 @@ if(window.location.hash&&window.location.hash.includes('access_token')){
   history.replaceState(null,'',window.location.pathname+window.location.search);
 }
 </script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet"/>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
-body{background:#0B0E11;font-family:'Inter',system-ui,sans-serif;color:#EAECEF;}
+body{background:#0B0E11;font-family:'DM Sans',system-ui,sans-serif;color:#EAECEF;}
 body>*:not(#root){display:none!important;}
 ::-webkit-scrollbar{width:4px;height:4px;}
 ::-webkit-scrollbar-track{background:#0B0E11;}
@@ -54,7 +55,7 @@ tailwind.config={theme:{extend:{colors:{
 </head>
 <body>
 <div id="splash" style="position:fixed;inset:0;background:#0B0E11;z-index:9999;display:flex;align-items:center;justify-content:center">
-  <div style="color:#F0B90B;font-size:22px;font-weight:800;letter-spacing:3px;font-family:Inter,sans-serif">THUS</div>
+  <div style="color:#F0B90B;font-size:22px;font-weight:800;letter-spacing:3px;font-family:'DM Sans',sans-serif">THUS</div>
 </div>
 <div id="root"></div>
 <script type="text/babel">
@@ -69,10 +70,10 @@ const getNextSeries=(code)=>{
   return m[1]+CYCLE[ni]+ny;
 };
 const DEFAULT_PRODUCTS=[
-  {id:"s50",  name:"SET50 Futures",   baseSymbol:"S50",   currentContract:"S50H26",   nextContract:getNextSeries("S50H26"),   series:"H26",category:"TXI",contractSize:200, tickSize:0.1, tickValue:20,currency:"THB",digits:1,tvSymbol:"SET:SETINDEX",   yahooSymbol:"^SET50.BK",   initialMargin:13125, commissionPerLeg:100,vatEnabled:true,vatRate:0.07},
-  {id:"gold", name:"Gold Futures",    baseSymbol:"GO",    currentContract:"GOH26",    nextContract:getNextSeries("GOH26"),    series:"H26",category:"TXM",contractSize:300, tickSize:0.1, tickValue:30,currency:"THB",digits:1,tvSymbol:"OANDA:XAUUSD", yahooSymbol:"GC=F", initialMargin:156975,commissionPerLeg:100,vatEnabled:true,vatRate:0.07},
-  {id:"silver",name:"Silver Futures", baseSymbol:"SVF",   currentContract:"SVFH26",   nextContract:getNextSeries("SVFH26"),   series:"H26",category:"TXM",contractSize:3000,tickSize:0.01,tickValue:30,currency:"THB",digits:2,tvSymbol:"OANDA:XAGUSD", yahooSymbol:"SI=F", initialMargin:58065, commissionPerLeg:100,vatEnabled:true,vatRate:0.07},
-  {id:"usdjpy",name:"USD/JPY Futures",baseSymbol:"USDJPY",currentContract:"USDJPYH26",nextContract:getNextSeries("USDJPYH26"),series:"H26",category:"TXC",contractSize:300, tickSize:0.01,tickValue:3, currency:"THB",digits:2,tvSymbol:"OANDA:USDJPY", yahooSymbol:"JPY=X",initialMargin:1505,  commissionPerLeg:100,vatEnabled:true,vatRate:0.07},
+  {id:"s50",  name:"SET50 Futures",   baseSymbol:"S50",   currentContract:"S50M26",   nextContract:getNextSeries("S50M26"),   series:"M26",category:"TXI",contractSize:200, tickSize:0.1, tickValue:20,currency:"THB",digits:1,tvSymbol:"SET:SETINDEX",   yahooSymbol:"^SET50.BK",   initialMargin:13125, commissionPerLeg:100,vatEnabled:true,vatRate:0.07},
+  {id:"gold", name:"Gold Futures",    baseSymbol:"GO",    currentContract:"GOM26",    nextContract:getNextSeries("GOM26"),    series:"M26",category:"TXM",contractSize:300, tickSize:0.1, tickValue:30,currency:"THB",digits:1,tvSymbol:"OANDA:XAUUSD", yahooSymbol:"GC=F", initialMargin:156975,commissionPerLeg:100,vatEnabled:true,vatRate:0.07},
+  {id:"silver",name:"Silver Futures", baseSymbol:"SVF",   currentContract:"SVFM26",   nextContract:getNextSeries("SVFM26"),   series:"M26",category:"TXM",contractSize:3000,tickSize:0.01,tickValue:30,currency:"THB",digits:2,tvSymbol:"OANDA:XAGUSD", yahooSymbol:"SI=F", initialMargin:58065, commissionPerLeg:100,vatEnabled:true,vatRate:0.07},
+  {id:"usdjpy",name:"USD/JPY Futures",baseSymbol:"USDJPY",currentContract:"USDJPYM26",nextContract:getNextSeries("USDJPYM26"),series:"M26",category:"TXC",contractSize:300, tickSize:0.01,tickValue:3, currency:"THB",digits:2,tvSymbol:"OANDA:USDJPY", yahooSymbol:"JPY=X",initialMargin:1505,  commissionPerLeg:100,vatEnabled:true,vatRate:0.07},
 ];
 const expandProducts=(prods)=>prods.flatMap(p=>[
   {...p,_displayId:p.id,_seriesLabel:"Active"},
@@ -186,12 +187,38 @@ const db={
   // live_prices: read latest prices polled by Netlify cron
   async loadLivePrices(){
     try{
-      const{data}=await SUPA.from("live_prices").select("product_id,price,updated_at");
+      const{data}=await SUPA.from("live_prices").select("id,price,updated_at");
       const prices={};const ts={};
-      (data||[]).forEach(r=>{prices[r.product_id]=r.price;ts[r.product_id]=r.updated_at;});
+      (data||[]).forEach(r=>{prices[r.id]=r.price;ts[r.id]=r.updated_at;});
       return{prices,timestamps:ts};
     }catch(e){console.warn("[db] loadLivePrices error",e);return{prices:{},timestamps:{}};}
   },
+  async savePortfolioSummary(uid, payload){
+    try{
+      await SUPA.from("portfolio_summary").upsert(
+        {...payload, user_id:uid, updated_at:new Date().toISOString()},
+        {onConflict:"user_id"}
+      );
+    }catch(e){console.warn("[db] savePortfolioSummary error",e);}
+  },
+};
+
+// ─── Trade Events ────────────────────────────────────────────────────────────
+const tradeEvents={
+  async insert(tradeId,eventType,payload={}){
+    const event={id:uid(),trade_id:tradeId,event_type:eventType,occurred_at:new Date().toISOString(),payload};
+    try{await SUPA.from("trade_events").insert(event);}
+    catch(e){console.warn("[trade_events] insert failed:",e);}
+    return event;
+  },
+  async forDate(dateStr){
+    const start=`${dateStr}T00:00:00.000Z`;
+    const end=`${dateStr}T23:59:59.999Z`;
+    try{
+      const{data}=await SUPA.from("trade_events").select("*").gte("occurred_at",start).lte("occurred_at",end);
+      return data||[];
+    }catch(e){return[];}
+  }
 };
 
 // ─── Google Sheets sync ───────────────────────────────────────────────────────
@@ -200,27 +227,14 @@ const db={
 const sheetsSync={
   getUrl:()=>{try{return localStorage.getItem("tj_sheets_url")||"";}catch{return"";}},
   setUrl:(url)=>{try{localStorage.setItem("tj_sheets_url",url);}catch{}},
-  _calcMetrics(trades,products){
-    const closed=(trades||[]).filter(t=>t.status==="closed"&&t.exitPrice!=null);
-    const nets=closed.map(t=>{
+  _calcMetrics(trades,products,portfolio,balance){
+    const m=buildCanonicalMetrics(trades,products,portfolio,balance||0);
+    const ticks=(trades||[]).filter(t=>t.status==="closed"&&t.exitPrice!=null).map(t=>{
       const p=(products||[]).find(x=>x.id===t.productId);
-      return p?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0;
-    });
-    const bePct=0.01;
-    const wins=nets.filter(n=>n>0);const losses=nets.filter(n=>n<0);
-    const winRate=nets.length>0?(wins.length/nets.length*100):0;
-    const totalWin=wins.reduce((s,v)=>s+v,0);
-    const totalLoss=losses.reduce((s,v)=>s+v,0);
-    const pf=totalWin>0&&totalLoss<0?totalWin/Math.abs(totalLoss):null;
-    const avgWin=wins.length?totalWin/wins.length:0;
-    const avgLoss=losses.length?Math.abs(totalLoss)/losses.length:0;
-    const rr=avgLoss>0?avgWin/avgLoss:null;
-    const ticks=closed.map(t=>{
-      const p=(products||[]).find(x=>x.id===t.productId);
-      return p&&t.exitPrice!=null?((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1):null;
+      return p?((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1):null;
     }).filter(v=>v!=null);
     const avgTicks=ticks.length?ticks.reduce((s,v)=>s+v,0)/ticks.length:null;
-    return{winRate,pf,rr,avgWin,avgLoss,avgTicks,totalTrades:nets.length,wins:wins.length,losses:losses.length};
+    return{...m,avgTicks,wins:m.winsCount,losses:m.lossesCount};
   },
   async push(trades,products,portfolio,balance,stepData){
     const url=sheetsSync.getUrl();
@@ -260,14 +274,18 @@ const sheetsSync={
         };
       });
       // ── Tab 2: Portfolio Summary ─────────────────────────────────────────
-      const m=sheetsSync._calcMetrics(trades,products);
+      const m=sheetsSync._calcMetrics(trades,products,portfolio,balance);
       const txBal=(portfolio?.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
       const realPL=(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
         const p=(products||[]).find(x=>x.id===t.productId);
-        return s+(p?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0);
+        return s+tradeNetPL(t,p);
       },0);
       const hwm=portfolio?.peakEquity||0;
       const ddPct=hwm>0&&balance<hwm?((hwm-balance)/hwm*100):0;
+      const usedMargin=(trades||[]).filter(t=>t.status==="open").reduce((s,t)=>{
+        const p=(products||[]).find(x=>x.id===t.productId);
+        return s+(p?(p.initialMargin||0)*(t.remainingContracts||t.contracts):0);
+      },0);
       const summary={
         balance:balance||0,
         realized_pl:+realPL.toFixed(0),
@@ -281,6 +299,23 @@ const sheetsSync={
         wins:m.wins,losses:m.losses,
         avg_win:+m.avgWin.toFixed(0),
         avg_loss:+m.avgLoss.toFixed(0),
+        margin_used:+usedMargin.toFixed(0),
+        margin_pct:balance>0?+(usedMargin/balance*100).toFixed(1):0,
+        be_count:m.beCount||0,
+        circuit_breaker_pct:portfolio?.circuitBreakerPct??30,
+        cb_armed:portfolio?.cb_armed||false,
+        cb_baseline:portfolio?.cb_baseline||0,
+        cb_threshold:portfolio?.cb_threshold||0,
+        profit_alert_pct:portfolio?.profitAlertPct??5,
+        current_step:stepData?.currentStep||0,
+        next_threshold:stepData?.nextThreshold||0,
+        realized_pl_by_product:Object.fromEntries(
+          ["s50","gold","silver","usdjpy"].map(id=>{
+            const pl=(trades||[]).filter(t=>t.status==="closed"&&t.productId===id)
+              .reduce((s,t)=>{const p=(products||[]).find(x=>x.id===id);return s+tradeNetPL(t,p);},0);
+            return[id,+pl.toFixed(0)];
+          })
+        ),
         synced_at:new Date().toISOString(),
       };
       // ── Tab 3: 21 Steps ──────────────────────────────────────────────────
@@ -296,7 +331,7 @@ const sheetsSync={
       const closed=(trades||[]).filter(t=>t.status==="closed");
       const closedRows=closed.map(t=>{
         const p=(products||[]).find(x=>x.id===t.productId);
-        const net=p?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
+        const net=tradeNetPL(t,p);
         const tks=p&&t.exitPrice!=null?((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1):null;
         return{
           symbol:t.contractCode||(p?p.currentContract:t.productId)||"",
@@ -341,9 +376,161 @@ const getRoundTripComm=(p)=>{
   const withVAT=p.vatEnabled?p.commissionPerLeg*(1+(p.vatRate||0.07)):p.commissionPerLeg;
   return withVAT*2;
 };
+// ─── Step History Reconstruction ─────────────────────────────────────────────
+const reconstructStepHistory=(trades,portfolio,products,thresholds)=>{
+  if(!thresholds||thresholds.length===0)return[];
+  const timeline=[];
+  (portfolio.transactions||[]).forEach(tx=>{
+    timeline.push({date:tx.date,delta:tx.type==="deposit"?tx.amount:-tx.amount});
+  });
+  (trades||[]).filter(t=>t.status==="closed"&&(t.exitDateTime||t.exitDate)).forEach(t=>{
+    const prod=resolveProduct(products,t.productId);
+    const pl=tradeNetPL(t,prod);
+    timeline.push({date:t.exitDateTime||t.exitDate,delta:pl});
+  });
+  timeline.sort((a,b)=>new Date(a.date)-new Date(b.date));
+  let balance=0,prevStep=0;
+  const history=[];
+  for(const entry of timeline){
+    balance+=entry.delta;
+    const newStep=thresholds.filter(t=>balance>=t).length;
+    if(newStep!==prevStep){
+      const lo=Math.min(newStep,prevStep),hi=Math.max(newStep,prevStep);
+      for(let s=lo+1;s<=hi;s++){
+        const prevEvent=history[history.length-1];
+        const daysFromPrev=prevEvent?Math.floor((new Date(entry.date)-new Date(prevEvent.date))/86400000):null;
+        history.push({step:s,event:newStep>prevStep?"reached":"dropped",date:entry.date,balance,daysFromPrev});
+      }
+    }
+    prevStep=newStep;
+  }
+  return history;
+};
+const calcStepBaseline=(txs)=>
+  txs.filter(t=>t.type==="deposit"&&t.txSubtype!=="rescue").reduce((s,t)=>s+t.amount,0);
+const calcTotalDeposited=(txs)=>
+  txs.filter(t=>t.type==="deposit").reduce((s,t)=>s+t.amount,0);
+const calcCBStatus=(txs,trades,portfolio,products,livePrices)=>{
+  const txBalance=txs.reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
+  const realizedPL=(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
+    const p=(products||[]).find(x=>x.id===t.productId);
+    return s+(tradeNetPL(t,p)||0);
+  },0);
+  const unrealizedPL=(trades||[]).filter(t=>t.status==="open"&&t.entryPrice).reduce((s,t)=>{
+    const p=(products||[]).find(x=>x.id===t.productId);if(!p)return s;
+    const lp=(livePrices&&getLivePriceForProduct?getLivePriceForProduct(livePrices,p):null)||t.currentPrice||t.entryPrice;
+    return s+((lp-t.entryPrice)/p.tickSize)*p.tickValue*(t.remainingContracts||t.contracts)*(t.direction==="Long"?1:-1);
+  },0);
+  const equity=txBalance+realizedPL+unrealizedPL;
+  const armed=portfolio.cb_armed||false;
+  const baseline=portfolio.cb_baseline||0;
+  const threshold=portfolio.cb_threshold||0;
+  const breached=armed&&threshold>0&&equity<threshold;
+  return{armed,baseline,threshold,breached,equity};
+};
+const reconstructHWM=(trades,portfolio,products)=>{
+  const timeline=[];
+  (portfolio.transactions||[]).forEach(tx=>{
+    timeline.push({date:tx.date,delta:tx.type==="deposit"?tx.amount:-tx.amount});
+  });
+  (trades||[]).filter(t=>t.status==="closed"&&t.exitDateTime).forEach(t=>{
+    const prod=resolveProduct(products,t.productId);
+    const pl=tradeNetPL(t,prod);
+    timeline.push({date:t.exitDateTime,delta:pl});
+  });
+  timeline.sort((a,b)=>new Date(a.date)-new Date(b.date));
+  let bal=0,hwm=0;
+  for(const e of timeline){bal+=e.delta;if(bal>hwm)hwm=bal;}
+  return hwm;
+};
 const calcNetPL=(product,contracts,entryPrice,exitPrice,direction)=>{
   if(!product||exitPrice==null||!contracts||!entryPrice)return 0;
   return calcPL(product,contracts,entryPrice,exitPrice,direction)-getRoundTripComm(product)*contracts;
+};
+// Use actual broker P/L when available (MT5 imports); fall back to formula for manual trades
+// MT5 Positions "Profit" = price-movement P/L only (does NOT include swap or commission)
+// "Commission" = broker commission (typically stored as negative number)
+// "Swap" = overnight financing (negative = charge, positive = credit)
+// Net P/L = Profit + Commission + Swap
+const tradeNetPL=(trade,product)=>{
+  if(trade&&trade.brokerProfit!=null){
+    return (trade.brokerProfit||0)+(trade.commission||0)+(trade.swap||0)+(trade.fee||0);
+  }
+  return calcNetPL(product,trade?.contracts,trade?.entryPrice,trade?.exitPrice,trade?.direction);
+};
+function calcWinningPL(trades, products) {
+  return (trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
+    const p=(products||[]).find(x=>x.id===t.productId);
+    if(!p) return s;
+    const pl=tradeNetPL(t,p);
+    return pl>0?s+pl:s;
+  },0);
+}
+const buildCanonicalMetrics=(trades,products,portfolio,balance)=>{
+  const closed=(trades||[]).filter(t=>t.status==="closed"&&t.exitPrice!=null);
+  const bePct=portfolio?.breakevenPct??1.0;
+  const getP=t=>(products||[]).find(p=>p.id===t.productId);
+
+  // P/L per trade — always broker-first
+  const nets=closed.map(t=>tradeNetPL(t,getP(t)));
+
+  // W/L/BE classification
+  let wins=[],losses=[],bes=[];
+  nets.forEach((n,i)=>{
+    const pct=balance>0?Math.abs(n)/balance*100:0;
+    if(pct<bePct)bes.push(n);
+    else if(n>0)wins.push(n);
+    else losses.push(n);
+  });
+  const totalTrades=nets.length;
+  const winRate=totalTrades>0?(wins.length/totalTrades*100):0;
+  const totalWin=wins.reduce((s,v)=>s+v,0);
+  const totalLoss=losses.reduce((s,v)=>s+v,0);
+  const avgWin=wins.length?totalWin/wins.length:0;
+  const avgLoss=losses.length?Math.abs(totalLoss/losses.length):0;
+  const pf=(totalWin>0&&totalLoss<0)?totalWin/Math.abs(totalLoss):null;
+  const rr=avgLoss>0?avgWin/avgLoss:null;
+
+  // Max DD on full equity timeline (deposits + P/L), NOT P/L-only
+  const events=[];
+  (portfolio?.transactions||[]).forEach(tx=>{
+    events.push({date:tx.date,delta:tx.type==="deposit"?tx.amount:-tx.amount});
+  });
+  closed.forEach(t=>{
+    events.push({date:t.exitDateTime,delta:tradeNetPL(t,getP(t))});
+  });
+  events.sort((a,b)=>new Date(a.date)-new Date(b.date));
+  let running=0,peak=0,trough=0,maxDD=0;
+  events.forEach(e=>{
+    running+=e.delta;
+    if(running>peak){peak=running;trough=running;}
+    else if(running<trough){trough=running;const dd=peak-trough;if(dd>maxDD)maxDD=dd;}
+  });
+  const maxDDAbs=maxDD;
+  const maxDDPct=peak>0?maxDD/peak*100:0;
+
+  // Commission
+  const totalCommission=closed.reduce((s,t)=>{
+    const p=getP(t);return s+(p?getRoundTripComm(p)*t.contracts:0);
+  },0);
+
+  // Avg hold
+  const durations=closed.filter(t=>t.openDateTime&&t.exitDateTime)
+    .map(t=>new Date(t.exitDateTime)-new Date(t.openDateTime));
+  const avgHoldMs=durations.length?durations.reduce((s,v)=>s+v,0)/durations.length:0;
+
+  // Largest
+  const largestWin=wins.length?Math.max(...wins):null;
+  const largestLoss=losses.length?Math.min(...losses):null;
+
+  return{
+    winRate,wins,losses,bes,
+    winsCount:wins.length,lossesCount:losses.length,beCount:bes.length,
+    totalTrades,pf,rr,avgWin,avgLoss,
+    maxDDAbs,maxDDPct,peakEquity:peak,
+    totalCommission,avgHoldMs,nets,
+    largestWin,largestLoss,totalWin,totalLoss,
+  };
 };
 const calcPositionValue=(product,contracts,entryPrice)=>{
   if(!product||!entryPrice||!contracts)return 0;
@@ -375,7 +562,7 @@ const fmtCompact=(v)=>{
   if(v===null||v===undefined||isNaN(v))return"—";
   const abs=Math.abs(v);
   const sign=v<0?"-":(v>0?"+":"");
-  if(abs>=1000000)return sign+(abs/1000000).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})+"m";
+  if(abs>=1000000)return sign+(abs/1000000).toLocaleString("en-US",{minimumFractionDigits:1,maximumFractionDigits:1})+"m";
   if(abs>=100000)return sign+(abs/1000).toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:0})+"K";
   return sign+abs.toLocaleString("en-US",{minimumFractionDigits:0,maximumFractionDigits:0});
 };
@@ -418,9 +605,12 @@ const MOCK_PORTFOLIO={
   stepBaseMode:"first_deposit",
   withdrawalTarget:0.10,
   stepHistory:[],
+  cb_armed:false,
+  cb_baseline:0,
+  cb_threshold:0,
   transactions:[
-    {id:"tx1",type:"deposit",date:"2024-09-01T09:00",amount:500000,note:"เงินเริ่มต้น"},
-    {id:"tx2",type:"deposit",date:"2024-12-01T09:00",amount:200000,note:"เพิ่มทุน"},
+    {id:"tx1",type:"deposit",date:"2024-09-01T09:00",amount:500000,note:"เงินเริ่มต้น",txSubtype:"capital"},
+    {id:"tx2",type:"deposit",date:"2024-12-01T09:00",amount:200000,note:"เพิ่มทุน",txSubtype:"capital"},
   ]
 };
 const _D={isMerged:false,mergedFromIds:[],subTrades:[],partialCloses:[],preImages:[],postImages:[]};
@@ -556,7 +746,7 @@ function ConfirmDialog({state,onCancel}){
         </div>
         <div className="flex gap-2 px-5 pb-5">
           <button onClick={onCancel} className={`${clsBtn("default")} flex-1`}>ยกเลิก</button>
-          <button onClick={()=>{state.onConfirm?.();onCancel();}}
+          <button onClick={async()=>{await state.onConfirm?.();onCancel();}}
             className={`${clsBtn(state.variant==="danger"?"red":"yellow")} flex-1`}>ยืนยัน</button>
         </div>
       </div>
@@ -589,7 +779,7 @@ const CHECKLIST_ITEMS=[
   {id:"c7",icon:"📐",text:"Sideway: Long กรอบล่าง / Short กรอบบน",sub:"ถ้าตลาด Sideway — เข้า Long ที่กรอบล่าง และ Short ที่กรอบบนเท่านั้น"},
   {id:"c6",icon:"🎓",text:"พี่โอห์มเห็นแล้วโอเค",sub:"ถ้าครูดูไม้นี้ เค้าจะยิ้มหรือส่ายหัว?"},
 ];
-function NotificationCenter({history,show,onClose,onMarkRead,onMarkAllRead,onDeleteAll,onDeleteOne}){
+function NotificationCenter({history,show,onClose,onMarkRead,onMarkAllRead,onDeleteAll,onDeleteOne,showConfirm}){
   if(!show)return null;
   const typeAccent={danger:"#F6465D",warn:"#F0B90B",info:"#0ECB81"};
   const typeBg={danger:"rgba(246,70,93,0.06)",warn:"rgba(240,185,11,0.06)",info:"rgba(14,203,129,0.06)"};
@@ -633,7 +823,7 @@ function NotificationCenter({history,show,onClose,onMarkRead,onMarkAllRead,onDel
                 style={{background:"rgba(255,255,255,0.04)"}}>อ่านหมด</button>
             )}
             {(history||[]).length>0&&(
-              <button onClick={()=>{if(window.confirm("ลบ notification ทั้งหมด?"))onDeleteAll&&onDeleteAll();}}
+              <button onClick={()=>showConfirm({title:"ลบ notification ทั้งหมด?",variant:"danger",onConfirm:()=>onDeleteAll&&onDeleteAll()})}
                 className="text-xs text-red/50 hover:text-red transition px-2 py-1 rounded"
                 style={{background:"rgba(255,255,255,0.04)"}}>🗑 ล้าง</button>
             )}
@@ -692,7 +882,7 @@ function NotificationCenter({history,show,onClose,onMarkRead,onMarkAllRead,onDel
                         </p>
                       )}
                       <button
-                        onClick={e=>{e.stopPropagation();if(window.confirm("ลบ notification นี้?"))onDeleteOne&&onDeleteOne(n.id);}}
+                        onClick={e=>{e.stopPropagation();showConfirm({title:"ลบ notification นี้?",variant:"danger",onConfirm:()=>onDeleteOne&&onDeleteOne(n.id)});}}
                         className="text-muted/30 hover:text-red/60 transition text-xs flex-shrink-0 ml-1 mt-0.5"
                         title="ลบ">🗑</button>
                     </div>
@@ -744,25 +934,41 @@ function IMAlertBanner({trades,products,balance,livePrices,liveTimestamps}){
     const p=(products||[]).find(x=>x.id===t.productId);
     return s+(p?(p.initialMargin||0)*(t.remainingContracts||t.contracts):0);
   },0);
+  // Gold market hours check (ICT = UTC+7)
+  const isGoldMarketOpen=()=>{
+    const now=new Date();
+    const dayUTC=now.getUTCDay();
+    const hourICT=(now.getUTCHours()+7)%24;
+    if(dayUTC===6)return false;
+    if(dayUTC===0&&hourICT<6)return false;
+    return true;
+  };
   // Stale price warning: any open trade whose live price is >10 min old
   const staleProducts=useMemo(()=>{
-    const openProds=[...new Set((trades||[]).filter(t=>t.status==="open"&&t.entryPrice).map(t=>t.productId))];
-    return openProds.filter(pid=>{
-      const ts=liveTimestamps&&liveTimestamps[pid];
+    if(!isGoldMarketOpen())return [];
+    const openTrades=(trades||[]).filter(t=>t.status==="open"&&t.entryPrice);
+    const seen=new Set();
+    return openTrades.filter(t=>{
+      if(seen.has(t.productId))return false;
+      const p=(products||[]).find(x=>x.id===t.productId);
+      const key=p?contractToLiveKey(p._baseId||p.id,t.contractCode||p.currentContract,p.baseSymbol):t.productId;
+      const ts=liveTimestamps&&(liveTimestamps[key]||liveTimestamps[t.productId]);
       if(!ts)return false;
+      seen.add(t.productId);
       return(Date.now()-new Date(ts).getTime())>10*60*1000;
-    });
-  },[trades,liveTimestamps]);
+    }).map(t=>t.productId);
+  },[trades,products,liveTimestamps]);
   const marginPct=(!balance||balance<=0||usedMargin<=0)?0:usedMargin/balance*100;
-  if(marginPct<80&&staleProducts.length===0)return null;
+  if(marginPct<100&&staleProducts.length===0)return null;
   return(
     <div className="space-y-2 mb-3">
-      {marginPct>=80&&(
+      {marginPct>=100&&(
         <div className="flex items-center gap-3 bg-red/5 border border-red/20 rounded-xl px-3 py-2.5 text-sm">
           <span className="text-xl">⚠️</span>
           <div>
             <span className="font-semibold text-red">Margin Alert</span>
-            <span className="text-muted ml-2">ใช้ margin ไปแล้ว {marginPct.toFixed(0)}% ({fmtTHB(usedMargin,0)} ฿) — IM เหลือน้อย</span>
+            <span className="text-muted ml-2">Initial Margin ใช้ {fmtTHB(usedMargin,0)} ฿ ({marginPct.toFixed(0)}% ของ balance) — ดู Margin Level จาก MT5</span>
+            <div className="text-muted/50 text-[10px] mt-0.5">* คำนวณจาก usedIM/balance ไม่ใช่ MT5 Margin Level</div>
           </div>
         </div>
       )}
@@ -1687,7 +1893,7 @@ function TradeDetailModal({trade,product,onClose,onUpdateTrade}){
 }
 
 function PortfolioTxModal({type,onSubmit,onCancel,currentBalance}){
-  const[f,setF]=useState({amount:"",date:localNow(),note:""});
+  const[f,setF]=useState({amount:"",date:localNow(),note:"",txSubtype:"capital"});
   const set=k=>e=>setF(p=>({...p,[k]:e.target.value}));
   const amt=+f.amount;
   const overBalance=type==="withdraw"&&amt>0&&amt>(currentBalance||0);
@@ -1717,10 +1923,23 @@ function PortfolioTxModal({type,onSubmit,onCancel,currentBalance}){
           );})()} 
           <input value={f.note} onChange={set("note")} placeholder="optional" className={clsInput}/>
         </div>
+        {type==="deposit"&&(
+          <div>
+            <Label>ประเภทเงินฝาก</Label>
+            <div className="flex gap-2">
+              {[["capital","ทุน"],["rescue","พยุง"]].map(([v,label])=>(
+                <button key={v} onClick={()=>setF(p=>({...p,txSubtype:v}))}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-medium border transition ${f.txSubtype===v?(v==="capital"?"bg-green/20 border-green text-green":"bg-yellow/20 border-yellow text-yellow"):"bg-input/50 border-border text-muted hover:text-txt"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
       <div className="flex gap-2 px-5 py-4 border-t border-border flex-shrink-0">
         <button onClick={onCancel} className={clsBtn("default")}>ยกเลิก</button>
-        <button onClick={()=>valid&&onSubmit({id:uid(),type,amount:amt,date:f.date,note:f.note})}
+        <button onClick={()=>valid&&onSubmit({id:uid(),type,amount:amt,date:f.date,note:f.note,txSubtype:type==="deposit"?(f.txSubtype||"capital"):"withdrawal"})}
           disabled={!valid}
           className={`${clsBtn("yellow")} flex-1 disabled:opacity-30 disabled:cursor-not-allowed`}>
           {type==="deposit"?"+ ฝากเงิน":"− ถอนเงิน"}
@@ -1785,19 +2004,9 @@ function useLivePrices(products,openTrades){
   const fetchNow=useCallback(async()=>{
     if(fetchingRef.current)return;
     fetchingRef.current=true;setFetching(true);
-    const fromSupa=await fetchFromSupabase();
-    if(!fromSupa){
-      const syms=productsRef.current.filter(p=>p.yahooSymbol);
-      const newPrices={};const newTs={};const newErrs={};
-      await Promise.all(syms.map(async(p)=>{
-        try{const price=await fetchYahooPrice(p.yahooSymbol);newPrices[p.id]=price;newTs[p.id]=new Date().toISOString();}
-        catch{newErrs[p.id]=true;}
-      }));
-      applyPrices(newPrices,newTs);
-      setLiveErrors(prev=>({...prev,...newErrs}));
-    }
+    await fetchFromSupabase();
     fetchingRef.current=false;setFetching(false);
-  },[fetchFromSupabase,applyPrices]);
+  },[fetchFromSupabase]);
 
   useEffect(()=>{
     fetchNow();
@@ -1812,6 +2021,136 @@ function useLivePrices(products,openTrades){
 
   return{prices:livePrices,timestamps:liveTimestamps,errors:liveErrors,fetchNow,fetching};
 }
+
+// ─── Layer 2: Historical daily price fetch ────────────────────────────────────
+async function fetchHistoricalDaily(yahooSymbol,fromDate,toDate){
+  try{
+    const url=`/.netlify/functions/history?sym=${encodeURIComponent(yahooSymbol)}&from=${fromDate}&to=${toDate}`;
+    const res=await fetch(url);
+    if(!res.ok)throw new Error("status "+res.status);
+    const d=await res.json();
+    if(d.error)throw new Error(d.error);
+    return d.prices||{}; // { "YYYY-MM-DD": closePrice }
+  }catch(e){console.warn("[history]",yahooSymbol,e.message);return null;}
+}
+
+// ─── Layer 2: Equity HWM hook ─────────────────────────────────────────────────
+// Computes daily equity = balance + unrealized P/L of open positions
+// Uses actual Yahoo prices for each day; only for instruments where Yahoo price
+// unit matches the product's price unit (category "TXI" or product.layer2Enabled=true)
+function useEquityHWM(trades,portfolio,products,authUid){
+  const[equityHWM,setEquityHWM]=useState(null);
+  const[dailyPoints,setDailyPoints]=useState([]); // [{date,balance,equity}]
+  const[loading,setLoading]=useState(false);
+  const[error,setError]=useState(null);
+  const[lastFetched,setLastFetched]=useState(null);
+
+  const compute=useCallback(async()=>{
+    if(!trades.length||!products.length){setError("ไม่มีข้อมูล trades");return;}
+    setLoading(true);setError(null);
+
+    // 1. Compatible products (Yahoo price unit ≈ product price unit)
+    const compatProds=products.filter(p=>p.yahooSymbol&&(p.layer2Enabled===true||(p.category==="TXI"&&p.layer2Enabled!==false)));
+
+    // 2. Determine date range from all trades that use compatible products
+    const compatIds=new Set(compatProds.map(p=>p.id));
+    const compatTrades=trades.filter(t=>compatIds.has(t.productId)&&t.openDateTime);
+    if(compatTrades.length===0){setError("ไม่มี instrument ที่รองรับ Layer 2 (ต้องเป็น TXI / ตั้ง layer2Enabled=true)");setLoading(false);return;}
+
+    const minDate=compatTrades.reduce((m,t)=>t.openDateTime<m?t.openDateTime:m,compatTrades[0].openDateTime).slice(0,10);
+    const maxDate=new Date().toISOString().slice(0,10);
+
+    // 3. Load price cache from Supabase
+    let cache={};
+    if(authUid){
+      try{
+        const saved=await db.loadUserData(authUid,["tj_price_history"]);
+        if(saved.tj_price_history)cache={...saved.tj_price_history};
+      }catch{}
+    }
+
+    // 4. Fetch missing prices per compatible product
+    const newFetches={};
+    await Promise.all(compatProds.map(async(prod)=>{
+      const sym=prod.yahooSymbol;
+      const cacheKey=sym;
+      const cached=cache[cacheKey]||{};
+      // Check if we have data up to today (re-fetch if last cached date < maxDate - 1 day)
+      const cachedDates=Object.keys(cached).sort();
+      const lastCached=cachedDates[cachedDates.length-1]||"";
+      // Determine fetch range: from minDate, skipping already-cached
+      const fetchFrom=lastCached&&lastCached>=minDate?lastCached:"2024-01-01"; // fetch from start or last
+      const prices=await fetchHistoricalDaily(sym,fetchFrom,maxDate);
+      if(prices){
+        const merged={...cached,...prices};
+        cache[cacheKey]=merged;
+        newFetches[cacheKey]=merged;
+      }
+    }));
+
+    // 5. Persist updated cache to Supabase
+    if(authUid&&Object.keys(newFetches).length>0){
+      try{await db.saveUserData(authUid,"tj_price_history",cache);}catch{}
+    }
+
+    // 6. Build sorted event timeline (deposits/withdrawals + closed P/L)
+    const txEvents=(portfolio.transactions||[]).map(tx=>({
+      date:tx.date.slice(0,10),
+      delta:tx.type==="deposit"?tx.amount:-tx.amount,
+    }));
+    const tradeEvents=trades.filter(t=>t.status==="closed"&&t.exitDateTime).map(t=>{
+      const prod=products.find(p=>p.id===t.productId);
+      return{date:t.exitDateTime.slice(0,10),delta:tradeNetPL(t,prod)};
+    });
+    const allEvents=[...txEvents,...tradeEvents].sort((a,b)=>a.date.localeCompare(b.date));
+
+    // 7. Build set of all relevant dates (each trading day from minDate to maxDate)
+    const dateSet=new Set();
+    compatProds.forEach(prod=>{
+      const prices=cache[prod.yahooSymbol]||{};
+      Object.keys(prices).forEach(d=>{if(d>=minDate)dateSet.add(d);});
+    });
+    const sortedDates=[...dateSet].sort();
+    if(sortedDates.length===0){setError("ไม่มีข้อมูลราคาย้อนหลัง");setLoading(false);return;}
+
+    // 8. Walk dates, accumulate balance + unrealized
+    let runBal=0,evIdx=0,maxEquity=0;
+    const points=[];
+    for(const date of sortedDates){
+      // Apply all events up to and including this date
+      while(evIdx<allEvents.length&&allEvents[evIdx].date<=date){
+        runBal+=allEvents[evIdx].delta;evIdx++;
+      }
+      // Sum unrealized P/L for each compatible position open on this date
+      let unreal=0;
+      compatTrades.forEach(t=>{
+        if(!t.openDateTime)return;
+        const openDate=t.openDateTime.slice(0,10);
+        const closeDate=t.exitDateTime?t.exitDateTime.slice(0,10):"9999-12-31";
+        if(date<openDate||date>closeDate)return;
+        const prod=products.find(p=>p.id===t.productId);
+        if(!prod)return;
+        const sym=prod.yahooSymbol;
+        const prices=cache[sym]||{};
+        const cp=prices[date];
+        if(cp==null)return;
+        // Use raw calcPL (not net — commission already in closed P/L via tradeNetPL)
+        unreal+=calcPL(prod,t.contracts,t.entryPrice,cp,t.direction);
+      });
+      const equity=runBal+unreal;
+      if(equity>maxEquity)maxEquity=equity;
+      points.push({date,balance:runBal,equity});
+    }
+
+    setEquityHWM(maxEquity>0?maxEquity:null);
+    setDailyPoints(points);
+    setLastFetched(new Date().toISOString());
+    setLoading(false);
+  },[trades,portfolio,products,authUid]);
+
+  return{equityHWM,dailyPoints,loading,error,lastFetched,fetch:compute};
+}
+
 function TVWidget({tvSymbol,productId}){
   const idRef=useRef(`tv_${productId}_${Math.random().toString(36).slice(2)}`);
   const containerRef=useRef();
@@ -2013,24 +2352,13 @@ function StepsProgressBar({portfolio,trades,products,compact=true}){
   const txs=portfolio?.transactions||[];
   const sorted=[...txs].sort((a,b)=>new Date(a.date)-new Date(b.date));
   const firstDeposit=sorted.find(t=>t.type==="deposit");
-  const stepBaseMode=portfolio?.stepBaseMode||"first_deposit";
-  const baseAmount=(()=>{
-    if(stepBaseMode==="sum_deposits")return txs.filter(t=>t.type==="deposit").reduce((s,t)=>s+t.amount,0);
-    if(stepBaseMode==="weighted_deposits"){
-      let eff=0,runBal=0;
-      [...txs].sort((a,b)=>new Date(a.date)-new Date(b.date)).filter(t=>t.type==="deposit").forEach(t=>{
-        if(runBal===0){eff=t.amount;}else{const tot=runBal+t.amount;eff=(runBal/tot)*eff+(t.amount/tot)*t.amount;}
-        runBal+=t.amount;
-      });
-      return eff||0;
-    }
-    return firstDeposit?.amount||0;
-  })();
+  const baseAmount=calcStepBaseline(txs);
   const txBalance=txs.reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
+  const totalDeposited=calcTotalDeposited(txs);
 
   const realizedPL=useMemo(()=>(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
     const p=(products||[]).find(p=>p.id===t.productId);
-    return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);
+    return s+tradeNetPL(t,p);
   },0),[trades,products]);
 
   const balance=txBalance+realizedPL;
@@ -2082,7 +2410,7 @@ function StepsProgressBar({portfolio,trades,products,compact=true}){
       ):(
         <div className="text-xs text-muted space-y-0.5">
           <div className="flex justify-between flex-wrap gap-x-3">
-            <span>Deposits: <span className="text-txt">{fmtTHB(txBalance,0)} ฿</span></span>
+            <span>Deposits: <span className="text-txt">{fmtTHB(totalDeposited,0)} ฿</span></span>
             <span>Realized P/L: <span className={realizedPL>=0?"text-green":"text-red"}>{realizedPL>=0?"+":""}{fmtTHB(realizedPL,0)} ฿</span></span>
             <span>Total: <span className="text-yellow font-semibold">{fmtTHB(balance,0)} ฿</span></span>
           </div>
@@ -2126,39 +2454,23 @@ function StepHistoryPopup({stepNum,events,targetBalance,onClose}){
   );
 }
 
-function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices}){
+function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authUid,equityHWM,dailyPoints,l2Loading,l2Error,l2Fetched,fetchLayer2}){
   const txs=portfolio?.transactions||[];
   const sorted=[...txs].sort((a,b)=>new Date(a.date)-new Date(b.date));
   const firstDeposit=sorted.find(t=>t.type==="deposit");
   const initialDeposit=firstDeposit?.amount||0;
   const txBalance=txs.reduce((s,t)=>s+(t.type==="deposit"?t.amount:-(t.amount)),0);
-  const stepBaseMode=portfolio?.stepBaseMode||"first_deposit";
+  const totalDeposited=calcTotalDeposited(txs);
   const stepHistory=portfolio?.stepHistory||[];
   const[selectedStepCell,setSelectedStepCell]=useState(null);
 
   const realizedPL=useMemo(()=>(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
     const p=(products||[]).find(p=>p.id===t.productId);
-    return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);
+    return s+tradeNetPL(t,p);
   },0),[trades,products]);
 
   const balance=txBalance+realizedPL;
-  // weighted mode: new deposit's influence = deposit_amount / (runningBalance + deposit_amount)
-  const baseAmount=useMemo(()=>{
-    if(stepBaseMode==="sum_deposits")
-      return txs.filter(t=>t.type==="deposit").reduce((s,t)=>s+t.amount,0);
-    if(stepBaseMode==="weighted_deposits"){
-      let eff=0,runBal=0;
-      [...txs].sort((a,b)=>new Date(a.date)-new Date(b.date))
-        .filter(t=>t.type==="deposit")
-        .forEach(t=>{
-          if(runBal===0){eff=t.amount;}
-          else{const tot=runBal+t.amount;eff=(runBal/tot)*eff+(t.amount/tot)*t.amount;}
-          runBal+=t.amount;
-        });
-      return eff||0;
-    }
-    return firstDeposit?.amount||0;
-  },[txs,stepBaseMode,firstDeposit]);
+  const baseAmount=useMemo(()=>calcStepBaseline(txs),[txs]);
 
   const STEPS=21;
   const thresholds=useMemo(()=>Array.from({length:STEPS},(_,i)=>baseAmount*Math.pow(1.5,i+1)),[baseAmount]);
@@ -2172,11 +2484,6 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices}){
   const daysSinceStart=firstDeposit?Math.max(1,Math.floor((Date.now()-new Date(firstDeposit.date))/(86400000))):1;
   const avgPLPerDay=realizedPL/daysSinceStart;
   const daysToNextStep=nextTarget&&avgPLPerDay>0?Math.ceil(amountNeeded/avgPLPerDay):null;
-
-  const toggleMode=()=>{
-    const next=stepBaseMode==="first_deposit"?"sum_deposits":stepBaseMode==="sum_deposits"?"weighted_deposits":"first_deposit";
-    if(onPortfolioChange)onPortfolioChange({...portfolio,stepBaseMode:next});
-  };
 
   const dropCountPerStep=useMemo(()=>{
     const m={};
@@ -2193,7 +2500,7 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices}){
   const[manualPrices,setManualPrices]=useState({});
   const[editingPrice,setEditingPrice]=useState(null);
   const[priceInput,setPriceInput]=useState("");
-  const getPrice=(pid)=>(manualPrices[pid]!=null?manualPrices[pid]:(livePrices&&livePrices[pid]!=null?livePrices[pid]:0));
+  const getPrice=(pid,product)=>{if(manualPrices[pid]!=null)return manualPrices[pid];if(!livePrices||!product)return 0;var v=getLivePriceForProduct(livePrices,product);return v!=null?v:0;};
 
   const GCOLS=15;
   const gGroupLabel=(i)=>i<2?"ประคอง/สวน":i<5?"Sideway":i<8?"Run-Trend":"Scalp+";
@@ -2253,20 +2560,12 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices}){
         </div>
         <div className="flex items-center justify-between flex-wrap gap-3">
           <div className="flex gap-6 flex-wrap text-sm">
-            <div><span className="text-muted text-xs block">Deposits</span><span className="font-semibold">{fmtTHB(txBalance,0)} ฿</span></div>
+            <div><span className="text-muted text-xs block">Deposits</span><span className="font-semibold">{fmtTHB(totalDeposited,0)} ฿</span></div>
             <div><span className="text-muted text-xs block">Realized P/L</span>
               <span className={`font-semibold ${realizedPL>=0?"text-green":"text-red"}`}>{realizedPL>=0?"+":""}{fmtTHB(realizedPL,0)} ฿</span></div>
             {nextTarget&&<div><span className="text-muted text-xs block">เพิ่มอีก</span><span className="font-semibold text-yellow">{fmtTHB(amountNeeded,0)} ฿</span></div>}
           </div>
-          <div className="flex rounded-lg overflow-hidden border border-border text-xs">
-            {[["first_deposit","First Deposit"],["sum_deposits","Sum Deposits"],["weighted_deposits","ถัวเฉลี่ย"]].map(([mode,label])=>(
-              <button key={mode} onClick={()=>stepBaseMode!==mode&&onPortfolioChange({...portfolio,stepBaseMode:mode})}
-                className={`px-3 py-1.5 transition ${stepBaseMode===mode?"bg-yellow text-black font-semibold":"text-muted hover:text-txt hover:bg-input"}`}
-                title={mode==="weighted_deposits"?"น้ำหนัก = deposit ใหม่ / (balance ณ เวลานั้น + deposit ใหม่)":""}>
-                {label}
-              </button>
-            ))}
-          </div>
+          <span className="text-muted text-xs">ทุนตั้งต้น (ไม่รวมพยุง): {fmtTHB(baseAmount,0)} ฿</span>
         </div>
       </div>
 
@@ -2304,7 +2603,7 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices}){
                 {done&&!isCurrent&&reachedEvent&&(
                   <div className="space-y-0.5 mt-0.5">
                     <div className="text-muted text-[10px] leading-tight">{fmtDate(reachedEvent.date)}</div>
-                    {reachedEvent.daysFromPrev!=null&&<div className="text-muted text-[10px] leading-tight">⏱ {reachedEvent.daysFromPrev} วัน</div>}
+                    {reachedEvent.daysFromPrev!=null&&reachedEvent.daysFromPrev>0&&<div className="text-muted text-[10px] leading-tight">⏱ {reachedEvent.daysFromPrev} วัน</div>}
                   </div>
                 )}
                 {isCurrent&&(
@@ -2430,7 +2729,7 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices}){
               </thead>
               <tbody>
                 {(products||[]).map(p=>{
-                  const price=getPrice(p.id);
+                  const price=getPrice(p.id,p);
                   const vpc=price>0?p.contractSize*price:0;
                   return(
                     <tr key={p.id} className="border-b border-border/20">
@@ -2464,7 +2763,7 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices}){
               </tbody>
             </table>
             <p className="text-muted text-[10px] mt-3">
-              ราคา: {(products||[]).map(p=>`${p.baseSymbol||p.id} ${getPrice(p.id)>0?fmtNum(getPrice(p.id),p.digits):"—"}`).join(" · ")}
+              ราคา: {(products||[]).map(p=>`${p.baseSymbol||p.id} ${getPrice(p.id,p)>0?fmtNum(getPrice(p.id,p),p.digits):"—"}`).join(" · ")}
             </p>
           </div>
         );
@@ -2499,7 +2798,7 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
   const totalGearingX=useMemo(()=>calcGearingX(totalPV,balance),[totalPV,balance]);
   const totalUnreal=useMemo(()=>openTrades.reduce((s,t)=>{
     const p=products.find(p=>p.id===t.productId);
-    const lp=livePrices[t.productId];
+    const lp=getLivePrice(livePrices,t,p);
     const cp=lp!=null?lp:(t.currentPrice||t.entryPrice);
     return s+calcPL(p,t.contracts,t.entryPrice,cp,t.direction);
   },0),[openTrades,products,livePrices]);
@@ -2566,14 +2865,7 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
               <span className="text-muted text-xs block mb-0.5">Portfolio Balance</span>
               <span className="text-2xl font-bold text-txt tabular-nums">{fmtTHB(balance,0)} ฿</span>
             </div>
-            {/* Equity = balance + unrealized */}
-            <div>
-              <span className="text-muted text-xs block mb-0.5">Equity</span>
-              <span className={`text-2xl font-bold tabular-nums ${(balance+totalUnreal)>=balance?"text-green":"text-red"}`}>
-                {totalUnreal>=0?"+":""}{fmtTHB(balance+totalUnreal,0)} ฿
-              </span>
-            </div>
-            {/* Unrealized P/L */}
+            {/* Unrealized P/L — next to balance */}
             {openTrades.length>0&&(
               <div>
                 <span className="text-muted text-xs block mb-0.5">Unrealized P/L</span>
@@ -2582,6 +2874,13 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
                 </span>
               </div>
             )}
+            {/* Equity = balance + unrealized — no leading + sign, it's a total not a delta */}
+            <div>
+              <span className="text-muted text-xs block mb-0.5">Equity</span>
+              <span className={`text-2xl font-bold tabular-nums ${(balance+totalUnreal)>=balance?"text-green":"text-red"}`}>
+                {fmtTHB(balance+totalUnreal,0)} ฿
+              </span>
+            </div>
             {/* HWM & Drawdown */}
             {(()=>{
               const hwm=portfolio?.peakEquity||0;
@@ -2703,8 +3002,8 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
                     onUpdatePrice={()=>setUpdatingPrice(t)}
                     onMergeStart={startMerge}
                     onDuplicate={()=>handleDuplicate(t)}
-                    livePrice={livePrices[t.productId]??null}
-                    liveTimestamp={liveTimestamps[t.productId]??null}
+                    livePrice={(()=>{const p=products.find(x=>x.id===t.productId);return getLivePrice(livePrices,t,p);})()}
+                    liveTimestamp={(()=>{const p=products.find(x=>x.id===t.productId);const key=p?contractToLiveKey(p._baseId||p.id,t.contractCode||p.currentContract,p.baseSymbol):t.productId;return liveTimestamps[key]??liveTimestamps[t.productId]??null;})()}
                     liveError={!!liveErrors[t.productId]}
                     onShowDetail={setDetailTrade}
                   />
@@ -2794,7 +3093,13 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
   );
 }
 
-function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTrades,onProductsChange,onBalanceSet}){
+function TdTicks({t,p,onClick}){
+  if(!p||t.exitPrice==null)return<td className="px-3 py-2.5 text-muted text-xs hidden md:table-cell text-right">—</td>;
+  var tks=((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1);
+  return<td onClick={onClick} className={"px-3 py-2.5 tabular-nums text-xs font-medium cursor-pointer whitespace-nowrap hidden md:table-cell text-right "+(tks>=0?"text-green":"text-red")}>{tks>=0?"+":""}{tks.toFixed(1)}</td>;
+}
+
+function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTrades,onProductsChange,onBalanceSet,onTransactions}){
   const[detail,setDetail]=useState(null);
   const[showImport,setShowImport]=useState(false);
   const initFilters={product:"",direction:"",setup:"",rating:"",dateFrom:"",dateTo:""};
@@ -2845,7 +3150,8 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTr
       {children}{sortKey===k&&<span className="ml-0.5">{sortAsc?"▲":"▼"}</span>}
     </th>
   );
-  const filteredWins=filtered.filter(t=>{const p=products.find(p=>p.id===t.productId);return t.exitPrice!=null&&calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction)>0;}).length;
+  const filteredWins=filtered.filter(t=>{const p=products.find(p=>p.id===t.productId);return t.exitPrice!=null&&tradeNetPL(t,p)>0;}).length;
+  const closedFiltered=filtered.filter(t=>t.exitPrice!=null);
 
   const[mergeActive,setMergeActive]=useState(false);
   const[selMerge,setSelMerge]=useState(new Set());
@@ -2880,6 +3186,21 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTr
     const sel=filtered.filter(t=>selMerge.has(t.id));
     return sel.every(t=>t.productId===sel[0].productId&&t.direction===sel[0].direction);
   })();
+
+  const wlbeCounts=useMemo(()=>{
+    const bePct4=portfolio?.breakevenPct??1.0;
+    let wCount=0,lCount=0,beCount=0;
+    filtered.forEach(t=>{
+      if(t.exitPrice==null)return;
+      const pp=products.find(p=>p.id===t.productId);
+      const n=tradeNetPL(t,pp);
+      const pct4=balance>0?n/balance*100:0;
+      if(Math.abs(pct4)<bePct4)beCount++;
+      else if(n>0)wCount++;
+      else lCount++;
+    });
+    return{wCount,lCount,beCount};
+  },[filtered,products,balance,portfolio?.breakevenPct]);
 
   return(
     <div className="space-y-4">
@@ -2967,29 +3288,14 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTr
           <span className="text-muted text-xs">Gross: <PLDisplay value={filtered.reduce((s,t)=>{const p=products.find(p=>p.id===t.productId);return s+(t.exitPrice!=null?calcPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0);},0)}/></span>
           <span className="text-muted text-xs">Comm: <span className="text-red/60 font-semibold tabular-nums">-{fmtTHB(filtered.filter(t=>t.exitPrice!=null).reduce((s,t)=>{const p=products.find(p=>p.id===t.productId);return s+(p?getRoundTripComm(p)*t.contracts:0);},0),0)} ฿</span></span>
           <span className="text-muted text-xs">Net: <PLDisplay value={filtered.reduce((s,t)=>{const p=products.find(p=>p.id===t.productId);return s+(t.exitPrice!=null?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0);},0)}/></span>
-          <span className={filteredWins/filtered.length>=0.5?"text-green":"text-red"}>
-            WR {(filteredWins/filtered.length*100).toFixed(0)}%
+          <span className={closedFiltered.length>0&&filteredWins/closedFiltered.length>=0.5?"text-green":"text-red"}>
+            WR {closedFiltered.length>0?(filteredWins/closedFiltered.length*100).toFixed(0):"—"}%
           </span>
-          {(()=>{
-            const bePct4=portfolio?.breakevenPct??1.0;
-            let wCount=0,lCount=0,beCount=0;
-            filtered.forEach(t=>{
-              if(t.exitPrice==null)return;
-              const pp=products.find(p=>p.id===t.productId);
-              const n=calcNetPL(pp,t.contracts,t.entryPrice,t.exitPrice,t.direction);
-              const pct4=balance>0?n/balance*100:0;
-              if(Math.abs(pct4)<bePct4)beCount++;
-              else if(n>0)wCount++;
-              else lCount++;
-            });
-            return(
-              <span className="text-muted text-xs ml-1">
-                · <span className="text-green font-semibold">{wCount}W</span>{" "}
-                <span className="text-red font-semibold">{lCount}L</span>{" "}
-                <span className="font-semibold">{beCount}BE</span>
+          <span className="text-muted text-xs ml-1">
+                · <span className="text-green font-semibold">{wlbeCounts.wCount}W</span>{" "}
+                <span className="text-red font-semibold">{wlbeCounts.lCount}L</span>{" "}
+                <span className="font-semibold">{wlbeCounts.beCount}BE</span>
               </span>
-            );
-          })()}
         </div>
       )}
 
@@ -3066,7 +3372,7 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTr
                       <span className={t.exitPrice==null?"text-yellow/60":"text-txt"}>{t.exitPrice!=null?fmtNum(t.exitPrice,p?.digits):"—"}</span>
                     </td>
                     {/* Ticks */}
-                    {(()=>{if(!p||t.exitPrice==null)return<td className="px-3 py-2.5 text-muted text-xs hidden md:table-cell text-right">—</td>;var tks=((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1);return<td onClick={()=>setDetail(t)} className={"px-3 py-2.5 tabular-nums text-xs font-medium cursor-pointer whitespace-nowrap hidden md:table-cell text-right "+(tks>=0?"text-green":"text-red")}>{tks>=0?"+":""}{tks.toFixed(1)}</td>;})()}
+                    <TdTicks t={t} p={p} onClick={()=>setDetail(t)}/>
                     {/* Net P/L */}
                     <td onClick={()=>setDetail(t)} className="px-3 py-2.5 cursor-pointer whitespace-nowrap text-right"><PLDisplay value={netPL}/></td>
                     {/* Comm */}
@@ -3117,6 +3423,7 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTr
           onCancel={()=>setShowImport(false)}
           onProductsChange={onProductsChange}
           onBalanceSet={onBalanceSet}
+          onTransactions={onTransactions}
         />
       )}
     </div>
@@ -3170,6 +3477,29 @@ function normCol(s){return String(s).trim().replace(/\s+/g," ");}
 var TYPO_CORRECTIONS=[
   {test:function(su){return su.startsWith("SO50");}, fix:function(s){return"S50"+s.slice(4);}, base:"S50"},
 ];
+
+// Map contractCode → live_prices key (e.g. "GOM26" + product "gold" baseSymbol "GO" → "gold_m26")
+function contractToLiveKey(productId,contractCode,baseSymbol){
+  if(!contractCode||!baseSymbol)return productId;
+  var series=contractCode.toUpperCase().slice(baseSymbol.length);
+  if(!series)return productId;
+  return productId+"_"+series.toLowerCase();
+}
+// Lookup live price for a trade: use contractCode to find exact series key, fallback to productId
+function getLivePrice(livePrices,trade,product){
+  if(!livePrices||!product)return null;
+  var key=contractToLiveKey(product._baseId||product.id,trade.contractCode||product.currentContract,product.baseSymbol);
+  if(livePrices[key]!=null)return livePrices[key];
+  return livePrices[product._baseId||product.id]??null;
+}
+// Lookup live price for a product (no specific trade): use product's currentContract
+function getLivePriceForProduct(livePrices,product){
+  if(!livePrices||!product)return null;
+  var pid=product._baseId||product.id;
+  var key=contractToLiveKey(pid,product.currentContract,product.baseSymbol);
+  if(livePrices[key]!=null)return livePrices[key];
+  return livePrices[pid]??null;
+}
 
 function resolveProductCode(v,products){
   var s=String(v||"").trim();
@@ -3453,7 +3783,211 @@ function BalanceSetBannerWithDate({parsed,onBalanceSet}){
   return<BalanceSetBanner onBalanceSet={handleSet} firstTradeDate={firstDate}/>;
 }
 
-function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onProductsChange,onBalanceSet}){
+function parseMT5Date(v){
+  if(!v)return null;
+  if(v instanceof Date){
+    var y=v.getFullYear(),mo=String(v.getMonth()+1).padStart(2,"0"),d=String(v.getDate()).padStart(2,"0");
+    var h=String(v.getHours()).padStart(2,"0"),mi=String(v.getMinutes()).padStart(2,"0");
+    return y+"-"+mo+"-"+d+"T"+h+":"+mi;
+  }
+  if(typeof v==="number"&&v>40000)return parseBrokerDate(v);
+  var s=String(v).trim();
+  var m=s.match(/^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2})/);
+  if(m)return m[1]+"-"+m[2]+"-"+m[3]+"T"+m[4]+":"+m[5];
+  return parseBrokerDate(v);
+}
+
+function parseMT5Num(v){
+  if(v==null||v==="")return null;
+  if(typeof v==="number")return v;
+  var n=parseFloat(String(v).replace(/[\s,]/g,""));
+  return isNaN(n)?null:n;
+}
+
+function parseMT5Positions(rows,products){
+  // Find "Positions" section header
+  var posStart=-1;
+  for(var i=0;i<rows.length;i++){
+    if(String(rows[i][0]||"").trim()==="Positions"){posStart=i;break;}
+  }
+  if(posStart<0)return{trades:[],errors:[]};
+  // Data starts 2 rows after section header (skip column header row)
+  var dataStart=posStart+2;
+  // Find next section boundary
+  var dataEnd=rows.length;
+  for(var i=dataStart;i<rows.length;i++){
+    var c=String(rows[i][0]||"").trim();
+    if(c==="Orders"||c==="Deals"||c==="Open Positions"||c==="Results"){dataEnd=i;break;}
+  }
+  var goodRows=[],badRows=[];
+  for(var i=dataStart;i<dataEnd;i++){
+    var row=rows[i];
+    // Positions columns: Time,Position,Symbol,Type,Volume,Price,S/L,T/P,Time(close),Price(close),Commission,Swap,Profit
+    var openTimeRaw=String(row[0]||"").trim();
+    var positionId=String(row[1]||"").trim();
+    var symbol=String(row[2]||"").trim();
+    var type=String(row[3]||"").trim().toLowerCase();
+    if(!openTimeRaw||!symbol)continue;
+    var volume=parseMT5Num(row[4])||0;
+    var openPrice=parseMT5Num(row[5])||0;
+    var sl=parseMT5Num(row[6]);
+    var tp=parseMT5Num(row[7]);
+    var closeTimeRaw=String(row[8]||"").trim();
+    var closePrice=parseMT5Num(row[9]);
+    var commission=parseMT5Num(row[10])||0;
+    var swap=parseMT5Num(row[11])||0;
+    var profit=parseMT5Num(row[12])||0;
+    // Strip futures contract suffix [HMUZ]\d{2} to get base symbol (e.g. S50U25→S50, GOZ25→GO)
+    var baseSymbol=symbol.replace(/[HMUZ]\d{2}$/i,"");
+    var resolved=resolveProductCode(baseSymbol,products);
+    if(!resolved.productId)resolved=resolveProductCode(symbol,products);
+    var trade={
+      id:"mt5_"+positionId+"_"+Math.random().toString(36).slice(2),
+      mt5PositionId:positionId,
+      productId:resolved.productId,
+      contractCode:symbol,
+      direction:type==="buy"?"Long":"Short",
+      contracts:volume,
+      entryPrice:openPrice,
+      exitPrice:(closePrice!=null&&closePrice!==0)?closePrice:null,
+      openDateTime:parseMT5Date(openTimeRaw),
+      exitDateTime:closeTimeRaw?parseMT5Date(closeTimeRaw):null,
+      stopLoss:(sl&&sl!==0)?sl:null,
+      takeProfit:(tp&&tp!==0)?tp:null,
+      commission:commission,
+      swap:swap,
+      brokerProfit:profit,
+      status:(closePrice!=null&&closePrice!==0)?"closed":"open",
+      setupType:"Other",postNote:"",preImages:[],postImages:[],
+      partialCloses:[],isMerged:false,mergedFromIds:[],subTrades:[],
+    };
+    if(!trade.productId)badRows.push({...trade,_rawProduct:symbol,_raw:row});
+    else goodRows.push({...trade,_raw:row});
+  }
+  return{trades:goodRows,errors:badRows};
+}
+
+function parseMT5OpenPositions(rows,products){
+  var openStart=-1;
+  for(var i=0;i<rows.length;i++){
+    if(String(rows[i][0]||"").trim()==="Open Positions"){openStart=i;break;}
+  }
+  if(openStart<0)return{trades:[],errors:[]};
+  var dataStart=openStart+2;
+  var dataEnd=rows.length;
+  for(var i=dataStart;i<rows.length;i++){
+    var c=String(rows[i][0]||"").trim();
+    if(c==="Results"||c==="Balance:"||c===""){
+      // detect end by empty row or summary rows
+      var allEmpty=rows[i].every(function(v){return String(v||"").trim()==="";});
+      if(c==="Results"||c==="Balance:"){dataEnd=i;break;}
+      if(allEmpty&&i>dataStart+1){dataEnd=i;break;}
+    }
+  }
+  var goodRows=[],badRows=[];
+  for(var i=dataStart;i<dataEnd;i++){
+    var row=rows[i];
+    // Columns: Time,Position,Symbol,Type,Volume,Price,S/L,T/P,Market Price,Swap,[empty],Profit,Comment
+    var openTimeRaw=String(row[0]||"").trim();
+    var positionId=String(row[1]||"").trim();
+    var symbol=String(row[2]||"").trim();
+    var type=String(row[3]||"").trim().toLowerCase();
+    if(!openTimeRaw||!symbol||!positionId)continue;
+    var volume=parseMT5Num(row[4])||0;
+    var openPrice=parseMT5Num(row[5])||0;
+    var sl=parseMT5Num(row[6]);
+    var tp=parseMT5Num(row[7]);
+    var marketPrice=parseMT5Num(row[8]);
+    if(!volume||!openPrice)continue;
+    var baseSymbol=symbol.replace(/[HMUZ]\d{2}$/i,"");
+    var resolved=resolveProductCode(baseSymbol,products);
+    if(!resolved.productId)resolved=resolveProductCode(symbol,products);
+    var trade={
+      id:"mt5_"+positionId+"_"+Math.random().toString(36).slice(2),
+      mt5PositionId:positionId,
+      productId:resolved.productId,
+      contractCode:symbol,
+      direction:type==="buy"?"Long":"Short",
+      contracts:volume,
+      entryPrice:openPrice,
+      exitPrice:null,
+      openDateTime:parseMT5Date(openTimeRaw),
+      exitDateTime:null,
+      stopLoss:(sl&&sl!==0)?sl:null,
+      takeProfit:(tp&&tp!==0)?tp:null,
+      currentPrice:marketPrice||null,
+      status:"open",
+      setupType:"Other",postNote:"",preImages:[],postImages:[],
+      partialCloses:[],isMerged:false,mergedFromIds:[],subTrades:[],
+    };
+    if(!trade.productId)badRows.push({...trade,_rawProduct:symbol,_raw:row});
+    else goodRows.push({...trade,_raw:row});
+  }
+  return{trades:goodRows,errors:badRows};
+}
+
+function parseMT5Deals(rows){
+  // Find "Deals" section header
+  var dealsStart=-1;
+  for(var i=0;i<rows.length;i++){
+    if(String(rows[i][0]||"").trim()==="Deals"){dealsStart=i;break;}
+  }
+  if(dealsStart<0)return{balanceEvents:[],commPerLeg:{}};
+  var dataStart=dealsStart+2;
+  var dataEnd=rows.length;
+  for(var i=dataStart;i<rows.length;i++){
+    var c=String(rows[i][0]||"").trim();
+    if(c==="Open Positions"||c==="Results"||/^Balance:/i.test(c)){dataEnd=i;break;}
+    // Also stop on blank-then-summary row patterns
+  }
+  var balanceEvents=[];
+  // commissions[baseSymbol] = {totalComm, totalLots}
+  var commAcc={};
+  for(var i=dataStart;i<dataEnd;i++){
+    var row=rows[i];
+    var time=String(row[0]||"").trim();
+    if(!time)continue;
+    var symbol=String(row[2]||"").trim();
+    var type=String(row[3]||"").trim().toLowerCase();
+    var volume=parseMT5Num(row[5])||0;
+    var commAmt=parseMT5Num(row[8])||0;
+    var feeAmt=parseMT5Num(row[9])||0;
+    var profit=parseMT5Num(row[11]);
+    var comment=String(row[13]||"").trim();
+    if(type==="balance"&&!symbol){
+      // Skip zero-amount "Adjust Equity" rows only; non-zero ones are real balance adjustments
+      if(/adjust\s*equity/i.test(comment)&&Math.abs(profit||0)<1)continue;
+      var txType=(profit!=null&&profit<0)?"withdraw":"deposit";
+      balanceEvents.push({
+        date:parseMT5Date(time),
+        amount:Math.abs(profit||0),
+        rawProfit:profit||0,
+        type:txType,
+        comment:comment,
+      });
+    } else if(symbol&&volume>0&&(commAmt!==0||feeAmt!==0)){
+      // Accumulate commission + fee for auto-detect
+      var base=symbol.replace(/[HMUZ]\d{2}$/i,"");
+      if(!commAcc[base])commAcc[base]={totalComm:0,totalFee:0,totalLots:0};
+      commAcc[base].totalComm+=Math.abs(commAmt);
+      commAcc[base].totalFee+=Math.abs(feeAmt);
+      commAcc[base].totalLots+=volume;
+    }
+  }
+  // commissionPerLeg = totalComm / totalLots (per deal = one side)
+  var commPerLeg={};
+  var feePerLeg={};
+  Object.keys(commAcc).forEach(function(base){
+    var d=commAcc[base];
+    if(d.totalLots>0){
+      commPerLeg[base]=Math.round(d.totalComm/d.totalLots);
+      feePerLeg[base]=d.totalFee/d.totalLots;
+    }
+  });
+  return{balanceEvents,commPerLeg,feePerLeg};
+}
+
+function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onProductsChange,onBalanceSet,onTransactions}){
   const[step,setStep]=useState("upload");
   const[parsed,setParsed]=useState([]);
   const[errors,setErrors]=useState([]);
@@ -3461,6 +3995,10 @@ function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onP
   const[loading,setLoading]=useState(false);
   const[dragOver,setDragOver]=useState(false);
   const[currentFile,setCurrentFile]=useState(null);
+  const[format,setFormat]=useState("thus");
+  const[dealEvents,setDealEvents]=useState([]);
+  const[dealSel,setDealSel]=useState(new Set());
+  const[dealNotes,setDealNotes]=useState({});
 
   function processFile(file,currentProducts){
     setCurrentFile(file);
@@ -3501,15 +4039,99 @@ function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onP
     });
   }
 
+  function processMT5File(file,currentProducts){
+    setCurrentFile(file);
+    setLoading(true);
+    loadSheetJS(function(){
+      var reader=new FileReader();
+      reader.onload=function(e){
+        var wb=XLSX.read(e.target.result,{type:"array",raw:true,cellDates:false});
+        var ws=wb.Sheets[wb.SheetNames[0]];
+        var rows=XLSX.utils.sheet_to_json(ws,{header:1,defval:"",raw:true});
+        // Parse positions (trades)
+        var result=parseMT5Positions(rows,currentProducts);
+        var existingPosIds=new Set((existingTrades||[]).map(function(t){return t.mt5PositionId;}).filter(Boolean));
+        var goodRows=result.trades.filter(function(t){return!existingPosIds.has(t.mt5PositionId);});
+        setParsed(goodRows);
+        setErrors(result.errors);
+        // Also parse open positions and merge
+        var openResult=parseMT5OpenPositions(rows,currentProducts);
+        var existingOpenIds=new Set((existingTrades||[]).map(function(t){return t.mt5PositionId;}).filter(Boolean));
+        var openRows=openResult.trades.filter(function(t){return!existingOpenIds.has(t.mt5PositionId);});
+        var allGood=goodRows.concat(openRows);
+        var allErrors=result.errors.concat(openResult.errors);
+        setParsed(allGood);
+        setErrors(allErrors);
+        var sel=new Set();
+        allGood.forEach(function(_,i){sel.add(i);});
+        setSelected(sel);
+        // Parse deals (balance events + commission)
+        var dealsResult=parseMT5Deals(rows);
+        var events=dealsResult.balanceEvents;
+        setDealEvents(events);
+        // Pre-select all deal events
+        var dSel=new Set();
+        events.forEach(function(_,i){dSel.add(i);});
+        setDealSel(dSel);
+        setDealNotes({});
+        // Auto-update commission if detected
+        if(Object.keys(dealsResult.commPerLeg).length>0&&onProductsChange){
+          var updated=false;
+          var newProducts=currentProducts.map(function(p){
+            var detectedComm=dealsResult.commPerLeg[p.baseSymbol];
+            if(detectedComm&&detectedComm!==p.commissionPerLeg){
+              updated=true;
+              return{...p,commissionPerLeg:detectedComm};
+            }
+            return p;
+          });
+          if(updated)onProductsChange(newProducts);
+        }
+        // Apply fee per leg to each trade
+        if(Object.keys(dealsResult.feePerLeg).length>0){
+          allGood.forEach(function(t){
+            var base=(t.contractCode||"").replace(/[HMUZ]\d{2}$/i,"");
+            var fpl=dealsResult.feePerLeg[base]||0;
+            if(fpl>0){
+              var legs=t.status==="closed"?2:1;
+              t.fee=-(fpl*t.contracts*legs);
+            }
+          });
+          setParsed([...allGood]);
+        }
+        setLoading(false);
+        // Go to deals step first, then preview
+        setStep(events.length>0?"deals":"preview");
+      };
+      reader.readAsArrayBuffer(file);
+    });
+  }
+
   function handleFile(file){
     if(!file)return;
-    processFile(file,products);
+    if(format==="mt5")processMT5File(file,products);
+    else processFile(file,products);
   }
 
   function isDuplicate(t){
+    if(t.mt5PositionId){
+      return(existingTrades||[]).some(function(e){return e.mt5PositionId===t.mt5PositionId;});
+    }
     return(existingTrades||[]).some(function(e){
       return e.productId===t.productId&&e.openDateTime===t.openDateTime&&e.entryPrice===t.entryPrice;
     });
+  }
+
+  function confirmDeals(){
+    // Import selected deal events as portfolio transactions
+    if(dealSel.size>0&&onTransactions){
+      var txs=[...dealSel].map(function(i){
+        var ev=dealEvents[i];
+        return{id:uid(),type:ev.type,date:ev.date,amount:ev.amount,note:dealNotes[i]!==undefined?dealNotes[i]:ev.comment};
+      }).sort(function(a,b){return new Date(a.date)-new Date(b.date);});
+      onTransactions(txs);
+    }
+    setStep("preview");
   }
 
   function confirmImport(){
@@ -3530,35 +4152,66 @@ function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onP
       style={{background:"rgba(11,14,17,0.80)",backdropFilter:"blur(4px)"}}
       onClick={function(e){if(e.target===e.currentTarget)onCancel();}}>
       <div className="bg-card border border-border rounded-2xl w-full max-w-3xl shadow-2xl fade-in flex flex-col max-h-[90vh]">
-        <div className="flex items-center justify-between px-5 pt-4 pb-3 border-b border-border/40 flex-shrink-0">
+        <div className="flex items-center justify-between px-5 pt-4 pb-3 flex-shrink-0">
           <div>
             <span className="font-bold text-txt">📥 Import Excel</span>
-            <span className="text-muted text-xs ml-3">{step==="upload"?"อัปโหลดไฟล์ broker":"ตรวจสอบและเลือก trades"}</span>
+            <span className="text-muted text-xs ml-3">{step==="upload"?"อัปโหลดไฟล์ broker":step==="deals"?"ตรวจสอบ Deposits / Withdrawals":"ตรวจสอบและเลือก trades"}</span>
           </div>
           <button onClick={onCancel} className="text-muted hover:text-txt text-xl leading-none">✕</button>
+        </div>
+        <div className="flex border-b border-border/40 flex-shrink-0 px-1">
+          {[["thus","THUS Format"],["mt5","MT5 Format"]].map(function(pair){
+            var f=pair[0],label=pair[1];
+            return(
+              <button key={f}
+                onClick={function(){if(f!==format){setFormat(f);setStep("upload");setParsed([]);setErrors([]);setSelected(new Set());}}}
+                className={"px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition "+(format===f?"border-yellow text-yellow":"border-transparent text-muted hover:text-txt")}>
+                {label}
+              </button>
+            );
+          })}
         </div>
 
         {step==="upload"&&(
           <div className="p-8 flex flex-col items-center gap-4">
+            {balance<=0&&format!=="mt5"&&(
+              <div className="w-full flex items-start gap-3 bg-yellow/10 border border-yellow/30 rounded-xl px-4 py-3">
+                <span className="text-xl mt-0.5">⚠️</span>
+                <div className="flex-1">
+                  <div className="font-semibold text-yellow text-sm">ต้องตั้งเงินทุนก่อน Import</div>
+                  <div className="text-muted text-xs mt-0.5 leading-relaxed">ระบบต้องทราบเงินเริ่มต้นเพื่อคำนวณ Step threshold ให้ถูกต้อง<br/>ไปที่ <strong className="text-txt">Settings → Portfolio → เพิ่ม Deposit</strong> ก่อน แล้วค่อยกลับมา Import</div>
+                </div>
+                <button onClick={onCancel}
+                  className="shrink-0 px-3 py-1.5 rounded-lg bg-yellow text-black text-xs font-bold hover:bg-yellow/90 transition">
+                  ไปตั้งค่า
+                </button>
+              </div>
+            )}
+            {balance<=0&&format==="mt5"&&(
+              <div className="w-full flex items-center gap-3 bg-blue-500/10 border border-blue-500/30 rounded-xl px-4 py-3">
+                <span className="text-xl">ℹ️</span>
+                <div className="text-blue-300 text-xs leading-relaxed">MT5 Format จะดึง Deposit / Withdrawal จากไฟล์ให้อัตโนมัติ — ไม่ต้องตั้งค่าก่อน</div>
+              </div>
+            )}
             <div
-              onDragOver={function(e){e.preventDefault();setDragOver(true);}}
+              onDragOver={function(e){e.preventDefault();var canUpload=balance>0||format==="mt5";if(canUpload)setDragOver(true);}}
               onDragLeave={function(){setDragOver(false);}}
-              onDrop={function(e){e.preventDefault();setDragOver(false);var f=e.dataTransfer.files[0];if(f)handleFile(f);}}
-              onClick={function(){document.getElementById("xlsx-input").click();}}
-              className={"border-2 border-dashed rounded-2xl p-10 w-full text-center cursor-pointer transition "+
-                (dragOver?"border-yellow bg-yellow/5":"border-border/50 hover:border-yellow/50 bg-input/20")}>
+              onDrop={function(e){e.preventDefault();setDragOver(false);var canUpload=balance>0||format==="mt5";if(!canUpload)return;var f=e.dataTransfer.files[0];if(f)handleFile(f);}}
+              onClick={function(){var canUpload=balance>0||format==="mt5";if(!canUpload)return;document.getElementById("xlsx-input").click();}}
+              className={(function(){var canUpload=balance>0||format==="mt5";return"border-2 border-dashed rounded-2xl p-10 w-full text-center transition "+(canUpload?"cursor-pointer "+(dragOver?"border-yellow bg-yellow/5":"border-border/50 hover:border-yellow/50 bg-input/20"):"cursor-not-allowed opacity-40 border-border/30 bg-input/10");})()}>
               {loading?(
                 <div className="text-yellow text-3xl animate-spin">⟳</div>
               ):(
                 <>
                   <div className="text-4xl mb-3">📊</div>
-                  <div className="text-txt font-semibold mb-1">วาง .xlsx ที่นี่ หรือคลิกเพื่อเลือกไฟล์</div>
-                  <div className="text-muted text-xs">รองรับ .xlsx, .xls จาก broker TFEX T053</div>
+                  <div className="text-txt font-semibold mb-1">วาง {format==="mt5"?".csv / .xlsx":".xlsx"} ที่นี่ หรือคลิกเพื่อเลือกไฟล์</div>
+                  <div className="text-muted text-xs">{format==="mt5"?"รองรับ ReportHistory*.csv จาก MT5 (Pi Securities)":"รองรับ .xlsx, .xls จาก broker TFEX T053"}</div>
                 </>
               )}
             </div>
-            <input id="xlsx-input" type="file" accept=".xlsx,.xls" className="hidden"
-              onChange={function(e){if(e.target.files[0])handleFile(e.target.files[0]);}}/>
+            <input id="xlsx-input" type="file" accept={format==="mt5"?".csv,.xlsx,.xls":".xlsx,.xls"} className="hidden"
+              disabled={balance<=0&&format!=="mt5"}
+              onChange={function(e){var canUpload=balance>0||format==="mt5";if(e.target.files[0]&&canUpload)handleFile(e.target.files[0]);}}/>
             {errors.length>0&&(
               <div className="text-yellow/80 text-xs bg-yellow/5 border border-yellow/20 rounded-lg px-3 py-2 w-full text-center">
                 ⚠️ {errors.length} แถวไม่รู้จัก product — จะแสดงรายละเอียดใน preview
@@ -3567,11 +4220,98 @@ function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onP
           </div>
         )}
 
+        {step==="deals"&&(
+          <>
+            <div className="overflow-y-auto flex-1 p-4">
+              <div className="mb-3 text-xs text-muted bg-input/30 border border-border/30 rounded-xl px-3 py-2 leading-relaxed">
+                พบ <span className="text-txt font-semibold">{dealEvents.length}</span> รายการฝาก/ถอน — เลือกรายการที่ต้องการนำเข้า portfolio และแก้ไข Note ได้ตามต้องการ
+              </div>
+              {dealEvents.length===0?(
+                <p className="text-muted text-sm text-center py-8">ไม่พบรายการ Deposit / Withdrawal</p>
+              ):(
+                <div className="space-y-2">
+                  {(function(){
+                    var DEPOSIT_PRESETS=["เงินทุนเริ่มต้น","เพิ่มทุน","โอนจากบัญชีอื่น","อื่นๆ"];
+                    var WITHDRAW_PRESETS=["ลดทุน","ฉุกเฉิน","ปิดบัญชี","อื่นๆ"];
+                    var WITHDRAW_TYPE_LABELS={
+                      "withdraw":"ถอนทั่วไป",
+                      "profit_withdrawal":"บันทึกการถอนกำไร (10%)"
+                    };
+                    return dealEvents.map(function(ev,i){
+                      var chk=dealSel.has(i);
+                      var curType=dealEvents[i].type;
+                      var curNote=dealNotes[i]!==undefined?dealNotes[i]:ev.comment;
+                      var isDeposit=curType==="deposit";
+                      var presets=isDeposit?DEPOSIT_PRESETS:WITHDRAW_PRESETS;
+                      return(
+                        <div key={i} className={"border rounded-xl px-3 py-2.5 transition "+(chk?"border-border/60 bg-input/10":"border-border/20 opacity-40")}>
+                          <div className="flex items-center gap-2 mb-2">
+                            <input type="checkbox" checked={chk}
+                              onChange={function(){var s=new Set(dealSel);s.has(i)?s.delete(i):s.add(i);setDealSel(s);}}
+                              className="accent-yellow cursor-pointer shrink-0"/>
+                            <span className="text-muted text-xs whitespace-nowrap">{ev.date?.slice(0,10)}</span>
+                            <span className={"text-xs font-bold tabular-nums "+(isDeposit?"text-green":"text-red")}>
+                              {isDeposit?"+":"-"}{ev.amount.toLocaleString("th-TH",{maximumFractionDigits:0})} ฿
+                            </span>
+                            <span className="text-muted/50 text-[10px] truncate flex-1">{ev.comment}</span>
+                          </div>
+                          {/* Type selector — deposit stays simple, withdrawal has 2 options */}
+                          <div className="flex gap-1.5 flex-wrap mb-2">
+                            {isDeposit?(
+                              <span className="px-2 py-0.5 rounded text-[10px] bg-green/20 text-green font-medium">ฝากเงิน</span>
+                            ):(
+                              Object.keys(WITHDRAW_TYPE_LABELS).map(function(t){
+                                return(
+                                  <button key={t}
+                                    onClick={function(){var evCopy=[...dealEvents];evCopy[i]={...evCopy[i],type:t};setDealEvents(evCopy);}}
+                                    className={"px-2.5 py-0.5 rounded text-[10px] border transition "+(curType===t?"bg-red/20 border-red/50 text-red":"bg-input/50 border-border text-muted hover:text-txt")}>
+                                    {WITHDRAW_TYPE_LABELS[t]}
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                          {/* Note presets */}
+                          <div className="flex gap-1 flex-wrap mb-1.5">
+                            {presets.map(function(p){
+                              return(
+                                <button key={p}
+                                  onClick={function(){setDealNotes(function(prev){var n={...prev};n[i]=p;return n;});}}
+                                  className={"px-2 py-0.5 rounded text-[10px] border transition "+(curNote===p?"bg-yellow/20 border-yellow text-yellow":"bg-input/50 border-border text-muted hover:text-txt")}>
+                                  {p}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          <input type="text" value={curNote}
+                            onChange={function(e){setDealNotes(function(prev){var n={...prev};n[i]=e.target.value;return n;});}}
+                            className="bg-input border border-border/50 rounded px-2 py-0.5 text-xs text-txt w-full"/>
+                        </div>
+                      );
+                    });
+                  })()}
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t border-border/40 flex-shrink-0 flex items-center justify-between gap-3">
+              <span className="text-muted text-xs">เลือก <span className="text-txt font-semibold">{dealSel.size}</span> จาก {dealEvents.length} รายการ</span>
+              <div className="flex gap-2">
+                <button onClick={function(){setStep("upload");}}
+                  className={clsBtn("ghost","sm")}>← กลับ</button>
+                <button onClick={confirmDeals}
+                  className={clsBtn("yellow","sm")}>
+                  {dealSel.size>0?"Import "+dealSel.size+" transactions + ":""}ดูรายการ trades →
+                </button>
+              </div>
+            </div>
+          </>
+        )}
+
         {step==="preview"&&(
           <>
             <div className="overflow-y-auto flex-1 p-4">
               {/* Balance warning with inline set */}
-              {balance<=0&&<BalanceSetBannerWithDate parsed={parsed} onBalanceSet={onBalanceSet}/>}
+              {balance<=0&&format!=="mt5"&&<BalanceSetBannerWithDate parsed={parsed} onBalanceSet={onBalanceSet}/>}
               {/* Unknown products breakdown */}
               {errors.length>0&&(
                 <UnknownProductErrors errors={errors} onCancel={onCancel}
@@ -3671,37 +4411,47 @@ function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onP
 
 function MetricCard({label,value,sub,color,icon}){
   return(
-    <div className="bg-card border border-border rounded-xl p-4">
+    <div className="bg-card border border-border rounded-xl p-4 min-h-[100px]">
       <div className="flex items-start justify-between mb-1.5">
         <span className="text-muted text-xs font-medium uppercase tracking-wide">{label}</span>
         {icon&&<span className="text-base">{icon}</span>}
       </div>
-      <div className={"text-xl font-bold tabular-nums "+(color||"text-txt")}>{value}</div>
-      {sub&&<div className="text-muted text-[11px] mt-0.5">{sub}</div>}
+      <div className={"text-lg md:text-xl font-bold tabular-nums break-words "+(color||"text-txt")}>{value}</div>
+      {sub&&<div className="text-muted text-[10px] md:text-[11px] mt-0.5 break-words">{sub}</div>}
     </div>
   );
 }
 
-function OvertradeDet({overtrades,getUnit,avgContracts,avgTicks}){
+function OvertradeDet({overtrades,getUnit,balance,products}){
   const[expanded,setExpanded]=React.useState(false);
   const show=expanded?overtrades:overtrades.slice(0,5);
   return(
     <div className="bg-orange-500/5 border border-orange-500/20 rounded-xl p-3">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-orange-400 text-xs font-semibold">⚠️ Overtrade Detector — {overtrades.length} ไม้</span>
-        <span className="text-muted text-[10px]">size &gt; avg {avgContracts.toFixed(1)} lots · ticks &lt; avg {avgTicks>=0?"+":""}{avgTicks.toFixed(1)}</span>
+      <div className="mb-2">
+        <span className="text-orange-400 text-xs font-semibold">⚠️ Overtrade Detector — ไม้ที่ใช้ size ใหญ่กว่าค่าเฉลี่ยของ product นั้น + ขาดทุน ({overtrades.length} ไม้)</span>
       </div>
       <div className="space-y-1.5">
         {show.map(function(t){
           var unit=getUnit(t.productId);
+          var p=t._p||(products||[]).find(function(pr){return pr.id===t.productId;});
+          var pv=p?calcPositionValue(p,t.contracts,t.entryPrice):0;
+          var gearing=balance>0?pv/balance:0;
+          var loss=p?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0;
+          var sym=p?p.baseSymbol||p.name:t.productId;
+          var prodAvg=t._prodAvg||0;
           return(
-            <div key={t.id} className="flex items-center gap-2 text-xs bg-input/30 rounded-lg px-2.5 py-1.5">
-              <span className="text-txt font-semibold whitespace-nowrap">{t.contractCode||t.productId}</span>
-              <DirBadge dir={t.direction}/>
-              <span className="text-muted">{t.contracts} lots</span>
-              <span className="text-muted mx-1">·</span>
-              <span className={t._ticks>=0?"text-green":"text-red"}>{t._ticks>=0?"+":""}{t._ticks.toFixed(1)} {unit}</span>
-              <span className="text-muted/50 ml-auto">{fmtDate(t.exitDateTime)}</span>
+            <div key={t.id} className="bg-input/30 rounded-lg px-2.5 py-1.5">
+              <div className="flex items-center gap-2 text-xs flex-wrap">
+                <span className="text-txt font-semibold whitespace-nowrap">{t.contractCode||t.productId}</span>
+                <DirBadge dir={t.direction}/>
+                <span className="text-muted">{t.contracts} lots</span>
+                <span className="text-muted mx-0.5">·</span>
+                <span className="text-orange-400 font-medium">{fmtGearing(gearing)}</span>
+                <span className="text-muted mx-0.5">·</span>
+                <span className="text-red font-medium">{fmtTHB(loss,0)} ฿</span>
+                <span className="text-muted/50 ml-auto">{fmtDate(t.exitDateTime)}</span>
+              </div>
+              <div className="text-[10px] text-muted/70 mt-0.5 pl-0.5">ใช้ {t.contracts}c (avg {prodAvg.toFixed(1)}c สำหรับ {sym}) · gearing {gearing.toFixed(2)}X · ขาดทุน {fmtTHB(Math.abs(loss),0)} ฿</div>
             </div>
           );
         })}
@@ -3716,7 +4466,7 @@ function OvertradeDet({overtrades,getUnit,avgContracts,avgTicks}){
   );
 }
 
-function PageDashboard({trades,products,balance,portfolio}){
+function PageDashboard({trades,products,balance,portfolio,equityHWM,l2Loading,l2Error,l2Fetched,fetchLayer2}){
   const SETUP_COLORS={"ประคองตลาด":"#3B82F6","สวนเทรนด์":"#F59E0B","Sideway":"#8B5CF6","Snow Ball":"#06B6D4","Scalp":"#F97316","Run-Trend":"#0ECB81","Other":"#848E9C"};
   const PROD_COLORS={gold:"#F0B90B",s50:"#3B82F6",silver:"#9CA3AF",usdjpy:"#8B5CF6"};
   const PROD_NAME={gold:"GOLD",s50:"S50",silver:"SILVER",usdjpy:"USDJPY"};
@@ -3749,37 +4499,23 @@ function PageDashboard({trades,products,balance,portfolio}){
 
   const metrics=useMemo(()=>{
     if(!closed.length)return null;
-    var nets=closed.map(t=>calcNetPL(getP(t),t.contracts,t.entryPrice,t.exitPrice,t.direction));
-    var bePctD=portfolio?.breakevenPct??1.0;
-    var wA=[],lA=[],bA=[];
-    nets.forEach(function(n){var pp=balance>0?Math.abs(n)/balance*100:0;if(pp<bePctD)bA.push(n);else if(n>0)wA.push(n);else lA.push(n);});
-    var wins=wA,losses=lA;
-    var winRate=nets.length>0?(wA.length/nets.length*100):0;
-    var totalWinSum=wins.reduce((s,v)=>s+v,0);
-    var totalLossSum=losses.reduce((s,v)=>s+v,0);
-    var avgWin=wins.length?totalWinSum/wins.length:0;
-    var avgLoss=losses.length?Math.abs(totalLossSum/losses.length):0;
-    var pf=(totalWinSum>0&&totalLossSum<0)?totalWinSum/Math.abs(totalLossSum):null;
-    var rr=avgLoss>0?avgWin/avgLoss:null;
-    var running=0,peak=0,maxDDraw=0;
-    nets.forEach(function(v){running+=v;if(running>peak)peak=running;var dd=running-peak;if(dd<maxDDraw)maxDDraw=dd;});
-    var maxDDAbs=Math.abs(maxDDraw);
-    var maxDDPct=peak>0?maxDDAbs/peak*100:(balance>0?maxDDAbs/balance*100:0);
-    var largestWin=wins.length?Math.max.apply(null,wins):null;
-    var largestLoss=losses.length?Math.min.apply(null,losses):null;
-    var durations=closed.filter(t=>t.openDateTime&&t.exitDateTime).map(t=>(new Date(t.exitDateTime)-new Date(t.openDateTime)));
-    var avgHoldMs=durations.length?durations.reduce((s,v)=>s+v,0)/durations.length:0;
-    var fmtMs=function(ms){var h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000);return h>=24?Math.floor(h/24)+"d "+h%24+"h":h>0?h+"h "+m+"m":m+"m";};
-    return{winRate,pf,rr,maxDDAbs,maxDDPct,largestWin,largestLoss,avgHoldMs,fmtMs,avgWin,avgLoss,wins,losses,nets,totalTrades:nets.length};
-  },[closed,getP]);
+    const m=buildCanonicalMetrics(closed.map(t=>({...t,status:"closed"})),products,portfolio,balance);
+    const fmtMs=ms=>{const h=Math.floor(ms/3600000),m2=Math.floor((ms%3600000)/60000);return h>=24?Math.floor(h/24)+"d "+h%24+"h":h>0?h+"h "+m2+"m":m2+"m";};
+    return{...m,fmtMs};
+  },[closed,products,portfolio,balance]);
 
   const equityPoints=useMemo(()=>{
-    var c=0;
-    return closed.map(t=>{
-      c+=calcNetPL(getP(t),t.contracts,t.entryPrice,t.exitPrice,t.direction);
-      return{date:t.exitDateTime.slice(0,10),cum:c,setup:t.setupType||"Other"};
+    const events=[];
+    (portfolio?.transactions||[]).forEach(tx=>{
+      events.push({date:tx.date,delta:tx.type==="deposit"?tx.amount:-tx.amount,setup:"_tx"});
     });
-  },[closed,getP]);
+    closed.forEach(t=>{
+      events.push({date:t.exitDateTime,delta:tradeNetPL(t,getP(t)),setup:t.setupType||"Other"});
+    });
+    events.sort((a,b)=>a.date<b.date?-1:a.date>b.date?1:0);
+    var cum=0;
+    return events.map(e=>{cum+=e.delta;return{date:e.date.slice(0,10),cum,setup:e.setup};});
+  },[closed,getP,portfolio?.transactions]);
 
   const bySetup=useMemo(()=>{
     var m={};
@@ -3966,26 +4702,52 @@ function PageDashboard({trades,products,balance,portfolio}){
         <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
           <MetricCard label="Win Rate" icon="🎯"
             value={metrics.winRate.toFixed(1)+"%"}
-            sub={metrics.wins.length+"W / "+metrics.losses.length+"L · "+metrics.totalTrades+"t"}
+            sub={metrics.winsCount+"W / "+metrics.lossesCount+"L · "+metrics.totalTrades+" ไม้"}
             color={metrics.winRate>=50?"text-green":"text-red"}/>
           {(()=>{
             const hwm=portfolio?.peakEquity||0;
             if(!hwm)return null;
             const balNow=balance||0;
             const ddPct=hwm>balNow?(hwm-balNow)/hwm*100:0;
-            return<MetricCard label="High Water Mark" icon="🏔️"
-              value={fmtTHB(hwm,0)+" ฿"}
-              sub={ddPct>0?"DD: -"+ddPct.toFixed(1)+"%":"At peak ✅"}
-              color={ddPct>=20?"text-red":ddPct>=10?"text-yellow":"text-green"}/>;
+            const eddPct=equityHWM&&equityHWM>balNow?(equityHWM-balNow)/equityHWM*100:0;
+            return(<>
+              <MetricCard label="HWM (Balance)" icon="🏔️"
+                value={fmtTHB(hwm,0)+" ฿"}
+                sub={ddPct>0?"DD: -"+ddPct.toFixed(1)+"%":"At peak ✅"}
+                color={ddPct>=20?"text-red":ddPct>=10?"text-yellow":"text-green"}/>
+              <div className="bg-card border border-border rounded-xl p-4">
+                <div className="flex items-start justify-between mb-2">
+                  <span className="text-muted text-xs font-medium">HWM (Equity) Layer 2</span>
+                  <span className="text-lg">🌊</span>
+                </div>
+                {equityHWM?(
+                  <>
+                    <div className={`text-xl font-bold tabular-nums ${eddPct>=20?"text-red":eddPct>=10?"text-yellow":"text-green"}`}>{fmtTHB(equityHWM,0)} ฿</div>
+                    <div className="text-muted text-xs mt-1 flex items-center justify-between">
+                      <span>{eddPct>0?"DD: -"+eddPct.toFixed(1)+"%":"At peak ✅"}</span>
+                      <button onClick={fetchLayer2} disabled={l2Loading} className="text-[10px] text-muted hover:text-yellow px-1.5 py-0.5 rounded hover:bg-input transition">{l2Loading?"...":"🔄"}</button>
+                    </div>
+                  </>
+                ):(
+                  <div className="space-y-2 mt-1">
+                    <div className="text-muted text-xs">{l2Error||"ยังไม่ได้คำนวณ"}</div>
+                    <button onClick={fetchLayer2} disabled={l2Loading}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${l2Loading?"bg-input text-muted cursor-wait":"bg-yellow text-black hover:bg-yellow/90"}`}>
+                      {l2Loading?"กำลังดึง...":"คำนวณ Equity HWM"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </>);
           })()}
           <MetricCard label="Profit Factor" icon="⚖️"
             value={metrics.pf?fmtRatio(metrics.pf,2)+"x":"—"}
             sub={"กำไรรวม ÷ ขาดทุนรวม · >1 = profitable"}
             color={metrics.pf&&metrics.pf>=1?"text-green":"text-red"}/>
           
-          <MetricCard label="High Water Mark" icon="🏔️"
-            value={"-"+metrics.maxDDPct.toFixed(1)+"% (-฿"+fmtTHB(metrics.maxDDAbs,0)+")"}
-            sub={balance?"จาก peak ฿"+fmtTHB(metrics.maxDDAbs/(metrics.maxDDPct/100||1),0):""}
+          <MetricCard label="Max Drawdown" icon="📉"
+            value={"-"+metrics.maxDDPct.toFixed(1)+"%"}
+            sub={"−฿"+fmtTHB(metrics.maxDDAbs,0)+" · peak ฿"+fmtTHB(metrics.maxDDAbs/(metrics.maxDDPct/100||1),0)}
             color="text-red"/>
           <MetricCard label="Largest Win / Loss" icon="🏆"
             value={metrics.largestWin!=null?"+"+fmtTHB(metrics.largestWin,0)+" ฿":"—"}
@@ -3993,7 +4755,7 @@ function PageDashboard({trades,products,balance,portfolio}){
             color="text-green"/>
           <MetricCard label="Avg Hold Time" icon="⏱"
             value={metrics.fmtMs(metrics.avgHoldMs)}
-            sub={metrics.totalTrades+" trades"}
+            sub={metrics.totalTrades+" ไม้"}
             color="text-yellow"/>
         </div>
 
@@ -4001,7 +4763,7 @@ function PageDashboard({trades,products,balance,portfolio}){
         {(()=>{
           var pts=equityPoints,n=pts.length;
           if(!n)return null;
-          var W=500,H=250,PL_t=16,PL_r=16,PL_b=40,PL_l=72;
+          var W=500,H=260,PL_t=16,PL_r=16,PL_b=50,PL_l=72;
           var CW=W-PL_l-PL_r,CH=H-PL_t-PL_b;
           var vals=pts.map(p=>p.cum);
           var minV=Math.min.apply(null,[0].concat(vals)),maxV=Math.max.apply(null,[0].concat(vals));
@@ -4009,13 +4771,37 @@ function PageDashboard({trades,products,balance,portfolio}){
           var px=function(i){return PL_l+i/(Math.max(n-1,1))*CW;};
           var py=function(v){return PL_t+(1-(v-minV)/vR)*CH;};
           var zerY=py(0);
-          var areaPath=pts.map((p,i)=>(i===0?"M":"L")+px(i).toFixed(1)+","+py(p.cum).toFixed(1)).join(" ")+" L"+(PL_l+CW).toFixed(1)+","+zerY.toFixed(1)+" L"+PL_l+","+zerY.toFixed(1)+" Z";
+          // Trade segment line path (skip zero-start dot)
+          var tradePts=pts.filter(p=>!p.isZero);
+          var zeroPt=pts[0]&&pts[0].isZero?pts[0]:null;
+          var areaPath=(zeroPt?
+            [("M"+px(0).toFixed(1)+","+py(0).toFixed(1))].concat(tradePts.map((p,i)=>"L"+px(i+1).toFixed(1)+","+py(p.cum).toFixed(1))):
+            pts.map((p,i)=>(i===0?"M":"L")+px(i).toFixed(1)+","+py(p.cum).toFixed(1))
+          ).join(" ")+" L"+(PL_l+CW).toFixed(1)+","+zerY.toFixed(1)+" L"+PL_l+","+zerY.toFixed(1)+" Z";
           var lastCum=pts[n-1].cum;
-          var step=Math.max(1,Math.floor(n/6));
-          var tickLabels=pts.map((p,i)=>({i,date:p.date,x:px(i)})).filter((_,i)=>i===0||i===n-1||(i%step===0));
+          // Smart tick labels: minimum 30px spacing
+          var MIN_TICK_PX=32;
+          var tickLabels=[];var lastTX=-999;
+          pts.forEach(function(p,i){if(p.isZero)return;var x=px(i);if(tickLabels.length===0||i===n-1||x-lastTX>=MIN_TICK_PX){tickLabels.push({i,date:p.date,x});lastTX=x;}});
+          // Deposit/withdrawal event markers
+          var txEvents=(portfolio?.transactions||[]).map(function(tx){
+            var txDate=tx.date?tx.date.slice(0,10):null;
+            if(!txDate)return null;
+            // Find the index in pts nearest to this date
+            var nearestIdx=-1;
+            for(var k=0;k<pts.length;k++){if(pts[k].date>=txDate){nearestIdx=k;break;}}
+            if(nearestIdx<0)nearestIdx=pts.length-1;
+            return{x:px(nearestIdx),type:tx.type,amount:tx.amount,date:txDate};
+          }).filter(Boolean);
           return(
             <div className="bg-card border border-border rounded-xl p-4">
-              <h3 className="font-semibold text-sm mb-3">📈 Equity Curve</h3>
+              <div className="flex items-center justify-between mb-1">
+                <h3 className="font-semibold text-sm">📈 Equity Curve <span className="text-muted font-normal text-[10px] ml-1">Realized P/L สะสม</span></h3>
+                <div className="flex items-center gap-3 text-[9px] text-muted">
+                  <span className="flex items-center gap-1"><span style={{display:"inline-block",width:8,height:8,borderRadius:"50%",background:"#0ECB81"}}/>ฝาก</span>
+                  <span className="flex items-center gap-1"><span style={{display:"inline-block",width:8,height:8,borderRadius:"50%",background:"#F6465D"}}/>ถอน</span>
+                </div>
+              </div>
               <div className="w-full overflow-x-auto">
                 <svg viewBox={"0 0 "+W+" "+H} style={{width:"100%",minWidth:320,height:"auto"}}>
                   {Array.from({length:6},(_,i)=>{
@@ -4027,24 +4813,53 @@ function PageDashboard({trades,products,balance,portfolio}){
                       </g>
                     );
                   })}
-                  {minV<0&&maxV>0&&<line x1={PL_l} x2={PL_l+CW} y1={zerY.toFixed(1)} y2={zerY.toFixed(1)} stroke="rgba(255,255,255,0.2)" strokeWidth="1" strokeDasharray="4,4"/>}
+                  {/* Zero line */}
+                  <line x1={PL_l} x2={PL_l+CW} y1={zerY.toFixed(1)} y2={zerY.toFixed(1)} stroke="rgba(255,255,255,0.15)" strokeWidth="1" strokeDasharray="4,4"/>
+                  {/* Deposit/withdrawal vertical markers */}
+                  {txEvents.map(function(ev,i){
+                    var col=ev.type==="deposit"?"#0ECB81":"#F6465D";
+                    return(
+                      <g key={"tx"+i}>
+                        <line x1={ev.x.toFixed(1)} x2={ev.x.toFixed(1)} y1={PL_t} y2={PL_t+CH} stroke={col} strokeWidth="1" strokeDasharray="3,3" opacity="0.5"/>
+                        <circle cx={ev.x.toFixed(1)} cy={(PL_t+CH+4).toFixed(1)} r="3" fill={col} opacity="0.8"/>
+                      </g>
+                    );
+                  })}
                   <path d={areaPath} fill={lastCum>=0?"rgba(14,203,129,0.08)":"rgba(246,70,93,0.08)"}/>
+                  {/* Trade line segments */}
                   {pts.map((p,i)=>{
                     if(i===n-1)return null;
+                    if(p.isZero){
+                      // Line from 0 to first trade
+                      var nxt=pts[i+1];
+                      var col2=nxt.cum>=0?"#0ECB81":"#F6465D";
+                      return<line key={i} x1={px(i).toFixed(1)} y1={py(0).toFixed(1)} x2={px(i+1).toFixed(1)} y2={py(nxt.cum).toFixed(1)} stroke={col2} strokeWidth="2" strokeLinecap="round"/>;
+                    }
                     var avgCum=(p.cum+pts[i+1].cum)/2;
                     var col=avgCum>=0?"#0ECB81":"#F6465D";
                     return<line key={i} x1={px(i).toFixed(1)} y1={py(p.cum).toFixed(1)} x2={px(i+1).toFixed(1)} y2={py(pts[i+1].cum).toFixed(1)} stroke={col} strokeWidth="2" strokeLinecap="round"/>;
                   })}
-                  {pts.map((p,i)=>{var c=SETUP_COLORS[p.setup]||"#848E9C";return<circle key={i} cx={px(i).toFixed(1)} cy={py(p.cum).toFixed(1)} r={n<=30?"3":"2"} fill={c}/>;}) }
+                  {/* Trade dots (skip zero-start) */}
+                  {pts.map((p,i)=>{
+                    if(p.isZero)return<circle key={i} cx={px(i).toFixed(1)} cy={py(0).toFixed(1)} r="3" fill="#848E9C"/>;
+                    var c=SETUP_COLORS[p.setup]||"#848E9C";
+                    return<circle key={i} cx={px(i).toFixed(1)} cy={py(p.cum).toFixed(1)} r={n<=30?"3":"2"} fill={c}/>;
+                  })}
                   {lastCum!==0&&<text x={Math.min(px(n-1)+6,W-55)} y={py(lastCum)-7} fontSize="9" fill={lastCum>=0?"#0ECB81":"#F6465D"} fontWeight="700">{lastCum>=0?"+":""}{fmtTHB(lastCum,0)}</text>}
-                  {tickLabels.map(function(item){return<text key={item.i} x={Math.min(Math.max(item.x,PL_l+2),PL_l+CW-2).toFixed(1)} y={H-6} textAnchor="middle" fontSize="8" fill="#848E9C">{item.date.slice(5)}</text>;})}
+                  {/* Date tick labels with minimum spacing */}
+                  {tickLabels.map(function(item){return<text key={item.i} x={Math.min(Math.max(item.x,PL_l+4),PL_l+CW-4).toFixed(1)} y={H-32} textAnchor="middle" fontSize="8" fill="#848E9C">{item.date.slice(5)}</text>;})}
+                  {/* Year separators */}
+                  {(function(){
+                    var years=[];var seenY={};
+                    pts.forEach(function(p,i){if(p.isZero)return;var yr=p.date.slice(0,4);if(!seenY[yr]){seenY[yr]=true;years.push({yr,i,x:px(i)});}});
+                    return years.map(function(y){return(<g key={y.yr}><line x1={y.x.toFixed(1)} x2={y.x.toFixed(1)} y1={(H-28).toFixed(1)} y2={(H-18).toFixed(1)} stroke="#848E9C" strokeWidth="1"/><text x={y.x.toFixed(1)} y={H-8} textAnchor="middle" fontSize="8" fill="#848E9C" fontWeight="600">{y.yr}</text></g>);});
+                  })()}
                 </svg>
               </div>
             </div>
           );
         })()}
 
-        
         {bySetup.length>0&&(()=>{
           return(
             <div className="bg-card border border-border rounded-xl p-4">
@@ -4055,8 +4870,9 @@ function PageDashboard({trades,products,balance,portfolio}){
                   var col=SETUP_COLORS[d.name]||"#848E9C";
                   return(
                     <div key={i} className="flex items-center gap-3">
-                      <div className="w-28 flex-shrink-0 text-right">
-                        <span className="text-xs font-medium leading-tight" style={{color:col}}>{d.name}</span>
+                      <div className="w-32 flex-shrink-0 text-right">
+                        <span className="text-xs font-medium leading-tight block" style={{color:col}}>{d.name}</span>
+                        <span className="text-[10px] text-muted">{d.wins}W {d.losses}L · {d.total} ไม้</span>
                       </div>
                       <div className="flex-1 bg-input rounded-full h-5 relative overflow-hidden min-w-0">
                         <div className="h-full absolute left-0 top-0"
@@ -4069,11 +4885,10 @@ function PageDashboard({trades,products,balance,portfolio}){
                           {d.winPct.toFixed(0)}%
                         </span>
                       </div>
-                      <div className="w-24 flex-shrink-0 text-right">
+                      <div className="w-auto flex-shrink-0 text-right">
                         <div className={"text-xs font-semibold tabular-nums "+(d.avgPL>=0?"text-green":"text-red")}>
-                          {d.avgPL>=0?"+":""}{fmtTHB(d.avgPL,0)} ฿
+                          avg {d.avgPL>=0?"+":""}{fmtTHB(d.avgPL,0)} ฿ ต่อไม้
                         </div>
-                        <div className="text-[10px] text-muted">{d.total}t</div>
                       </div>
                     </div>
                   );
@@ -4114,14 +4929,14 @@ function PageDashboard({trades,products,balance,portfolio}){
                     return<path key={i} d={d} fill={s.color} opacity="0.85"/>;
                   })}
                   <text x={cx} y={cy-5} textAnchor="middle" fontSize="14" fill="#EAECEF" fontWeight="700">{total}</text>
-                  <text x={cx} y={cy+10} textAnchor="middle" fontSize="8" fill="#848E9C">trades</text>
+                  <text x={cx} y={cy+10} textAnchor="middle" fontSize="8" fill="#848E9C">ไม้</text>
                 </svg>
                 <div className="space-y-2.5 flex-1 min-w-0">
                   {slices.map(s=>(
                     <div key={s.id} className="flex items-center gap-2 text-xs">
                       <span className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{background:s.color}}/>
                       <span className="text-muted w-14 flex-shrink-0">{PROD_NAME[s.id]||s.id}</span>
-                      <span className="text-txt font-medium">{s.count}t</span>
+                      <span className="text-txt font-medium">{s.count} ไม้</span>
                       <span className={"ml-auto tabular-nums "+(s.pnl>=0?"text-green":"text-red")} title={"avg "+fmtTHB(s.avgPL,0)+" / trade"}>{s.pnl>=0?"+":""}{fmtTHB(s.pnl,0)}</span>
                     </div>
                   ))}
@@ -4189,7 +5004,7 @@ function PageDashboard({trades,products,balance,portfolio}){
                     return(
                       <g key={m.month}>
                         <rect x={x.toFixed(1)} y={barY.toFixed(1)} width={barW} height={Math.max(2,barH).toFixed(1)} fill={col} fillOpacity="0.8" rx="2"/>
-                        <text x={(x+barW/2).toFixed(1)} y={(m.pnl>=0?barY-3:barY+Math.max(2,barH)+9).toFixed(1)} textAnchor="middle" fontSize="7" fill={col}>{m.pnl>=0?"+":""}{Math.abs(m.pnl)>=1000?(m.pnl/1000).toFixed(0)+"k":m.pnl.toFixed(0)}</text>
+                        <text x={(x+barW/2).toFixed(1)} y={(m.pnl>=0?barY-3:barY+Math.max(2,barH)+9).toFixed(1)} textAnchor="middle" fontSize="7" fill={col}>{fmtCompact(m.pnl)}</text>
                         <text x={(x+barW/2).toFixed(1)} y={H-4} textAnchor="middle" fontSize="7" fill="#848E9C">{fmtMo(m.month)}</text>
                       </g>
                     );
@@ -4255,8 +5070,8 @@ function PageDashboard({trades,products,balance,portfolio}){
                   <thead>
                     <tr className="text-muted border-b border-border/40">
                       <th className="text-left pb-2 font-medium">ช่วงเวลา</th>
-                      <th className="text-right pb-2 font-medium">Trades</th>
-                      <th className="text-right pb-2 font-medium">Avg Ticks</th>
+                      <th className="text-right pb-2 font-medium">ไม้</th>
+                      <th className="text-right pb-2 font-medium">Avg Move</th>
                       <th className="text-right pb-2 font-medium">Avg P/L</th>
                       <th className="text-right pb-2 font-medium">Win%</th>
                     </tr>
@@ -4353,8 +5168,21 @@ function PageDashboard({trades,products,balance,portfolio}){
           }).filter(function(b){return b.n>0;});
           var bestBucketTL=bucketStats.reduce(function(best,b){return(b.avg!=null&&(best===null||b.avg>best.avg))?b:best;},null);
 
-          // Overtrade detector
-          var overtrades=tlData.filter(function(t){return t.contracts>avgContracts&&t._ticks<avgTicks;});
+          // Overtrade detector — per-product avg contracts
+          var prodAvgContracts={};
+          tlData.forEach(function(t){
+            if(!prodAvgContracts[t.productId])prodAvgContracts[t.productId]={sum:0,n:0};
+            prodAvgContracts[t.productId].sum+=t.contracts;
+            prodAvgContracts[t.productId].n++;
+          });
+          Object.keys(prodAvgContracts).forEach(function(k){prodAvgContracts[k].avg=prodAvgContracts[k].sum/prodAvgContracts[k].n;});
+          var overtrades=tlData.filter(function(t){
+            var pa=prodAvgContracts[t.productId];
+            return pa&&t.contracts>1.5*pa.avg&&t._ticks<0;
+          }).map(function(t){
+            var pa=prodAvgContracts[t.productId];
+            return Object.assign({},t,{_prodAvg:pa?pa.avg:avgContracts});
+          });
 
           var PROD_COLORS2={gold:"#F0B90B",s50:"#3B82F6",silver:"#9CA3AF",usdjpy:"#8B5CF6"};
           var SETUP_COLORS2={"ประคองตลาด":"#3B82F6","สวนเทรนด์":"#F59E0B","Sideway":"#8B5CF6","Snow Ball":"#06B6D4","Scalp":"#F97316","Run-Trend":"#0ECB81","Other":"#848E9C"};
@@ -4367,7 +5195,7 @@ function PageDashboard({trades,products,balance,portfolio}){
               {(()=>{
                 var bestT=tlData.reduce(function(b,t){return t._ticks>b._ticks?t:b;},tlData[0]);
                 var worstT=tlData.reduce(function(b,t){return t._ticks<b._ticks?t:b;},tlData[0]);
-                var getUnit=function(pid){return pid==="usdjpy"?"pip":"ticks";};
+                var getUnit=function(pid){return pid==="usdjpy"?"pip":pid==="s50"?"จุด":"USD";};
                 var getSymbol=function(t){return t._p?t._p.baseSymbol||t._p.name:t.productId;};
                 return(
                   <div className="grid grid-cols-2 gap-3">
@@ -4387,7 +5215,7 @@ function PageDashboard({trades,products,balance,portfolio}){
 
               {/* Per-product bars */}
               <div>
-                <div className="text-muted text-xs font-medium mb-2">Avg Ticks ต่อ Product</div>
+                <div className="text-muted text-xs font-medium mb-2">Avg Move ต่อ Product</div>
                 <div className="space-y-2">
                   {prodTicksArr.map(function(r){
                     var pct=maxAbsProd>0?Math.abs(r.avg)/maxAbsProd*100:0;
@@ -4399,7 +5227,7 @@ function PageDashboard({trades,products,balance,portfolio}){
                           <div className="h-2 rounded-full transition-all" style={{width:pct+"%",background:clr,opacity:r.avg>=0?1:0.5}}/>
                         </div>
                         <div className={"text-xs tabular-nums font-medium text-right shrink-0 "+(r.avg>=0?"text-green":"text-red")} style={{minWidth:"90px"}}>
-                          {r.avg>=0?"+":""}{r.avg.toFixed(1)} {r.id==="usdjpy"?"pip":"ticks"}<span className="text-muted font-normal ml-1">({r.n})</span>
+                          {r.avg>=0?"+":""}{r.avg.toFixed(1)} {r.id==="usdjpy"?"pip":r.id==="s50"?"จุด":"USD"}<span className="text-muted font-normal ml-1">({r.n})</span>
                         </div>
                       </div>
                     );
@@ -4444,7 +5272,7 @@ function PageDashboard({trades,products,balance,portfolio}){
               {/* Hold time vs ticks */}
               {bucketStats.length>1&&(
                 <div>
-                  <div className="text-muted text-xs font-medium mb-2">Hold Time vs Avg Ticks</div>
+                  <div className="text-muted text-xs font-medium mb-2">Hold Time vs Avg Move</div>
                   <div className="flex gap-2 flex-wrap">
                     {bucketStats.map(function(b){
                       var isBest=b===bestBucketTL;
@@ -4457,14 +5285,14 @@ function PageDashboard({trades,products,balance,portfolio}){
                       );
                     })}
                   </div>
-                  {bestBucketTL&&<div className="mt-2 text-xs text-muted bg-input/30 rounded-lg px-3 py-2">🎯 Sweet spot: ถือ <span className="text-txt font-semibold">{bestBucketTL.label}</span> ได้ ticks เฉลี่ยสูงสุด</div>}
+                  {bestBucketTL&&<div className="mt-2 text-xs text-muted bg-input/30 rounded-lg px-3 py-2">🎯 Sweet spot: ถือ <span className="text-txt font-semibold">{bestBucketTL.label}</span> ได้ move เฉลี่ยสูงสุด</div>}
                 </div>
               )}
 
               {/* Overtrade detector */}
               {overtrades.length>0&&(()=>{
-                var getUnit2=function(pid){return pid==="usdjpy"?"pip":"ticks";};
-                return <OvertradeDet overtrades={overtrades} getUnit={getUnit2} avgContracts={avgContracts} avgTicks={avgTicks}/>;
+                var getUnit2=function(pid){return pid==="usdjpy"?"pip":pid==="s50"?"จุด":"USD";};
+                return <OvertradeDet overtrades={overtrades} getUnit={getUnit2} balance={balance} products={products}/>;
               })()}
             </div>
           );
@@ -4572,16 +5400,18 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
   const[addMode,setAddMode]=useState(false);
   const[showWithdrawModal,setShowWithdrawModal]=useState(false);
   const txBalance=portfolio.transactions.reduce((s,t)=>s+(t.type==="deposit"?t.amount:-(t.amount)),0);
+  const totalDeposited=portfolio.transactions.filter(t=>t.type==="deposit").reduce((s,t)=>s+t.amount,0);
+  const totalWithdrawals=portfolio.transactions.filter(t=>t.type!=="deposit").reduce((s,t)=>s+t.amount,0);
 
   const realizedPL=useMemo(()=>(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
     const p=(products||[]).find(x=>x.id===t.productId);
-    return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);
+    return s+tradeNetPL(t,p);
   },0),[trades,products]);
 
   const balance=txBalance+realizedPL;
 
   const withdrawalTarget=portfolio?.withdrawalTarget??0.10;
-  const targetWithdrawal=Math.max(0,realizedPL*withdrawalTarget);
+  const targetWithdrawal=Math.max(0,calcWinningPL(trades, products)*withdrawalTarget);
   const totalWithdrawn=portfolio.transactions.filter(t=>t.type==="profit_withdrawal").reduce((s,t)=>s+t.amount,0);
   const pendingWithdrawal=Math.max(0,targetWithdrawal-totalWithdrawn);
 
@@ -4616,8 +5446,10 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
             <span className="text-muted text-sm">Current Balance</span>
             <span className="text-xl font-bold text-txt">{fmtTHB(balance,0)} ฿</span>
           </div>
-          <div className="flex gap-4 mt-2 text-xs text-muted">
-            <span>เงินฝาก: <span className="text-txt tabular-nums">{fmtTHB(txBalance,0)} ฿</span></span>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-xs text-muted">
+            <span>ฝากรวม: <span className="text-green tabular-nums">+{fmtTHB(totalDeposited,0)} ฿</span></span>
+            {totalWithdrawals>0&&<span>ถอนรวม: <span className="text-red tabular-nums">−{fmtTHB(totalWithdrawals,0)} ฿</span></span>}
+            <span>ทุนสุทธิ: <span className="text-txt tabular-nums">{fmtTHB(txBalance,0)} ฿</span></span>
             <span>Realized P/L: <span className={`tabular-nums font-medium ${realizedPL>=0?"text-green":"text-red"}`}>{realizedPL>=0?"+":""}{fmtTHB(realizedPL,0)} ฿</span></span>
           </div>
         </div>
@@ -4634,10 +5466,10 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
                 return(
                   <tr key={tx.id} className="border-b border-border/30">
                     <td className="py-2 text-muted text-xs">{fmtDate(tx.date)}</td>
-                    <td className="py-2"><span className={`px-2 py-0.5 rounded text-xs font-semibold ${isDeposit?"bg-green/10 text-green":isProfit?"bg-yellow/10 text-yellow":"bg-red/10 text-red"}`}>
+                    <td className="py-2 space-x-1"><span className={`px-2 py-0.5 rounded text-xs font-semibold ${isDeposit?"bg-green/10 text-green":isProfit?"bg-yellow/10 text-yellow":"bg-red/10 text-red"}`}>
                       {isDeposit?"ฝาก":isProfit?"ถอนกำไร":"ถอน"}
-                    </span></td>
-                    <td className={`py-2 text-right font-semibold tabular-nums ${isDeposit?"text-green":"text-red"}`}>
+                    </span>{isDeposit&&<span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${tx.txSubtype==="rescue"?"bg-yellow/15 text-yellow border border-yellow/20":"bg-green/15 text-green border border-green/20"}`}>{tx.txSubtype==="rescue"?"พยุง":"ทุน"}</span>}</td>
+                    <td className={`py-2 text-right font-semibold tabular-nums whitespace-nowrap ${isDeposit?"text-green":"text-red"}`}>
                       {isDeposit?"+":"−"}{fmtTHB(tx.amount,0)} ฿
                     </td>
                     <td className="py-2 px-3 text-muted text-xs">{tx.note||"—"}</td>
@@ -4720,7 +5552,7 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
             </div>
           </div>
           <div>
-            <label className="text-muted text-xs block mb-2">🚨 Circuit Breaker — เมื่อ port ลดจาก peak เกิน x%</label>
+            <label className="text-muted text-xs block mb-2">🚨 Circuit Breaker — CB arms เมื่อ port โต ≥ 1 step, fires เมื่อ equity ต่ำกว่า 70% ของ baseline</label>
             <div className="flex items-center gap-2 flex-wrap">
               {[20,25,30,35,40].map(v=>(
                 <button key={v} onClick={()=>onPortfolioChange({...portfolio,circuitBreakerPct:v})}
@@ -4942,7 +5774,16 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
               title:"ล้างข้อมูล Trade ทั้งหมด?",
               message:"Trades + Transactions จะถูกลบถาวร undo ไม่ได้",
               confirmLabel:"ลบเลย",variant:"danger",
-              onConfirm:()=>{
+              onConfirm:async()=>{
+                const uid=window._supabaseClient?.auth?.getUser&&(await window._supabaseClient.auth.getUser())?.data?.user?.id;
+                if(uid){
+                  await Promise.all([
+                    SUPA.from("trades").delete().eq("user_id",uid),
+                    SUPA.from("portfolio").delete().eq("user_id",uid),
+                    SUPA.from("notes").delete().eq("user_id",uid),
+                    SUPA.from("user_data").delete().eq("user_id",uid),
+                  ]);
+                }
                 ls.set("tj_trades",[]);
                 ls.set("tj_portfolio",{transactions:[],stepBaseMode:"first_deposit"});
                 ls.set("tj_daily_notes",{});
@@ -4965,7 +5806,17 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
               title:"Reset ทุกอย่าง?",
               message:"ข้อมูลทั้งหมดจะถูกลบถาวร undo ไม่ได้เลย",
               confirmLabel:"Reset เลย",variant:"danger",
-              onConfirm:()=>{
+              onConfirm:async()=>{
+                const uid=window._supabaseClient?.auth?.getUser&&(await window._supabaseClient.auth.getUser())?.data?.user?.id;
+                if(uid){
+                  await Promise.all([
+                    SUPA.from("trades").delete().eq("user_id",uid),
+                    SUPA.from("portfolio").delete().eq("user_id",uid),
+                    SUPA.from("products").delete().eq("user_id",uid),
+                    SUPA.from("notes").delete().eq("user_id",uid),
+                    SUPA.from("user_data").delete().eq("user_id",uid),
+                  ]);
+                }
                 localStorage.clear();
                 window.location.reload();
               }
@@ -5936,7 +6787,7 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
                       </span>
                     )}
                     {data&&data.count>1&&(
-                      <span className="text-[8px] leading-none text-white/70">{data.count}t</span>
+                      <span className="text-[8px] leading-none text-white/70">{data.count} ไม้</span>
                     )}
                     {dn&&(
                       <span className="absolute bottom-0.5 right-0.5 text-[9px] leading-none">{dn.mood}</span>
@@ -5961,12 +6812,83 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
                   </div>
                   <div className="p-4 space-y-3 overflow-y-auto max-h-[70vh]">
                     {(()=>{
-                      const dayTrades=(trades||[]).filter(t=>t.status==="closed"&&(t.exitDateTime?.startsWith(calTooltip.key)||t.openDateTime?.startsWith(calTooltip.key)));
-                      const w=dayTrades.filter(t=>{const p=(products||[]).find(pr=>pr.id===t.productId);return t.exitPrice!=null&&calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction)>0;}).length;
-                      const l=dayTrades.filter(t=>t.exitPrice!=null).length-w;
+                      const selectedDate=calTooltip.key;
+                      const isActiveOnDate=(t,dateStr)=>{
+                        const openDate=(t.openDateTime||t.entryDate||"").slice(0,10);
+                        const closeDate=t.exitDateTime?t.exitDateTime.slice(0,10):"9999-12-31";
+                        return openDate<=dateStr&&dateStr<=closeDate;
+                      };
+                      const dayTrades=(trades||[]).filter(t=>isActiveOnDate(t,selectedDate));
+                      const closedToday=dayTrades.filter(t=>t.status==="closed"&&t.exitDateTime?.startsWith(selectedDate));
+                      const activePositions=dayTrades.filter(t=>t.status==="open"||!t.exitDateTime?.startsWith(selectedDate));
+                      const w=closedToday.filter(t=>{const p=(products||[]).find(pr=>pr.id===t.productId);return t.exitPrice!=null&&calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction)>0;}).length;
+                      const l=closedToday.filter(t=>t.exitPrice!=null).length-w;
+
+                      const renderTradeCard=(t)=>{
+                        const p=(products||[]).find(pr=>pr.id===t.productId);
+                        const netPL=t.exitPrice!=null?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
+                        const isWin=netPL!=null&&netPL>0;
+                        const isOpen=t.exitPrice==null;
+                        return(
+                          <div key={t.id} className={"border rounded-xl p-2.5 "+(isOpen?"border-yellow/20 bg-yellow/5":isWin?"border-green/20 bg-green/5":"border-red/20 bg-red/5")}>
+                            <div className="flex items-center gap-2">
+                              {isOpen
+                                ?<span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-yellow/20 text-yellow shrink-0">OPEN</span>
+                                :isWin
+                                  ?<span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-green/20 text-green shrink-0">WIN</span>
+                                  :<span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red/20 text-red shrink-0">LOSS</span>
+                              }
+                              <span className="font-semibold text-xs text-txt">{t.contractCode||p?.currentContract||t.productId}</span>
+                              <DirBadge dir={t.direction}/>
+                              <span className="text-muted text-[10px]">{t.contracts}สัญญา</span>
+                              {netPL!=null&&(
+                                <span className={"ml-auto font-bold tabular-nums text-xs "+(isWin?"text-green":"text-red")}>
+                                  {isWin?"+":""}{fmtTHB(netPL,0)} ฿
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 mt-1 text-[10px] text-muted">
+                              <span className="tabular-nums">{fmtNum(t.entryPrice,p?.digits)} → {t.exitPrice!=null?fmtNum(t.exitPrice,p?.digits):"?"}</span>
+                              <span>·</span>
+                              <span>{t.openDateTime?.slice(11,16)} → {t.exitDateTime?.slice(11,16)||"?"}</span>
+                              {t.setupType&&<><span>·</span><span className="text-yellow/60">{t.setupType}</span></>}
+                            </div>
+                            {((t.preImages||[]).length>0||(t.postImages||[]).length>0||t.preNote||t.postNote)&&(
+                              <div className="mt-2 space-y-1.5 border-t border-border/20 pt-2">
+                                {(t.preImages||[]).length>0&&(
+                                  <div className="flex gap-1 flex-wrap">
+                                    {(t.preImages||[]).slice(0,3).map((src,idx)=>(
+                                      <img key={idx} src={src}
+                                        onClick={e=>{e.stopPropagation();setCalLightbox(src);}}
+                                        className="w-24 h-16 object-cover rounded-lg cursor-pointer hover:opacity-80 transition border border-green/20"
+                                        title="Pre-trade — กดขยาย"/>
+                                    ))}
+                                    {t.preNote&&<p className="w-full text-[10px] text-muted/80 leading-snug">{t.preNote.slice(0,80)}{t.preNote.length>80?"...":""}</p>}
+                                  </div>
+                                )}
+                                {(t.postImages||[]).length>0&&(
+                                  <div className="flex gap-1 flex-wrap">
+                                    {(t.postImages||[]).slice(0,3).map((src,idx)=>(
+                                      <img key={idx} src={src}
+                                        onClick={e=>{e.stopPropagation();setCalLightbox(src);}}
+                                        className="w-24 h-16 object-cover rounded-lg cursor-pointer hover:opacity-80 transition border border-blue-400/20"
+                                        title="Post-trade — กดขยาย"/>
+                                    ))}
+                                    {t.postNote&&<p className="w-full text-[10px] text-muted/80 leading-snug">{t.postNote.slice(0,80)}{t.postNote.length>80?"...":""}</p>}
+                                  </div>
+                                )}
+                                {!((t.preImages||[]).length>0||(t.postImages||[]).length>0)&&(t.preNote||t.postNote)&&(
+                                  <p className="text-[10px] text-muted/80 leading-snug">{(t.preNote||t.postNote||"").slice(0,100)}</p>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      };
+
                       return(
                         <>
-                          {calTooltip.data&&(
+                          {calTooltip.data&&closedToday.length>0&&(
                             <div className="flex items-center gap-4 flex-wrap pb-2 border-b border-border/30">
                               <div>
                                 <span className="text-muted text-xs block">P/L</span>
@@ -5975,8 +6897,8 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
                                 </div>
                               </div>
                               <div className="text-center">
-                                <span className="text-muted text-xs block">เทรด</span>
-                                <span className="text-txt font-semibold">{dayTrades.length} ไม้ · <span className="text-green">{w}W</span> <span className="text-red">{l}L</span></span>
+                                <span className="text-muted text-xs block">ปิดวันนี้</span>
+                                <span className="text-txt font-semibold">{closedToday.length} ไม้ · <span className="text-green">{w}W</span> <span className="text-red">{l}L</span></span>
                               </div>
                               <div className="text-center">
                                 <span className="text-muted text-xs block">เฉลี่ย/ไม้</span>
@@ -5986,71 +6908,20 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
                               </div>
                             </div>
                           )}
-                          {dayTrades.length>0&&(
+                          {activePositions.length>0&&(
                             <div className="space-y-2">
-                              {dayTrades.map(t=>{
-                                const p=(products||[]).find(pr=>pr.id===t.productId);
-                                const netPL=t.exitPrice!=null?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
-                                const isWin=netPL!=null&&netPL>0;
-                                const isOpen=t.exitPrice==null;
-                                return(
-                                  <div key={t.id} className={"border rounded-xl p-2.5 "+(isOpen?"border-yellow/20 bg-yellow/5":isWin?"border-green/20 bg-green/5":"border-red/20 bg-red/5")}>
-                                    <div className="flex items-center gap-2">
-                                      {isOpen
-                                        ?<span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-yellow/20 text-yellow shrink-0">OPEN</span>
-                                        :isWin
-                                          ?<span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-green/20 text-green shrink-0">WIN</span>
-                                          :<span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-red/20 text-red shrink-0">LOSS</span>
-                                      }
-                                      <span className="font-semibold text-xs text-txt">{t.contractCode||p?.currentContract||t.productId}</span>
-                                      <DirBadge dir={t.direction}/>
-                                      <span className="text-muted text-[10px]">{t.contracts}สัญญา</span>
-                                      {netPL!=null&&(
-                                        <span className={"ml-auto font-bold tabular-nums text-xs "+(isWin?"text-green":"text-red")}>
-                                          {isWin?"+":""}{fmtTHB(netPL,0)} ฿
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="flex items-center gap-2 mt-1 text-[10px] text-muted">
-                                      <span className="tabular-nums">{fmtNum(t.entryPrice,p?.digits)} → {t.exitPrice!=null?fmtNum(t.exitPrice,p?.digits):"?"}</span>
-                                      <span>·</span>
-                                      <span>{t.openDateTime?.slice(11,16)} → {t.exitDateTime?.slice(11,16)||"?"}</span>
-                                      {t.setupType&&<><span>·</span><span className="text-yellow/60">{t.setupType}</span></>}
-                                    </div>
-                                    {/* Pre/Post images + notes in calendar */}
-                                    {((t.preImages||[]).length>0||(t.postImages||[]).length>0||t.preNote||t.postNote)&&(
-                                      <div className="mt-2 space-y-1.5 border-t border-border/20 pt-2">
-                                        {(t.preImages||[]).length>0&&(
-                                          <div className="flex gap-1 flex-wrap">
-                                            {(t.preImages||[]).slice(0,3).map((src,idx)=>(
-                                              <img key={idx} src={src}
-                                                onClick={e=>{e.stopPropagation();setCalLightbox(src);}}
-                                                className="w-24 h-16 object-cover rounded-lg cursor-pointer hover:opacity-80 transition border border-green/20"
-                                                title="Pre-trade — กดขยาย"/>
-                                            ))}
-                                            {t.preNote&&<p className="w-full text-[10px] text-muted/80 leading-snug">{t.preNote.slice(0,80)}{t.preNote.length>80?"...":""}</p>}
-                                          </div>
-                                        )}
-                                        {(t.postImages||[]).length>0&&(
-                                          <div className="flex gap-1 flex-wrap">
-                                            {(t.postImages||[]).slice(0,3).map((src,idx)=>(
-                                              <img key={idx} src={src}
-                                                onClick={e=>{e.stopPropagation();setCalLightbox(src);}}
-                                                className="w-24 h-16 object-cover rounded-lg cursor-pointer hover:opacity-80 transition border border-blue-400/20"
-                                                title="Post-trade — กดขยาย"/>
-                                            ))}
-                                            {t.postNote&&<p className="w-full text-[10px] text-muted/80 leading-snug">{t.postNote.slice(0,80)}{t.postNote.length>80?"...":""}</p>}
-                                          </div>
-                                        )}
-                                        {!((t.preImages||[]).length>0||(t.postImages||[]).length>0)&&(t.preNote||t.postNote)&&(
-                                          <p className="text-[10px] text-muted/80 leading-snug">{(t.preNote||t.postNote||"").slice(0,100)}</p>
-                                        )}
-                                      </div>
-                                    )}
-                                  </div>
-                                );
-                              })}
+                              <span className="text-muted text-xs font-medium">📊 ถือไว้วันนี้ ({activePositions.length})</span>
+                              {activePositions.map(renderTradeCard)}
                             </div>
+                          )}
+                          {closedToday.length>0&&(
+                            <div className="space-y-2">
+                              <span className="text-muted text-xs font-medium">✅ ปิดวันนี้ ({closedToday.length})</span>
+                              {closedToday.map(renderTradeCard)}
+                            </div>
+                          )}
+                          {dayTrades.length===0&&!calTooltip.data&&(
+                            <div className="text-muted text-sm text-center py-2 italic">ไม่มีไม้วันนี้</div>
                           )}
                           {dailyNotes[calTooltip.key]?(
                             <div className="flex items-start gap-3 bg-input/30 rounded-xl p-3">
@@ -6312,24 +7183,6 @@ function App({session,onSignOut}){
     setAppPatterns(p);ls.set("tj_patterns",p);
     if(authUid){clearTimeout(dbTimers.current.patterns);dbTimers.current.patterns=setTimeout(()=>db.saveUserData(authUid,"tj_patterns",p),1500);}
   },[authUid]);
-  // ─── Track peak equity separately ─────────────────────────
-  useEffect(()=>{
-    const txB=(portfolio?.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
-    const rPL=trades.filter(t=>t.status==="closed").reduce((s,t)=>{
-      const p=products.find(x=>x.id===t.productId);
-      return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);
-    },0);
-    const unreal=trades.filter(t=>t.status==="open"&&t.entryPrice).reduce((s,t)=>{
-      const p=products.find(x=>x.id===t.productId);if(!p)return s;
-      const lp=(livePrices||{})[p.id]||t.currentPrice||t.entryPrice;
-      return s+((lp-t.entryPrice)/p.tickSize)*p.tickValue*(t.remainingContracts||t.contracts)*(t.direction==="Long"?1:-1);
-    },0);
-    const equity=txB+rPL+unreal;
-    const stored=portfolio?.peakEquity||0;
-    if(equity>stored&&equity>0){
-      setPortfolio(p=>({...p,peakEquity:equity}));
-    }
-  },[trades,products,livePrices,portfolio?.transactions,portfolio?.peakEquity]);
 
   // ─── Notification generator (persisted) ────────────────────
   useEffect(()=>{
@@ -6338,7 +7191,7 @@ function App({session,onSignOut}){
     const txBalance2=(portfolio?.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
     const realizedPL2=trades.filter(t=>t.status==="closed").reduce((s,t)=>{
       const p=products.find(x=>x.id===t.productId);
-      return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);
+      return s+tradeNetPL(t,p);
     },0);
     const bal2=txBalance2+realizedPL2;
     const candidates=[];
@@ -6356,33 +7209,20 @@ function App({session,onSignOut}){
         msg:"IM เหลือน้อย — ระวัง margin call",time:now});
     }
 
-    // Circuit Breaker
-    // CB: track peak equity (stored in portfolio.peakEquity)
-    const txBal2cb=(portfolio?.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
-    const unrealTotal2=trades.filter(t=>t.status==="open"&&t.entryPrice).reduce((s,t)=>{
-      const pp=products.find(x=>x.id===t.productId);if(!pp)return s;
-      const lp=(livePrices||{})[pp.id]||t.currentPrice||t.entryPrice;
-      return s+((lp-t.entryPrice)/pp.tickSize)*pp.tickValue*(t.remainingContracts||t.contracts)*(t.direction==="Long"?1:-1);
-    },0);
-    const currentEquity=txBal2cb+realizedPL2+unrealTotal2;
-    // Update peakEquity if current is higher
-    const storedPeak=portfolio?.peakEquity||0;
-    const peakEquity=Math.max(storedPeak,currentEquity,txBal2cb);
-    // Note: peakEquity is updated in a separate useEffect below
-    const cbPct2=(portfolio?.circuitBreakerPct??30)/100;
-    if(peakEquity>0&&currentEquity<peakEquity){
-      const dd=(peakEquity-currentEquity)/peakEquity*100;
-      const bucket=Math.floor(dd/5)*5;
-      if(dd>=cbPct2*100){
-        candidates.push({id:`cb_${today}_${bucket}`,type:"danger",icon:"🚨",
-          title:"Circuit Breaker!",
-          detail:`Equity ลดลง ${dd.toFixed(1)}% จาก peak ${fmtTHB(peakEquity,0)}฿`,
-          msg:"ปิดทุกไม้แล้วนั่งนิ่ง — ห้ามเพิ่มขนาด",time:now});
-      } else if(dd>=cbPct2*100*0.67){
-        const wBucket=Math.floor(dd/5)*5;
-        candidates.push({id:`cbw_${today}_${wBucket}`,type:"warn",icon:"🔴",
-          title:"Drawdown Warning",
-          detail:`Equity ลดลง ${dd.toFixed(1)}% จาก peak — เหลืออีก ${(cbPct2*100-dd).toFixed(1)}%`,
+    // Circuit Breaker — step-threshold based
+    const cbTxs=portfolio?.transactions||[];
+    const cbStatus=calcCBStatus(cbTxs,trades,portfolio,products,livePrices);
+    if(cbStatus.breached){
+      candidates.push({id:`cb_${today}`,type:"danger",icon:"🚨",
+        title:"CIRCUIT BREAKER!",
+        detail:`Equity ${fmtTHB(cbStatus.equity,0)}฿ ต่ำกว่า threshold ${fmtTHB(cbStatus.threshold,0)}฿`,
+        msg:"ออกจากไม้ทันที — ห้ามเพิ่มขนาด",time:now});
+    } else if(cbStatus.armed&&cbStatus.threshold>0){
+      const pct=cbStatus.equity>0?((cbStatus.equity-cbStatus.threshold)/cbStatus.threshold*100).toFixed(1):"0";
+      if(+pct<15){
+        candidates.push({id:`cbw_${today}`,type:"warn",icon:"🔴",
+          title:"Circuit Breaker ใกล้!",
+          detail:`Equity เหลือห่าง threshold แค่ ${pct}% (${fmtTHB(cbStatus.threshold,0)}฿)`,
           msg:"ใกล้ถึง circuit breaker — ระวัง",time:now});
       }
     }
@@ -6391,7 +7231,7 @@ function App({session,onSignOut}){
     trades.filter(t=>t.status==="open"&&t.entryPrice).forEach(t=>{
       const p=products.find(x=>x.id===t.productId);
       if(!p)return;
-      const lp=(livePrices||{})[p.id]||t.currentPrice||t.entryPrice;
+      const lp=getLivePrice(livePrices,t,p)||t.currentPrice||t.entryPrice;
       const unreal=((lp-t.entryPrice)/p.tickSize)*p.tickValue*(t.remainingContracts||t.contracts)*(t.direction==="Long"?1:-1);
       const profAlertPct=(portfolio?.profitAlertPct??5)/100;
       if(bal2<=0||unreal/bal2<=profAlertPct)return;
@@ -6483,19 +7323,29 @@ function App({session,onSignOut}){
         setTrades(data.trades);
         ls.set("tj_trades",data.trades);
       }
-      // Portfolio — preserve stepHistory from any local events captured during this session
-      if(data.portfolio!==null){
-        setPortfolio(local=>{
-          const remoteEvents=data.portfolio.stepHistory||[];
-          const localEvents=local.stepHistory||[];
-          const remoteIds=new Set(remoteEvents.map(e=>e.date+e.step+e.event));
-          const newLocal=localEvents.filter(e=>!remoteIds.has(e.date+e.step+e.event));
-          const merged={...data.portfolio,stepHistory:[...remoteEvents,...newLocal]};
-          ls.set("tj_portfolio",merged);
-          return merged;
-        });
-      }else{
-        // First login — keep default empty portfolio, ls stays clean
+      // Portfolio — merge remote + backfill stepHistory if empty
+      {
+        const base=data.portfolio||ls.get("tj_portfolio",{transactions:[],stepBaseMode:"first_deposit"});
+        const remoteEvents=base.stepHistory||[];
+        let merged={...base,stepHistory:remoteEvents};
+        // Migrate: backfill txSubtype on older transactions
+        merged.transactions=(merged.transactions||[]).map(t=>({...t,txSubtype:t.txSubtype||(t.type==="deposit"?"capital":"withdrawal")}));
+        if(merged.stepHistory.length===0){
+          const loadedTrades=data.trades||[];
+          const loadedProds=(data.products||DEFAULT_PRODUCTS).map(p=>
+            p.commission&&!p.commissionPerLeg?{...p,commissionPerLeg:+(p.commission/2/1.07).toFixed(4),vatEnabled:true,vatRate:0.07}:p
+          );
+          const txs=merged.transactions||[];
+          const firstDep=[...txs].sort((a,b)=>new Date(a.date)-new Date(b.date)).find(t=>t.type==="deposit");
+          const sbase=firstDep?.amount||0;
+          if(sbase>0&&loadedTrades.length>0){
+            const thresh=Array.from({length:21},(_,i)=>sbase*Math.pow(1.5,i+1));
+            const rebuilt=reconstructStepHistory(loadedTrades,merged,loadedProds,thresh);
+            if(rebuilt.length>0)merged={...merged,stepHistory:rebuilt};
+          }
+        }
+        ls.set("tj_portfolio",merged);
+        setPortfolio(merged);
       }
       // Products
       if(data.products!==null){
@@ -6525,7 +7375,7 @@ function App({session,onSignOut}){
     }).catch(()=>{
       // Supabase unavailable — fall back to localStorage
       setTrades(ls.get("tj_trades",[]));
-      setPortfolio(()=>{const s=ls.get("tj_portfolio",null);if(!s)return{transactions:[],stepBaseMode:"first_deposit"};if(!s.transactions)return{...s,transactions:[]};return s;});
+      setPortfolio(()=>{const s=ls.get("tj_portfolio",null);if(!s)return{transactions:[],stepBaseMode:"first_deposit"};if(!s.transactions)return{...s,transactions:[]};const migrated={...s,transactions:s.transactions.map(t=>({...t,txSubtype:t.txSubtype||(t.type==="deposit"?"capital":"withdrawal")}))};return migrated;});
       setProducts(()=>{const s=ls.get("tj_products",DEFAULT_PRODUCTS);return s.map(p=>{if(p.commission&&!p.commissionPerLeg){const{commission:_,...rest}=p;return{...rest,commissionPerLeg:+(p.commission/2/1.07).toFixed(4),vatEnabled:true,vatRate:0.07};}return p;});});
       setNotifHistory(ls.get("tj_notif_history",[]));
       setAppPatterns(ls.get("tj_patterns",[]));
@@ -6551,6 +7401,13 @@ function App({session,onSignOut}){
     dbTimers.current.portfolio=setTimeout(()=>db.savePortfolio(authUid,portfolio),1500);
   },[portfolio,authUid]);
   useEffect(()=>{
+    if(!authUid||!dbReady)return;
+    clearTimeout(dbTimers.current.summary);
+    dbTimers.current.summary=setTimeout(()=>{
+      db.savePortfolioSummary(authUid,buildSummaryPayload());
+    },5000);
+  },[trades,portfolio,authUid,dbReady,livePrices,buildSummaryPayload]);
+  useEffect(()=>{
     if(!authUid)return;
     clearTimeout(dbTimers.current.products);
     dbTimers.current.products=setTimeout(()=>db.saveProducts(authUid,products),1500);
@@ -6560,6 +7417,34 @@ function App({session,onSignOut}){
     clearTimeout(dbTimers.current.notif);
     dbTimers.current.notif=setTimeout(()=>db.saveUserData(authUid,"tj_notif_history",notifHistory),2000);
   },[notifHistory,authUid]);
+  useEffect(()=>{
+    if(!authUid||!dbReady)return;
+    const channel=SUPA.channel("bot_knowledge_rt")
+      .on("postgres_changes",
+        {event:"INSERT",schema:"public",table:"bot_knowledge"},
+        payload=>{
+          const row=payload.new;
+          if(!row)return;
+          const newNotif={
+            id:"bk_"+row.id+"_"+Date.now(),
+            type:row.severity==="danger"?"danger":row.severity==="warn"?"warn":"info",
+            icon:"🤖",
+            title:"Gugu: "+(row.title||row.symbol||"New insight"),
+            detail:row.symbol?row.symbol+" · "+(row.setup_type||""):"",
+            msg:row.content||row.lesson||"",
+            time:new Date().toISOString(),
+            read:false,
+          };
+          setNotifHistory(prev=>{
+            const updated=[newNotif,...prev].slice(0,100);
+            ls.set("tj_notif_history",updated);
+            return updated;
+          });
+        }
+      )
+      .subscribe();
+    return()=>SUPA.removeChannel(channel);
+  },[authUid,dbReady]);
 
   // Notes & daily notes Supabase sync
   const syncNotesToCloud=useCallback((freeform,daily)=>{
@@ -6573,52 +7458,123 @@ function App({session,onSignOut}){
   const txBalance=useMemo(()=>(portfolio.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-(t.amount)),0),[portfolio]);
   const realizedPL=useMemo(()=>trades.filter(t=>t.status==="closed").reduce((s,t)=>{
     const p=products.find(x=>x.id===t.productId);
-    return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);
+    return s+tradeNetPL(t,p);
   },0),[trades,products]);
   const balance=txBalance+realizedPL;
 
   const openTradesApp=useMemo(()=>trades.filter(t=>t.status==="open"),[trades]);
   const allFetchTrades=useMemo(()=>[...openTradesApp,...products.filter(p=>p.yahooSymbol&&!openTradesApp.find(t=>t.productId===p.id)).map(p=>({productId:p.id,status:"open"}))],[openTradesApp,products]);
   const{prices:livePrices,timestamps:liveTimestampsAll,errors:liveErrorsAll,fetchNow:fetchPrices,fetching:pricesFetching}=useLivePrices(products,allFetchTrades);
-  
 
+  const cbStatusApp=useMemo(()=>calcCBStatus(portfolio.transactions||[],trades,portfolio,products,livePrices),[portfolio,trades,products,livePrices]);
 
-  const stepBase=useMemo(()=>{
-    const txs=portfolio.transactions;
-    const sorted=[...txs].sort((a,b)=>new Date(a.date)-new Date(b.date));
-    const first=sorted.find(t=>t.type==="deposit");
-    const mode=portfolio.stepBaseMode||"first_deposit";
-    return mode==="sum_deposits"?txs.filter(t=>t.type==="deposit").reduce((s,t)=>s+t.amount,0):(first?.amount||0);
-  },[portfolio]);
+  const buildSummaryPayload=useCallback(()=>{
+    const m=buildCanonicalMetrics(trades,products,portfolio,balance);
+    const open=trades.filter(t=>t.status==="open"&&t.entryPrice);
+    const usedMargin=open.reduce((s,t)=>{
+      const p=products.find(x=>x.id===t.productId);
+      return s+(p?(p.initialMargin||0)*(t.remainingContracts||t.contracts):0);
+    },0);
+    const realPL=trades.filter(t=>t.status==="closed")
+      .reduce((s,t)=>s+tradeNetPL(t,products.find(x=>x.id===t.productId)),0);
+    const unrealizedPL=open.reduce((s,t)=>{
+      const p=products.find(x=>x.id===t.productId);
+      if(!p)return s;
+      const livePrice=livePrices[t.productId]||t.currentPrice||t.entryPrice;
+      if(!livePrice)return s;
+      const ticks=(livePrice-t.entryPrice)/p.tickSize;
+      return s+ticks*p.tickValue*(t.remainingContracts||t.contracts)*(t.direction==="Long"?1:-1);
+    },0);
+    const currentEquity=(balance||0)+unrealizedPL;
+    return{
+      balance:balance||0,
+      realized_pl:+realPL.toFixed(0),
+      current_equity:+currentEquity.toFixed(0),
+      unrealized_pl:+unrealizedPL.toFixed(0),
+      hwm:portfolio?.peakEquity||0,
+      drawdown_pct:+(portfolio?.peakEquity>0&&balance<portfolio.peakEquity
+        ?((portfolio.peakEquity-balance)/portfolio.peakEquity*100):0).toFixed(2),
+      win_rate:+m.winRate.toFixed(1),
+      profit_factor:m.pf?+m.pf.toFixed(2):null,
+      avg_rr:m.rr?+m.rr.toFixed(2):null,
+      be_count:m.beCount||0,
+      wins:m.winsCount||0,
+      losses:m.lossesCount||0,
+      total_trades:m.totalTrades||0,
+      avg_win:+m.avgWin.toFixed(0),
+      avg_loss:+m.avgLoss.toFixed(0),
+      margin_used:+usedMargin.toFixed(0),
+      margin_pct:usedMargin>0?+(currentEquity/usedMargin*100).toFixed(1):0,
+      circuit_breaker_pct:portfolio?.circuitBreakerPct??30,
+      cb_armed:portfolio?.cb_armed||false,
+      cb_baseline:portfolio?.cb_baseline||0,
+      cb_threshold:portfolio?.cb_threshold||0,
+      profit_alert_pct:portfolio?.profitAlertPct??5,
+      current_step:currentStep||0,
+      next_threshold:stepThresholds[currentStep]||0,
+      realized_pl_by_product:Object.fromEntries(
+        ["s50","gold","silver","usdjpy"].map(id=>{
+          const pl=trades.filter(t=>t.status==="closed"&&t.productId===id)
+            .reduce((s,t)=>s+tradeNetPL(t,products.find(x=>x.id===id)),0);
+          return[id,+pl.toFixed(0)];
+        })
+      ),
+      open_positions:open.map(t=>{
+        const p=products.find(x=>x.id===t.productId);
+        return{
+          symbol:t.contractCode||(p?p.currentContract:t.productId)||"",
+          side:t.direction||"",
+          contracts:t.remainingContracts||t.contracts,
+          entry:t.entryPrice||0,
+          stop_loss:t.stopLoss||t.invalidation||null,
+          take_profit:t.takeProfit||t.target||null,
+          setup_type:t.setupType||"",
+          open_datetime:t.openDateTime||"",
+          pre_note:t.preNote||"",
+        };
+      }),
+    };
+  },[trades,products,portfolio,balance,currentStep,stepThresholds,livePrices]);
+
+  const stepBase=useMemo(()=>calcStepBaseline(portfolio.transactions),[portfolio.transactions]);
 
   const stepBalance=txBalance+realizedPL;
   const stepThresholds=useMemo(()=>stepBase>0?Array.from({length:21},(_,i)=>stepBase*Math.pow(1.5,i+1)):[],[stepBase]);
   const currentStep=stepThresholds.filter(t=>stepBalance>=t).length;
+
+  // ── Reactive backfill: rebuild stepHistory from actual trade P/L whenever trades or txs change ──
+  useEffect(()=>{
+    if(!dbReady)return;
+    if(trades.length===0)return;
+    if(stepBase===0)return;
+    const thresh=Array.from({length:21},(_,i)=>stepBase*Math.pow(1.5,i+1));
+    const rebuilt=reconstructStepHistory(trades,portfolio,products,thresh);
+    setPortfolio(p=>({...p,stepHistory:rebuilt}));
+  },[dbReady,trades.length,stepBase,portfolio.transactions]);
+
+  // ── Reactive backfill: rebuild peakEquity when trades or txs change (guard prevents infinite loop) ──
+  useEffect(()=>{
+    if(!dbReady)return;
+    if(trades.length===0)return;
+    const hwm=reconstructHWM(trades,portfolio,products);
+    if(hwm>0&&Math.abs(hwm-(portfolio.peakEquity||0))>1)setPortfolio(p=>({...p,peakEquity:hwm}));
+  },[dbReady,trades.length,portfolio.transactions]);
+
+  // ── Layer 2: Equity HWM (app-level so Dashboard + Steps can both use it) ──
+  const{equityHWM,dailyPoints,loading:l2Loading,error:l2Error,lastFetched:l2Fetched,fetch:fetchLayer2}=useEquityHWM(trades,portfolio,products,authUid);
+
   const prevStepRef=useRef(null);
   useEffect(()=>{
     if(prevStepRef.current===null){prevStepRef.current=currentStep;return;}
     const prev=prevStepRef.current;
     if(currentStep===prev)return;
-    const now=new Date().toISOString();
-    const nowDate=now.slice(0,10);
-    const prevEvents=portfolio.stepHistory||[];
-    const lastEvent=prevEvents.length?prevEvents[prevEvents.length-1]:null;
-    // Debounce: skip if same event+step already recorded today
-    const newEventType=currentStep>prev?"reached":"dropped";
-    const newStep=currentStep>prev?currentStep:prev;
-    if(lastEvent&&lastEvent.event===newEventType&&lastEvent.step===newStep&&lastEvent.date.slice(0,10)===nowDate){
-      prevStepRef.current=currentStep;return;
-    }
-    const daysFromPrev=lastEvent?Math.floor((Date.now()-new Date(lastEvent.date))/86400000):null;
-    const event={step:newStep,event:newEventType,date:now,balance:stepBalance,daysFromPrev};
-    setPortfolio(p=>({...p,stepHistory:[...(p.stepHistory||[]),event]}));
     if(currentStep>prev)showToast(`🎉 ขึ้น Step ${currentStep}!`,"success");
     else showToast(`📉 ตกจาก Step ${prev} มาที่ Step ${currentStep}`,"error");
     prevStepRef.current=currentStep;
   },[currentStep]);
 
   const pendingWithdrawal=useMemo(()=>{
-    const wt=portfolio?.withdrawalTarget??0.10;const target=wt===0?0:realizedPL*wt;
+    const wt=portfolio?.withdrawalTarget??0.10;const target=wt===0?0:calcWinningPL(trades, products)*wt;
     const withdrawn=portfolio.transactions.filter(t=>t.type==="profit_withdrawal").reduce((s,t)=>s+t.amount,0);
     return Math.max(0,target-withdrawn);
   },[realizedPL,portfolio]);
@@ -6628,25 +7584,106 @@ function App({session,onSignOut}){
     prevPendingRef.current=pendingWithdrawal;
   },[pendingWithdrawal]);
 
-  const addTrade   =useCallback(t=>setTrades(p=>[...p,t]),[]);
-  const addTrades  =useCallback(ts=>setTrades(p=>[...p,...ts]),[]);
+  const addTrade   =useCallback(t=>{
+    tradeEvents.insert(t.id,"opened",{entry_price:t.entryPrice,contracts:t.contracts,direction:t.direction,product_id:t.productId});
+    setTrades(p=>{
+      // Arm CB if new open trade AND balance has grown >= 1 step
+      if(t.status==="open"||t.status==="draft"){
+        const closedPL=p.filter(x=>x.status==="closed").reduce((s,x)=>{
+          const prod=products.find(pr=>pr.id===x.productId);
+          return s+(tradeNetPL(x,prod)||0);
+        },0);
+        setPortfolio(pf=>{
+          if(pf.cb_armed)return pf;
+          const txs=pf.transactions||[];
+          const txBal=txs.reduce((s,tx)=>s+(tx.type==="deposit"?tx.amount:-tx.amount),0);
+          const bal=txBal+closedPL;
+          const base=calcStepBaseline(txs);
+          if(base<=0)return pf;
+          const thresh=Array.from({length:21},(_,i)=>base*Math.pow(1.5,i+1));
+          const step=thresh.filter(th=>bal>=th).length;
+          if(step>=1)return{...pf,cb_armed:true,cb_baseline:bal,cb_threshold:Math.round(bal*0.70)};
+          return pf;
+        });
+      }
+      return[...p,t];
+    });
+  },[products]);
+  const addTrades  =useCallback(ts=>{
+    setTrades(p=>{
+      const next=[...p,...ts];
+      const hasOpen=ts.some(x=>x.status==="open"||x.status==="draft");
+      if(hasOpen){
+        const closedPL=next.filter(x=>x.status==="closed").reduce((s,x)=>{
+          const prod=products.find(pr=>pr.id===x.productId);
+          return s+(tradeNetPL(x,prod)||0);
+        },0);
+        setPortfolio(pf=>{
+          if(pf.cb_armed)return pf;
+          const txs=pf.transactions||[];
+          const txBal=txs.reduce((s,tx)=>s+(tx.type==="deposit"?tx.amount:-tx.amount),0);
+          const bal=txBal+closedPL;
+          const base=calcStepBaseline(txs);
+          if(base<=0)return pf;
+          const thresh=Array.from({length:21},(_,i)=>base*Math.pow(1.5,i+1));
+          const step=thresh.filter(th=>bal>=th).length;
+          if(step>=1)return{...pf,cb_armed:true,cb_baseline:bal,cb_threshold:Math.round(bal*0.70)};
+          return pf;
+        });
+      }
+      return next;
+    });
+  },[products]);
+  const handleImportTransactions=useCallback(function(txs){
+    if(!txs||txs.length===0)return;
+    setPortfolio(function(p){
+      // Remove old placeholder entries, merge new ones, dedup by date+amount+type
+      var existing=(p.transactions||[]).filter(function(t){return t.note!=="เงินเริ่มต้น (จาก Import)";});
+      var existingKeys=new Set(existing.map(function(t){return t.type+"|"+t.date+"|"+t.amount;}));
+      var toAdd=txs.filter(function(t){return!existingKeys.has(t.type+"|"+t.date+"|"+t.amount);});
+      var merged=[...existing,...toAdd].sort(function(a,b){return new Date(a.date)-new Date(b.date);});
+      // Clear stepHistory and peakEquity so backfill rebuilds from scratch with correct data
+      return{...p,transactions:merged,stepHistory:[],peakEquity:0};
+    });
+  },[]);
   const handleImportBalance=useCallback(({amount,date})=>{
     if(!amount||amount<=0)return;
     setPortfolio(p=>{
-      // Idempotent: skip if a setup deposit with same amount+date already exists
-      const txDate=(date||new Date().toISOString().slice(0,16)).slice(0,10);
-      const already=(p.transactions||[]).some(t=>
-        t.note==="เงินเริ่มต้น (จาก Import)"&&
-        Math.abs(t.amount-amount)<1&&
-        (t.date||"").slice(0,10)===txDate
-      );
-      if(already)return p;
       const tx={id:uid(),type:"deposit",date:date||new Date().toISOString().slice(0,16),amount,note:"เงินเริ่มต้น (จาก Import)"};
-      return{...p,transactions:[...(p.transactions||[]),tx]};
+      // Remove any existing setup deposit, then add fresh one (idempotent replace)
+      const others=(p.transactions||[]).filter(t=>t.note!=="เงินเริ่มต้น (จาก Import)");
+      return{...p,transactions:[...others,tx]};
     });
   },[]);
-  const updateTrade=useCallback(t=>setTrades(p=>p.map(x=>x.id===t.id?t:x)),[]);
-  const deleteTrade=useCallback(id=>setTrades(p=>p.filter(x=>x.id!==id)),[]);
+  const updateTrade=useCallback(t=>{
+    if(t.status==="closed"&&t.exitPrice!=null){
+      tradeEvents.insert(t.id,"closed",{exit_price:t.exitPrice,contracts:t.contracts});
+    }
+    setTrades(p=>{
+      const next=p.map(x=>x.id===t.id?t:x);
+      // Disarm CB when all positions closed
+      if(t.status==="closed"){
+        const stillOpen=next.filter(x=>x.status==="open").length;
+        if(stillOpen===0){
+          setPortfolio(pf=>pf.cb_armed?{...pf,cb_armed:false,cb_baseline:0,cb_threshold:0}:pf);
+        }
+      }
+      return next;
+    });
+  },[]);
+  const deleteTrade=useCallback(id=>{
+    setTrades(p=>{
+      const deleted=p.find(x=>x.id===id);
+      const next=p.filter(x=>x.id!==id);
+      if(deleted&&deleted.status==="open"){
+        const stillOpen=next.filter(x=>x.status==="open").length;
+        if(stillOpen===0){
+          setPortfolio(pf=>pf.cb_armed?{...pf,cb_armed:false,cb_baseline:0,cb_threshold:0}:pf);
+        }
+      }
+      return next;
+    });
+  },[]);
 
   const navItems=[
     {k:"positions",l:"Positions"},
@@ -6677,13 +7714,14 @@ function App({session,onSignOut}){
         onMarkAllRead={markAllRead}
         onDeleteAll={deleteAllNotifs}
         onDeleteOne={deleteOneNotif}
+        showConfirm={showConfirm}
       />
 <nav className="bg-card border-b border-border sticky top-0 z-30">
         <div className="max-w-screen-xl mx-auto px-4 flex items-center justify-between h-14">
           <div className="flex items-center gap-5">
             <div className="flex items-center gap-2 select-none">
-              <div style={{background:"#6B3FA0",borderRadius:"8px",padding:"4px 10px"}}>
-                <span style={{color:"white",fontWeight:800,fontSize:"15px",letterSpacing:"2px"}}>THUS</span>
+              <div style={{background:"rgba(240,185,11,0.08)",border:"1px solid rgba(240,185,11,0.3)",borderRadius:"8px",padding:"4px 10px"}}>
+                <span style={{color:"#F0B90B",fontWeight:800,fontSize:"15px",letterSpacing:"2px",fontFamily:"'JetBrains Mono', monospace"}}>THUS</span>
               </div>
               <button onClick={()=>setShowNotif(v=>!v)}
                 className="relative text-muted hover:text-txt transition mr-1"
@@ -6709,7 +7747,7 @@ function App({session,onSignOut}){
             </div>
             {/* Mobile nav */}
             <div className="flex md:hidden items-center gap-2">
-              <span className="text-sm font-medium text-txt">{navItems.find(n=>n.k===page)?.l||""}</span>
+              <span className="text-base font-semibold text-txt">{navItems.find(n=>n.k===page)?.l||""}</span>
               <button onClick={()=>setMobileMenu(p=>!p)}
                 className="w-8 h-8 rounded-lg bg-input flex flex-col items-center justify-center gap-1 transition hover:bg-input/80">
                 <span className={`block w-4 h-0.5 bg-muted transition-all ${mobileMenu?"rotate-45 translate-y-1.5":""}`}/>
@@ -6756,11 +7794,26 @@ function App({session,onSignOut}){
       )}
       </nav>
 
+      {cbStatusApp.breached&&(
+        <div className="max-w-screen-xl mx-auto px-4 pt-3">
+          <div className="bg-red/20 border border-red rounded-xl p-3 text-red text-sm font-bold text-center">
+            🚨 CIRCUIT BREAKER — ออกจากไม้ทันที | Threshold {fmtTHB(cbStatusApp.threshold,0)} ฿ | Equity {fmtTHB(cbStatusApp.equity,0)} ฿
+          </div>
+        </div>
+      )}
+      {cbStatusApp.armed&&!cbStatusApp.breached&&(
+        <div className="max-w-screen-xl mx-auto px-4 pt-3">
+          <div className="bg-yellow/10 border border-yellow/40 rounded-xl p-2 text-yellow text-xs text-center">
+            ⚡ CB Active — threshold {fmtTHB(cbStatusApp.threshold,0)} ฿ | Equity {fmtTHB(cbStatusApp.equity,0)} ฿
+          </div>
+        </div>
+      )}
+
       <main className="max-w-screen-xl mx-auto px-4 py-5">
         {page==="positions"&&<PagePositions trades={trades} products={products} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onUpdateTrade={updateTrade} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
-        {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance}/>}
-        {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio}/>}
-        {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio}/>}
+        {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions}/>}
+        {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid} equityHWM={equityHWM} dailyPoints={dailyPoints} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
+        {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio} equityHWM={equityHWM} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="calendar" &&<PageCalendar  trades={trades} products={products} uid={authUid} syncNotesToCloud={syncNotesToCloud}/>}
         {page==="notes"    &&<PageNotes uid={authUid} syncNotesToCloud={syncNotesToCloud} onPatternsChange={handlePatternsChange} initialPatterns={appPatterns}/>}
         {page==="settings" &&<PageSettings portfolio={portfolio} products={products} trades={trades} onPortfolioChange={setPortfolio} onProductsChange={setProducts} showToast={showToast} showConfirm={showConfirm}/>}
@@ -6841,8 +7894,8 @@ function AuthScreen(){
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0E11",padding:"16px"}}>
       <div style={{width:"100%",maxWidth:380,background:"#1E2329",borderRadius:16,border:"1px solid #2B3139",padding:"32px 28px"}}>
         <div style={{textAlign:"center",marginBottom:28}}>
-          <div style={{background:"#6B3FA0",borderRadius:8,padding:"6px 14px",display:"inline-block",marginBottom:8}}>
-            <span style={{color:"white",fontWeight:800,fontSize:18,letterSpacing:3}}>THUS</span>
+          <div style={{background:"rgba(240,185,11,0.08)",border:"1px solid rgba(240,185,11,0.3)",borderRadius:8,padding:"6px 14px",display:"inline-block",marginBottom:8}}>
+            <span style={{color:"#F0B90B",fontWeight:800,fontSize:18,letterSpacing:3,fontFamily:"'JetBrains Mono', monospace"}}>THUS</span>
           </div>
           <div style={{fontSize:12,color:"#848E9C"}}>Trading Journal • TFEX</div>
         </div>
