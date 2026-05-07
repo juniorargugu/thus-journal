@@ -101,66 +101,165 @@ const db={
     try{
       const[t,p,pr,n,ud]=await Promise.all([
         SUPA.from("trades").select("raw").eq("user_id",uid),
-        SUPA.from("portfolio").select("data").eq("user_id",uid).maybeSingle(),
-        SUPA.from("products").select("data").eq("user_id",uid).maybeSingle(),
-        SUPA.from("notes").select("freeform,daily").eq("user_id",uid).maybeSingle(),
-        SUPA.from("user_data").select("key,value").eq("user_id",uid),
+        SUPA.from("portfolio").select("data,updated_at").eq("user_id",uid).maybeSingle(),
+        SUPA.from("products").select("data,updated_at").eq("user_id",uid).maybeSingle(),
+        SUPA.from("notes").select("freeform,daily,updated_at").eq("user_id",uid).maybeSingle(),
+        SUPA.from("user_data").select("key,value,updated_at").eq("user_id",uid),
       ]);
+      // Per-table errors arrive as {data:null, error:...}. Critical = trades + portfolio.
+      const errors={trades:t.error,portfolio:p.error,products:pr.error,notes:n.error,user_data:ud.error};
+      const failedAny=Object.values(errors).some(e=>!!e);
+      const failedCritical=!!(t.error||p.error);
+      if(failedAny)console.warn("[db] loadAll partial failure",errors);
+      if(failedCritical){
+        console.warn("[db] loadAll critical-table failure — refusing to mark hydrated",errors);
+        return{ok:false,fatal:true,errors};
+      }
       const udMap={};
-      (ud.data||[]).forEach(r=>{try{udMap[r.key]=JSON.parse(r.value);}catch{udMap[r.key]=r.value;}});
+      const udMeta={};
+      (ud.data||[]).forEach(r=>{
+        try{udMap[r.key]=JSON.parse(r.value);}catch{udMap[r.key]=r.value;}
+        udMeta[r.key]=r.updated_at||null;
+      });
       return{
+        ok:true,
+        partial:failedAny,
+        errors,
         trades:        t.data?.map(r=>r.raw)||null,
         portfolio:     p.data?.data||null,
+        portfolioMeta: p.data?.updated_at||null,
         products:      pr.data?.data||null,
+        productsMeta:  pr.data?.updated_at||null,
         notesFreeform: n.data?.freeform||null,
         notesDaily:    n.data?.daily||null,
+        notesMeta:     n.data?.updated_at||null,
         notifHistory:  udMap["tj_notif_history"]||null,
         patterns:      udMap["tj_patterns"]||null,
         aiKey:         udMap["tj_ai_key"]||null,
+        userDataMeta:  udMeta,
       };
-    }catch(e){console.warn("[db] loadAll error",e);return{};}
+    }catch(e){console.warn("[db] loadAll fatal error",e);return{ok:false,fatal:true,error:e};}
   },
-  async saveTrades(uid,trades){
+  async saveTrades(uid,trades,knownIds){
     try{
-      await SUPA.from("trades").delete().eq("user_id",uid);
-      if(trades.length>0){
-        await SUPA.from("trades").insert(
-          trades.map(t=>({
-            id:t.id, user_id:uid,
-            product_id:t.productId, direction:t.direction,
-            status:t.status, contracts:t.contracts,
-            remaining_contracts:t.remainingContracts||t.contracts,
-            entry_price:t.entryPrice, exit_price:t.exitPrice,
-            entry_date:t.entryDate, exit_date:t.exitDate,
-            note:t.note||null, raw:t,
-          }))
-        );
+      // Conservative empty-set policy: never destructive.
+      // Danger Zone has its own explicit DELETE path; routine saves never delete-all.
+      if(!trades||trades.length===0){
+        console.warn("[db] saveTrades: empty trades array — skipping (no destructive delete).");
+        return{ok:true,ids:knownIds||new Set()};
       }
-    }catch(e){console.warn("[db] saveTrades error",e);}
+      const rows=trades.map(t=>({
+        id:t.id, user_id:uid,
+        product_id:t.productId, direction:t.direction,
+        status:t.status, contracts:t.contracts,
+        remaining_contracts:t.remainingContracts||t.contracts,
+        entry_price:t.entryPrice, exit_price:t.exitPrice,
+        entry_date:t.entryDate, exit_date:t.exitDate,
+        note:t.note||null, raw:t,
+      }));
+      // Step 1: upsert by id (atomic per row, no destructive window).
+      const{error:upErr}=await SUPA.from("trades").upsert(rows,{onConflict:"id"});
+      if(upErr){console.warn("[db] saveTrades upsert error",upErr);return{ok:false,error:upErr};}
+      // Step 2: safe reconcile — delete ONLY ids that this tab knew about and removed locally.
+      // Trades present on server but unknown to this tab (added by another tab/device) are preserved.
+      const localIds=new Set(rows.map(r=>r.id));
+      const removedIds=knownIds?[...knownIds].filter(id=>!localIds.has(id)):[];
+      if(removedIds.length>0){
+        const{error:delErr}=await SUPA.from("trades").delete().eq("user_id",uid).in("id",removedIds);
+        if(delErr)console.warn("[db] saveTrades reconcile delete error",delErr);
+      }
+      // Diagnostic: surface divergence with server set without acting on it.
+      try{
+        const{data:current}=await SUPA.from("trades").select("id").eq("user_id",uid);
+        if(current){
+          const serverIds=new Set(current.map(r=>r.id));
+          const unknownOnServer=[...serverIds].filter(id=>!localIds.has(id));
+          if(unknownOnServer.length>0){
+            console.warn("[db] saveTrades divergence —",unknownOnServer.length,"server trades not in local set (added elsewhere); reload to merge",unknownOnServer);
+          }
+        }
+      }catch{}
+      // knownIds for next save = the ids this tab now considers authoritative.
+      // We deliberately do NOT include unknown server ids — otherwise next reconcile would delete them.
+      return{ok:true,ids:localIds};
+    }catch(e){console.warn("[db] saveTrades error",e);return{ok:false,error:e};}
   },
-  async savePortfolio(uid,data){
+  async savePortfolio(uid,data,expectedUpdatedAt){
     try{
-      await SUPA.from("portfolio").upsert(
-        {user_id:uid,data,updated_at:new Date().toISOString()},
-        {onConflict:"user_id"}
-      );
-    }catch(e){console.warn("[db] savePortfolio error",e);}
+      const newTs=new Date().toISOString();
+      if(expectedUpdatedAt==null){
+        // First write — no row to conflict with. Use upsert.
+        const{error}=await SUPA.from("portfolio").upsert(
+          {user_id:uid,data,updated_at:newTs},
+          {onConflict:"user_id"}
+        );
+        if(error){console.warn("[db] savePortfolio upsert error",error);return{ok:false,error};}
+        return{ok:true,updated_at:newTs};
+      }
+      // Conditional update — only if server's updated_at matches what we last saw.
+      const{data:row,error}=await SUPA.from("portfolio")
+        .update({data,updated_at:newTs})
+        .eq("user_id",uid)
+        .eq("updated_at",expectedUpdatedAt)
+        .select("updated_at")
+        .maybeSingle();
+      if(error){console.warn("[db] savePortfolio update error",error);return{ok:false,error};}
+      if(!row){
+        console.warn("[db] savePortfolio CONFLICT — server moved past expected_updated_at; refusing to overwrite",{expected:expectedUpdatedAt});
+        return{ok:false,conflict:true};
+      }
+      return{ok:true,updated_at:newTs};
+    }catch(e){console.warn("[db] savePortfolio error",e);return{ok:false,error:e};}
   },
-  async saveProducts(uid,data){
+  async saveProducts(uid,data,expectedUpdatedAt){
     try{
-      await SUPA.from("products").upsert(
-        {user_id:uid,data,updated_at:new Date().toISOString()},
-        {onConflict:"user_id"}
-      );
-    }catch(e){console.warn("[db] saveProducts error",e);}
+      const newTs=new Date().toISOString();
+      if(expectedUpdatedAt==null){
+        const{error}=await SUPA.from("products").upsert(
+          {user_id:uid,data,updated_at:newTs},
+          {onConflict:"user_id"}
+        );
+        if(error){console.warn("[db] saveProducts upsert error",error);return{ok:false,error};}
+        return{ok:true,updated_at:newTs};
+      }
+      const{data:row,error}=await SUPA.from("products")
+        .update({data,updated_at:newTs})
+        .eq("user_id",uid)
+        .eq("updated_at",expectedUpdatedAt)
+        .select("updated_at")
+        .maybeSingle();
+      if(error){console.warn("[db] saveProducts update error",error);return{ok:false,error};}
+      if(!row){
+        console.warn("[db] saveProducts CONFLICT — server moved past expected_updated_at",{expected:expectedUpdatedAt});
+        return{ok:false,conflict:true};
+      }
+      return{ok:true,updated_at:newTs};
+    }catch(e){console.warn("[db] saveProducts error",e);return{ok:false,error:e};}
   },
-  async saveNotes(uid,freeform,daily){
+  async saveNotes(uid,freeform,daily,expectedUpdatedAt){
     try{
-      await SUPA.from("notes").upsert(
-        {user_id:uid,freeform,daily,updated_at:new Date().toISOString()},
-        {onConflict:"user_id"}
-      );
-    }catch(e){console.warn("[db] saveNotes error",e);}
+      const newTs=new Date().toISOString();
+      if(expectedUpdatedAt==null){
+        const{error}=await SUPA.from("notes").upsert(
+          {user_id:uid,freeform,daily,updated_at:newTs},
+          {onConflict:"user_id"}
+        );
+        if(error){console.warn("[db] saveNotes upsert error",error);return{ok:false,error};}
+        return{ok:true,updated_at:newTs};
+      }
+      const{data:row,error}=await SUPA.from("notes")
+        .update({freeform,daily,updated_at:newTs})
+        .eq("user_id",uid)
+        .eq("updated_at",expectedUpdatedAt)
+        .select("updated_at")
+        .maybeSingle();
+      if(error){console.warn("[db] saveNotes update error",error);return{ok:false,error};}
+      if(!row){
+        console.warn("[db] saveNotes CONFLICT — server moved past expected_updated_at",{expected:expectedUpdatedAt});
+        return{ok:false,conflict:true};
+      }
+      return{ok:true,updated_at:newTs};
+    }catch(e){console.warn("[db] saveNotes error",e);return{ok:false,error:e};}
   },
   async loadNotes(uid){
     try{
@@ -168,13 +267,32 @@ const db={
       return{freeform:data?.freeform||null,daily:data?.daily||null};
     }catch(e){console.warn("[db] loadNotes error",e);return{};}
   },
-  async saveUserData(uid,key,value){
+  async saveUserData(uid,key,value,expectedUpdatedAt){
     try{
-      await SUPA.from("user_data").upsert(
-        {user_id:uid,key,value:JSON.stringify(value),updated_at:new Date().toISOString()},
-        {onConflict:"user_id,key"}
-      );
-    }catch(e){console.warn("[db] saveUserData error",e);}
+      const newTs=new Date().toISOString();
+      const valStr=JSON.stringify(value);
+      if(expectedUpdatedAt==null){
+        const{error}=await SUPA.from("user_data").upsert(
+          {user_id:uid,key,value:valStr,updated_at:newTs},
+          {onConflict:"user_id,key"}
+        );
+        if(error){console.warn("[db] saveUserData upsert error",key,error);return{ok:false,error};}
+        return{ok:true,updated_at:newTs};
+      }
+      const{data:row,error}=await SUPA.from("user_data")
+        .update({value:valStr,updated_at:newTs})
+        .eq("user_id",uid)
+        .eq("key",key)
+        .eq("updated_at",expectedUpdatedAt)
+        .select("updated_at")
+        .maybeSingle();
+      if(error){console.warn("[db] saveUserData update error",key,error);return{ok:false,error};}
+      if(!row){
+        console.warn("[db] saveUserData CONFLICT —",key,"moved past expected_updated_at",{expected:expectedUpdatedAt});
+        return{ok:false,conflict:true};
+      }
+      return{ok:true,updated_at:newTs};
+    }catch(e){console.warn("[db] saveUserData error",key,e);return{ok:false,error:e};}
   },
   async loadUserData(uid,keys){
     try{
@@ -7154,6 +7272,7 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
 
 function App({session,onSignOut}){
   const[dbReady,  setDbReady]  =useState(false); // true after Supabase load completes
+  const[loadAttempt,setLoadAttempt]=useState(0); // bump to retry hydration after critical failure
   const[trades,   setTrades]   =useState([]);
   const[portfolio,setPortfolio]=useState({transactions:[],stepBaseMode:"first_deposit"});
   const[products, setProducts] =useState(DEFAULT_PRODUCTS);
@@ -7181,8 +7300,25 @@ function App({session,onSignOut}){
   const[appPatterns,setAppPatterns]=useState([]);
   const handlePatternsChange=useCallback((p)=>{
     setAppPatterns(p);ls.set("tj_patterns",p);
-    if(authUid){clearTimeout(dbTimers.current.patterns);dbTimers.current.patterns=setTimeout(()=>db.saveUserData(authUid,"tj_patterns",p),1500);}
-  },[authUid]);
+    if(authUid){
+      if(!dbReady){console.warn("[persist] skipped patterns save — hydration not ready");return;}
+      clearTimeout(dbTimers.current.patterns);
+      const tryFire=()=>{
+        if(savingRef.current.patterns){
+          dbTimers.current.patterns=setTimeout(tryFire,200);
+          return;
+        }
+        savingRef.current.patterns=true;
+        const expected=lastSeenRef.current.userData["tj_patterns"];
+        db.saveUserData(authUid,"tj_patterns",p,expected).then(res=>{
+          if(res&&res.ok){lastSeenRef.current.userData["tj_patterns"]=res.updated_at;}
+          else if(res&&res.conflict){console.warn("[persist] patterns CONFLICT — local change rejected; reload to merge");}
+          else{console.warn("[persist] patterns save failed",res);}
+        }).finally(()=>{savingRef.current.patterns=false;});
+      };
+      dbTimers.current.patterns=setTimeout(tryFire,1500);
+    }
+  },[authUid,dbReady]);
 
   // ─── Notification generator (persisted) ────────────────────
   useEffect(()=>{
@@ -7294,7 +7430,20 @@ function App({session,onSignOut}){
     ls.set("tj_notif_history",updated);
     return updated;
   });
-  const deleteAllNotifs=()=>{ls.set("tj_notif_history",[]);setNotifHistory([]);if(authUid)db.saveUserData(authUid,"tj_notif_history",[]);};
+  const deleteAllNotifs=()=>{
+    ls.set("tj_notif_history",[]);setNotifHistory([]);
+    // setNotifHistory([]) re-triggers the debounced notif save effect; the direct call
+    // here is a fast-path. If a debounced save is already in flight (savingRef.notif),
+    // skip — the freshly-rescheduled debounced tryFire will flush [] safely.
+    if(authUid&&!savingRef.current.notif){
+      savingRef.current.notif=true;
+      const expected=lastSeenRef.current.userData["tj_notif_history"];
+      db.saveUserData(authUid,"tj_notif_history",[],expected).then(res=>{
+        if(res&&res.ok)lastSeenRef.current.userData["tj_notif_history"]=res.updated_at;
+        else if(res&&res.conflict)console.warn("[persist] notif_history CONFLICT on deleteAll — reload to merge");
+      }).finally(()=>{savingRef.current.notif=false;});
+    }
+  };
   const deleteOneNotif=(id)=>setNotifHistory(prev=>{
     const updated=prev.filter(n=>n.id!==id);
     ls.set("tj_notif_history",updated);
@@ -7304,22 +7453,46 @@ function App({session,onSignOut}){
   const completeSetup=useCallback(()=>{
     ls.set("tj_tutorial_done",true);
     setShowSetup(false);
-    if(authUid)db.saveUserData(authUid,"tj_tutorial_done",true);
+    if(authUid){
+      db.saveUserData(authUid,"tj_tutorial_done",true,lastSeenRef.current.userData["tj_tutorial_done"]).then(res=>{
+        if(res&&res.ok)lastSeenRef.current.userData["tj_tutorial_done"]=res.updated_at;
+        else if(res&&res.conflict)console.warn("[persist] tj_tutorial_done CONFLICT — reload to merge");
+      });
+    }
   },[authUid]);
 
-  useEffect(()=>{ls.set("tj_trades",   trades);   },[trades]);
-  useEffect(()=>{ls.set("tj_portfolio",portfolio); },[portfolio]);
-  useEffect(()=>{ls.set("tj_products", products);  },[products]);
+  useEffect(()=>{if(!dbReady)return;ls.set("tj_trades",   trades);   },[trades]);
+  useEffect(()=>{if(!dbReady)return;ls.set("tj_portfolio",portfolio); },[portfolio]);
+  useEffect(()=>{if(!dbReady)return;ls.set("tj_products", products);  },[products]);
 
   // ─── Supabase sync ───────────────────────────────────────────────────────
   const authUid=session?.user?.id;
   const dbTimers=useRef({});
+  // Optimistic-concurrency tokens — track server-side updated_at per table/key
+  // and the loaded set of trade ids. Updated on load + on every successful save.
+  const lastSeenRef=useRef({portfolio:null,products:null,notes:null,userData:{},tradeIds:new Set()});
+  // In-flight save flags per logical resource. tryFire defers when its flag is true,
+  // so a second save for the same resource never starts before the previous one returns.
+  // Unrelated resources are independent (separate flags).
+  const savingRef=useRef({trades:false,portfolio:false,products:false,notes:false,notif:false,patterns:false});
   // Supabase-first load: fetch all data then render
   useEffect(()=>{
     if(!authUid)return;
+    let retryTimer=null;
     db.loadAll(authUid).then(data=>{
+      if(!data||!data.ok){
+        console.warn("[hydrate] critical-table load failed — keeping dbReady=false (attempt",loadAttempt+1,"of 3)",data&&data.errors);
+        if(loadAttempt<2){
+          const delay=5000*Math.pow(2,loadAttempt); // 5s, 10s
+          retryTimer=setTimeout(()=>setLoadAttempt(a=>a+1),delay);
+        }else{
+          console.error("[hydrate] permanent load failure after 3 attempts — user must refresh");
+        }
+        return;
+      }
+      if(data.partial)console.warn("[hydrate] partial load — proceeding with available tables",data.errors);
       // Trades
-      if(data.trades!==null){
+      if(data.trades!=null){
         setTrades(data.trades);
         ls.set("tj_trades",data.trades);
       }
@@ -7348,7 +7521,7 @@ function App({session,onSignOut}){
         setPortfolio(merged);
       }
       // Products
-      if(data.products!==null){
+      if(data.products!=null){
         const normalised=data.products.map(p=>{
           if(p.commission&&!p.commissionPerLeg){
             const{commission:_,...rest}=p;
@@ -7360,45 +7533,76 @@ function App({session,onSignOut}){
         ls.set("tj_products",normalised);
       }
       // Notes
-      if(data.notesFreeform!==null) ls.set("tj_notes",data.notesFreeform);
-      if(data.notesDaily!==null)    ls.set("tj_daily_notes",data.notesDaily);
+      if(data.notesFreeform!=null) ls.set("tj_notes",data.notesFreeform);
+      if(data.notesDaily!=null)    ls.set("tj_daily_notes",data.notesDaily);
       // User data
-      if(data.notifHistory!==null){ setNotifHistory(data.notifHistory); ls.set("tj_notif_history",data.notifHistory); }
-      if(data.patterns!==null)    { setAppPatterns(data.patterns); ls.set("tj_patterns",data.patterns); }
-      if(data.aiKey!==null)         ls.set("tj_ai_key",data.aiKey);
+      if(data.notifHistory!=null){ setNotifHistory(data.notifHistory); ls.set("tj_notif_history",data.notifHistory); }
+      if(data.patterns!=null)    { setAppPatterns(data.patterns); ls.set("tj_patterns",data.patterns); }
+      if(data.aiKey!=null)         ls.set("tj_ai_key",data.aiKey);
       // Tutorial: show setup if no portfolio transactions (new user)
       const hasTx=(data.portfolio?.transactions||[]).length>0;
-      const tutorialDone=!!data.aiKey; // use aiKey presence as proxy — or just check txs
       setShowSetup(!hasTx&&data.portfolio===null);
+      // Seed optimistic-concurrency tokens before unblocking saves.
+      lastSeenRef.current.portfolio=data.portfolioMeta||null;
+      lastSeenRef.current.products =data.productsMeta ||null;
+      lastSeenRef.current.notes    =data.notesMeta    ||null;
+      lastSeenRef.current.userData =data.userDataMeta ||{};
+      lastSeenRef.current.tradeIds =new Set((data.trades||[]).map(t=>t.id));
       // Mark ready — this triggers full render
       setDbReady(true);
-    }).catch(()=>{
-      // Supabase unavailable — fall back to localStorage
-      setTrades(ls.get("tj_trades",[]));
-      setPortfolio(()=>{const s=ls.get("tj_portfolio",null);if(!s)return{transactions:[],stepBaseMode:"first_deposit"};if(!s.transactions)return{...s,transactions:[]};const migrated={...s,transactions:s.transactions.map(t=>({...t,txSubtype:t.txSubtype||(t.type==="deposit"?"capital":"withdrawal")}))};return migrated;});
-      setProducts(()=>{const s=ls.get("tj_products",DEFAULT_PRODUCTS);return s.map(p=>{if(p.commission&&!p.commissionPerLeg){const{commission:_,...rest}=p;return{...rest,commissionPerLeg:+(p.commission/2/1.07).toFixed(4),vatEnabled:true,vatRate:0.07};}return p;});});
-      setNotifHistory(ls.get("tj_notif_history",[]));
-      setAppPatterns(ls.get("tj_patterns",[]));
-      setShowSetup(!ls.get("tj_tutorial_done",false));
-      setDbReady(true);
+    }).catch(e=>{
+      // Should not be reached — loadAll handles its own errors and returns ok:false instead.
+      // LS fallback removed: stale/empty LS could clobber server once dbReady flips.
+      console.warn("[hydrate] unexpected exception in load handler — keeping dbReady=false",e);
+      if(loadAttempt<2){
+        retryTimer=setTimeout(()=>setLoadAttempt(a=>a+1),5000*Math.pow(2,loadAttempt));
+      }
     });
-  },[authUid]);
-  // Save to Supabase on changes (1.5 s debounce)
+    return()=>{if(retryTimer)clearTimeout(retryTimer);};
+  },[authUid,loadAttempt]);
+  // Save to Supabase on changes (1.5 s debounce, serialized per resource)
   useEffect(()=>{
     if(!authUid)return;
+    if(!dbReady){console.warn("[persist] skipped trades save — hydration not ready");return;}
     clearTimeout(dbTimers.current.trades);
-    dbTimers.current.trades=setTimeout(()=>{
-      db.saveTrades(authUid,trades);
-      if(sheetsSync.getUrl()){
-        const sd={currentStep,nextThreshold:stepThresholds[currentStep]||null,stepBase};
-        sheetsSync.push(trades,products,portfolio,balance,sd);
+    const tryFire=()=>{
+      if(savingRef.current.trades){
+        // Another trades save is in flight. Defer until it completes; the latest
+        // closure (with the freshest trades) will fire once savingRef clears.
+        dbTimers.current.trades=setTimeout(tryFire,200);
+        return;
       }
-    },1500);
+      savingRef.current.trades=true;
+      db.saveTrades(authUid,trades,lastSeenRef.current.tradeIds).then(res=>{
+        if(res&&res.ok){lastSeenRef.current.tradeIds=res.ids;}
+        else{console.warn("[persist] trades save failed — keeping local knownIds",res);}
+        if(sheetsSync.getUrl()){
+          const sd={currentStep,nextThreshold:stepThresholds[currentStep]||null,stepBase};
+          sheetsSync.push(trades,products,portfolio,balance,sd);
+        }
+      }).finally(()=>{savingRef.current.trades=false;});
+    };
+    dbTimers.current.trades=setTimeout(tryFire,1500);
+    return()=>clearTimeout(dbTimers.current.trades);
   },[trades,authUid]);
   useEffect(()=>{
     if(!authUid)return;
+    if(!dbReady){console.warn("[persist] skipped portfolio save — hydration not ready");return;}
     clearTimeout(dbTimers.current.portfolio);
-    dbTimers.current.portfolio=setTimeout(()=>db.savePortfolio(authUid,portfolio),1500);
+    const tryFire=()=>{
+      if(savingRef.current.portfolio){
+        dbTimers.current.portfolio=setTimeout(tryFire,200);
+        return;
+      }
+      savingRef.current.portfolio=true;
+      db.savePortfolio(authUid,portfolio,lastSeenRef.current.portfolio).then(res=>{
+        if(res&&res.ok){lastSeenRef.current.portfolio=res.updated_at;}
+        else if(res&&res.conflict){console.warn("[persist] portfolio CONFLICT — local change rejected; reload to merge");}
+        else{console.warn("[persist] portfolio save failed",res);}
+      }).finally(()=>{savingRef.current.portfolio=false;});
+    };
+    dbTimers.current.portfolio=setTimeout(tryFire,1500);
+    return()=>clearTimeout(dbTimers.current.portfolio);
   },[portfolio,authUid]);
   useEffect(()=>{
     if(!authUid||!dbReady)return;
@@ -7406,17 +7610,55 @@ function App({session,onSignOut}){
     dbTimers.current.summary=setTimeout(()=>{
       db.savePortfolioSummary(authUid,buildSummaryPayload());
     },5000);
+    return()=>clearTimeout(dbTimers.current.summary);
   },[trades,portfolio,authUid,dbReady,livePrices,buildSummaryPayload]);
   useEffect(()=>{
     if(!authUid)return;
+    if(!dbReady){console.warn("[persist] skipped products save — hydration not ready");return;}
     clearTimeout(dbTimers.current.products);
-    dbTimers.current.products=setTimeout(()=>db.saveProducts(authUid,products),1500);
+    const tryFire=()=>{
+      if(savingRef.current.products){
+        dbTimers.current.products=setTimeout(tryFire,200);
+        return;
+      }
+      savingRef.current.products=true;
+      db.saveProducts(authUid,products,lastSeenRef.current.products).then(res=>{
+        if(res&&res.ok){lastSeenRef.current.products=res.updated_at;}
+        else if(res&&res.conflict){console.warn("[persist] products CONFLICT — local change rejected; reload to merge");}
+        else{console.warn("[persist] products save failed",res);}
+      }).finally(()=>{savingRef.current.products=false;});
+    };
+    dbTimers.current.products=setTimeout(tryFire,1500);
+    return()=>clearTimeout(dbTimers.current.products);
   },[products,authUid]);
   useEffect(()=>{
     if(!authUid)return;
+    if(!dbReady){console.warn("[persist] skipped notif_history save — hydration not ready");return;}
     clearTimeout(dbTimers.current.notif);
-    dbTimers.current.notif=setTimeout(()=>db.saveUserData(authUid,"tj_notif_history",notifHistory),2000);
+    const tryFire=()=>{
+      if(savingRef.current.notif){
+        dbTimers.current.notif=setTimeout(tryFire,200);
+        return;
+      }
+      savingRef.current.notif=true;
+      const expected=lastSeenRef.current.userData["tj_notif_history"];
+      db.saveUserData(authUid,"tj_notif_history",notifHistory,expected).then(res=>{
+        if(res&&res.ok){lastSeenRef.current.userData["tj_notif_history"]=res.updated_at;}
+        else if(res&&res.conflict){console.warn("[persist] notif_history CONFLICT — local change rejected; reload to merge");}
+        else{console.warn("[persist] notif_history save failed",res);}
+      }).finally(()=>{savingRef.current.notif=false;});
+    };
+    dbTimers.current.notif=setTimeout(tryFire,2000);
+    return()=>clearTimeout(dbTimers.current.notif);
   },[notifHistory,authUid]);
+  // Callback-scheduled timers (patterns via handlePatternsChange, notes via syncNotesToCloud)
+  // are not owned by an effect; cancel them on auth change / unmount here.
+  useEffect(()=>{
+    return()=>{
+      clearTimeout(dbTimers.current.patterns);
+      clearTimeout(dbTimers.current.notes);
+    };
+  },[authUid]);
   useEffect(()=>{
     if(!authUid||!dbReady)return;
     const channel=SUPA.channel("bot_knowledge_rt")
@@ -7449,9 +7691,22 @@ function App({session,onSignOut}){
   // Notes & daily notes Supabase sync
   const syncNotesToCloud=useCallback((freeform,daily)=>{
     if(!authUid)return;
+    if(!dbReady){console.warn("[persist] skipped notes save — hydration not ready");return;}
     clearTimeout(dbTimers.current.notes);
-    dbTimers.current.notes=setTimeout(()=>db.saveNotes(authUid,freeform,daily),1500);
-  },[authUid]);
+    const tryFire=()=>{
+      if(savingRef.current.notes){
+        dbTimers.current.notes=setTimeout(tryFire,200);
+        return;
+      }
+      savingRef.current.notes=true;
+      db.saveNotes(authUid,freeform,daily,lastSeenRef.current.notes).then(res=>{
+        if(res&&res.ok){lastSeenRef.current.notes=res.updated_at;}
+        else if(res&&res.conflict){console.warn("[persist] notes CONFLICT — local change rejected; reload to merge");}
+        else{console.warn("[persist] notes save failed",res);}
+      }).finally(()=>{savingRef.current.notes=false;});
+    };
+    dbTimers.current.notes=setTimeout(tryFire,1500);
+  },[authUid,dbReady]);
 
   useEffect(()=>{const t=setInterval(()=>setClock(new Date()),1000);return()=>clearInterval(t);},[]);
 
