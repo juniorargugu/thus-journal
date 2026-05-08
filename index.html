@@ -1845,7 +1845,7 @@ function NoteField({label,value,onSave,editable=true}){
   );
 }
 
-function TradeDetailModal({trade,product,onClose,onUpdateTrade}){
+function TradeDetailModal({trade,product,onClose,onUpdateTrade,onDelete,showConfirm}){
   const[lightbox,setLightbox]=useState(null);
   const isEditable=!!onUpdateTrade;
   const grossPL=trade.exitPrice!=null?calcPL(product,trade.contracts,trade.entryPrice,trade.exitPrice,trade.direction):null;
@@ -1991,6 +1991,18 @@ function TradeDetailModal({trade,product,onClose,onUpdateTrade}){
                 </div>
               </div>
             </div>
+          )}
+          {trade.status==="closed"&&onDelete&&showConfirm&&(
+            <button
+              onClick={()=>showConfirm({
+                title:"Delete this closed trade?",
+                message:"This cannot be undone.",
+                variant:"danger",
+                onConfirm:()=>{onDelete(trade.id);onClose();}
+              })}
+              className={clsBtn("ghost")+" w-full border border-red/30 text-red/70 hover:bg-red/10"}>
+              🗑 Delete trade
+            </button>
           )}
           <div className="flex gap-2">
             {!editMode
@@ -3230,7 +3242,7 @@ function TdTicks({t,p,onClick}){
   return<td onClick={onClick} className={"px-3 py-2.5 tabular-nums text-xs font-medium cursor-pointer whitespace-nowrap hidden md:table-cell text-right "+(tks>=0?"text-green":"text-red")}>{tks>=0?"+":""}{tks.toFixed(1)}</td>;
 }
 
-function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTrades,onProductsChange,onBalanceSet,onTransactions}){
+function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onDeleteTrade,onImportTrades,onProductsChange,onBalanceSet,onTransactions,showConfirm}){
   const[detail,setDetail]=useState(null);
   const[showImport,setShowImport]=useState(false);
   const initFilters={product:"",direction:"",setup:"",rating:"",dateFrom:"",dateTo:""};
@@ -3533,6 +3545,8 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTr
           product={products.find(p=>p.id===detail.productId)}
           onClose={()=>setDetail(null)}
           onUpdateTrade={t=>{onUpdateTrade(t);setDetail(t);}}
+          onDelete={onDeleteTrade}
+          showConfirm={showConfirm}
         />
       )}
       {showImport&&(
@@ -8085,7 +8099,7 @@ function App({session,onSignOut}){
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
         {page==="positions"&&<PagePositions trades={trades} products={products} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onUpdateTrade={updateTrade} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
-        {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions}/>}
+        {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onDeleteTrade={deleteTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid} equityHWM={equityHWM} dailyPoints={dailyPoints} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio} equityHWM={equityHWM} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="calendar" &&<PageCalendar  trades={trades} products={products} uid={authUid} syncNotesToCloud={syncNotesToCloud}/>}
