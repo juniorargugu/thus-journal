@@ -142,12 +142,13 @@ const db={
   },
   async saveTrades(uid,trades,knownIds){
     try{
-      // Conservative empty-set policy: never destructive.
-      // Danger Zone has its own explicit DELETE path; routine saves never delete-all.
-      if(!trades||trades.length===0){
-        console.warn("[db] saveTrades: empty trades array — skipping (no destructive delete).");
-        return{ok:true,ids:knownIds||new Set()};
-      }
+      // [DIAG] saveTrades entry — TEMPORARY
+      console.warn("[trades][save] entry length="+(trades?trades.length:"null")+" knownIds.size="+(knownIds?knownIds.size:0)+(trades&&trades[0]?" firstId="+trades[0].id+" firstStatus="+trades[0].status:""));
+      // Null guard only. Empty-array MUST fall through so reconcile-delete can
+      // propagate "user deleted their last trade" to the server. Reconcile is
+      // bounded by knownIds (this tab's known set) — brand-new account
+      // (knownIds empty) and divergent-tab cases stay safe. See audit P0-1.
+      if(!trades){return{ok:true,ids:knownIds||new Set()};}
       const rows=trades.map(t=>({
         id:t.id, user_id:uid,
         product_id:t.productId, direction:t.direction,
@@ -158,8 +159,18 @@ const db={
         note:t.note||null, raw:t,
       }));
       // Step 1: upsert by id (atomic per row, no destructive window).
-      const{error:upErr}=await SUPA.from("trades").upsert(rows,{onConflict:"id"});
-      if(upErr){console.warn("[db] saveTrades upsert error",upErr);return{ok:false,error:upErr};}
+      // .select() forces PostgREST to return the affected rows so we can verify
+      // server-side success vs silent RLS / constraint denial.
+      // Skip when rows is empty — nothing to write, but reconcile-delete below
+      // still runs to propagate deletion of the last trade.
+      if(rows.length>0){
+        const{data:upsertedRows,error:upErr}=await SUPA.from("trades").upsert(rows,{onConflict:"id"}).select();
+        if(upErr){console.warn("[trades][write] upsert-error",upErr);return{ok:false,error:upErr};}
+        // [DIAG] upsert affected rows — TEMPORARY
+        const affected=upsertedRows?upsertedRows.length:0;
+        console.warn("[trades][write] upserted-affected="+affected+"/"+rows.length+" ids="+rows.map(r=>r.id).join(",")+(affected===0?" — POSSIBLE RLS / CONSTRAINT DENIAL":""));
+        if(affected===0){return{ok:false,error:new Error("upsert returned 0 rows — possible RLS or constraint issue")};}
+      }
       // Step 2: safe reconcile — delete ONLY ids that this tab knew about and removed locally.
       // Trades present on server but unknown to this tab (added by another tab/device) are preserved.
       const localIds=new Set(rows.map(r=>r.id));
@@ -3382,21 +3393,11 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onImportTr
               window.XLSX.writeFile(wb,"THUS_Journal_Export.xlsx");
             });
           }} className={`${clsBtn("green","sm")} self-end mb-0.5`}>📤 Export Excel</button>
-          {!mergeActive?(
-            <button onClick={()=>setMergeActive(true)}
-              className={`${clsBtn("ghost","sm")} self-end mb-0.5`}>⊕ Merge</button>
-          ):(
-            <div className="flex items-center gap-1.5 self-end mb-0.5">
-              {selMerge.size>=2&&(
-                <button onClick={()=>{mergeSelected();exitMergeMode();}} disabled={!canMerge}
-                  title={canMerge?"Merge selected":"ต้องเป็น product+direction เดียวกัน"}
-                  className={`${clsBtn(canMerge?"yellow":"ghost","sm")} disabled:opacity-40`}>
-                  ⊕ Merge {selMerge.size} ไม้
-                </button>
-              )}
-              <button onClick={exitMergeMode} className={`${clsBtn("ghost","sm")} text-muted`}>✕</button>
-            </div>
-          )}
+          {/* Merge temporarily disabled: old implementation double-counted realized P/L
+              because `_hiddenByMerge` was written to sub-trades but never read by any
+              calculation. Future replacement should use trade grouping / thesis
+              grouping (raw executions stay canonical; a group is a review/analytics
+              layer), NOT row-collapsing. Do not re-enable the old Merge. See ROADMAP.md. */}
         </div>
       </div>
 
