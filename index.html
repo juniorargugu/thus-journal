@@ -181,17 +181,10 @@ const db={
         const{error:delErr}=await SUPA.from("trades").delete().eq("user_id",uid).in("id",removedIds);
         if(delErr)console.warn("[db] saveTrades reconcile delete error",delErr);
       }
-      // Diagnostic: surface divergence with server set without acting on it.
-      try{
-        const{data:current}=await SUPA.from("trades").select("id").eq("user_id",uid);
-        if(current){
-          const serverIds=new Set(current.map(r=>r.id));
-          const unknownOnServer=[...serverIds].filter(id=>!localIds.has(id));
-          if(unknownOnServer.length>0){
-            console.warn("[db] saveTrades divergence —",unknownOnServer.length,"server trades not in local set (added elsewhere); reload to merge",unknownOnServer);
-          }
-        }
-      }catch{}
+      // Removed: post-save diagnostic SELECT(id) on trades. It was log-only — never
+      // acted on results — and added one extra read per save. Upsert above already
+      // confirmed server-side success via affected-rows count. If divergence
+      // troubleshooting is needed again, re-add temporarily with a clear TTL.
       // knownIds for next save = the ids this tab now considers authoritative.
       // We deliberately do NOT include unknown server ids — otherwise next reconcile would delete them.
       return{ok:true,ids:localIds};
@@ -326,11 +319,13 @@ const db={
   },
   async savePortfolioSummary(uid, payload){
     try{
-      await SUPA.from("portfolio_summary").upsert(
+      const{error}=await SUPA.from("portfolio_summary").upsert(
         {...payload, user_id:uid, updated_at:new Date().toISOString()},
         {onConflict:"user_id"}
       );
-    }catch(e){console.warn("[db] savePortfolioSummary error",e);}
+      if(error){console.warn("[db] savePortfolioSummary error",error);return{ok:false,error};}
+      return{ok:true};
+    }catch(e){console.warn("[db] savePortfolioSummary error",e);return{ok:false,error:e};}
   },
 };
 
@@ -2156,7 +2151,12 @@ function useLivePrices(products,openTrades){
     const channel=SUPA.channel("live_prices_rt")
       .on("postgres_changes",{event:"*",schema:"public",table:"live_prices"},()=>fetchFromSupabase())
       .subscribe();
-    const t=setInterval(()=>{if(!document.hidden)fetchNow();},60*1000);
+    // Realtime is the PRIMARY live-price path. This setInterval is only a fallback
+    // that re-syncs in case the realtime channel disconnects silently. The
+    // visibility-change listener below also forces a fresh fetch when the tab
+    // becomes visible. 5-minute cadence keeps Supabase reads low while still
+    // self-healing on realtime drop.
+    const t=setInterval(()=>{if(!document.hidden)fetchNow();},5*60*1000);
     const v=()=>{if(!document.hidden)fetchNow();};
     document.addEventListener("visibilitychange",v);
     return()=>{SUPA.removeChannel(channel);clearInterval(t);document.removeEventListener("visibilitychange",v);};
@@ -7492,6 +7492,16 @@ function App({session,onSignOut}){
   // so a second save for the same resource never starts before the previous one returns.
   // Unrelated resources are independent (separate flags).
   const savingRef=useRef({trades:false,portfolio:false,products:false,notes:false,notif:false,patterns:false});
+  // portfolio_summary persistence:
+  //   livePricesRef    — non-reactive snapshot of livePrices, read inside the persistence
+  //                      path so livePrices ticks alone do NOT trigger writes.
+  //                      Volatile fields (current_equity / unrealized_pl / margin_pct)
+  //                      are persisted as snapshots taken at the moment a STABLE input
+  //                      (trades / portfolio / step) changes — NOT a realtime feed.
+  //   lastSummaryHashRef — JSON.stringify of last written payload; identical payloads
+  //                        are skipped before upsert.
+  const livePricesRef=useRef({});
+  const lastSummaryHashRef=useRef(null);
   // Supabase-first load: fetch all data then render
   useEffect(()=>{
     if(!authUid)return;
@@ -7629,14 +7639,24 @@ function App({session,onSignOut}){
     dbTimers.current.portfolio=setTimeout(tryFire,1500);
     return()=>clearTimeout(dbTimers.current.portfolio);
   },[portfolio,authUid]);
+  // portfolio_summary persistence — fires ONLY when stable inputs change (trades /
+  // portfolio / step). livePrices is intentionally NOT in deps; volatile fields read
+  // from livePricesRef. Before upsert, JSON-hash the payload and skip if unchanged.
+  // lastSummaryHashRef is updated only after a successful write so a failed write
+  // doesn't permanently block re-trying the same payload.
   useEffect(()=>{
     if(!authUid||!dbReady)return;
     clearTimeout(dbTimers.current.summary);
     dbTimers.current.summary=setTimeout(()=>{
-      db.savePortfolioSummary(authUid,buildSummaryPayload());
+      const payload=buildSummaryPayload();
+      const hash=JSON.stringify(payload);
+      if(hash===lastSummaryHashRef.current)return;
+      db.savePortfolioSummary(authUid,payload).then(res=>{
+        if(res&&res.ok)lastSummaryHashRef.current=hash;
+      });
     },5000);
     return()=>clearTimeout(dbTimers.current.summary);
-  },[trades,portfolio,authUid,dbReady,livePrices,buildSummaryPayload]);
+  },[trades,portfolio,authUid,dbReady,buildSummaryPayload]);
   useEffect(()=>{
     if(!authUid)return;
     if(!dbReady){console.warn("[persist] skipped products save — hydration not ready");return;}
@@ -7746,8 +7766,23 @@ function App({session,onSignOut}){
   const allFetchTrades=useMemo(()=>[...openTradesApp,...products.filter(p=>p.yahooSymbol&&!openTradesApp.find(t=>t.productId===p.id)).map(p=>({productId:p.id,status:"open"}))],[openTradesApp,products]);
   const{prices:livePrices,timestamps:liveTimestampsAll,errors:liveErrorsAll,fetchNow:fetchPrices,fetching:pricesFetching}=useLivePrices(products,allFetchTrades);
 
+  // Sync livePrices into a ref so the portfolio_summary persistence path can read
+  // the latest value WITHOUT depending on livePrices reactively. Pure assignment —
+  // does not trigger any Supabase write or persistence effect.
+  useEffect(()=>{livePricesRef.current=livePrices;},[livePrices]);
+
   const cbStatusApp=useMemo(()=>calcCBStatus(portfolio.transactions||[],trades,portfolio,products,livePrices),[portfolio,trades,products,livePrices]);
 
+  // portfolio_summary payload builder.
+  //
+  // SNAPSHOT SEMANTICS: current_equity, unrealized_pl, margin_pct are computed from
+  // livePricesRef.current (a non-reactive snapshot), so livePrices ticks alone do NOT
+  // re-run this callback or the persistence effect. These three fields are persisted
+  // ONLY at the moment a STABLE input changes (trades / portfolio / balance /
+  // currentStep / stepThresholds), capturing live prices as-of that moment. They are
+  // not a realtime equity feed — the value in the DB may be minutes/hours stale if no
+  // trade activity occurs. External consumers needing tick-fresh equity should
+  // recompute from balance + open_positions + their own live price source.
   const buildSummaryPayload=useCallback(()=>{
     const m=buildCanonicalMetrics(trades,products,portfolio,balance);
     const open=trades.filter(t=>t.status==="open"&&t.entryPrice);
@@ -7757,10 +7792,11 @@ function App({session,onSignOut}){
     },0);
     const realPL=trades.filter(t=>t.status==="closed")
       .reduce((s,t)=>s+tradeNetPL(t,products.find(x=>x.id===t.productId)),0);
+    const livePricesSnap=livePricesRef.current||{};
     const unrealizedPL=open.reduce((s,t)=>{
       const p=products.find(x=>x.id===t.productId);
       if(!p)return s;
-      const livePrice=livePrices[t.productId]||t.currentPrice||t.entryPrice;
+      const livePrice=livePricesSnap[t.productId]||t.currentPrice||t.entryPrice;
       if(!livePrice)return s;
       const ticks=(livePrice-t.entryPrice)/p.tickSize;
       return s+ticks*p.tickValue*(t.remainingContracts||t.contracts)*(t.direction==="Long"?1:-1);
@@ -7769,6 +7805,8 @@ function App({session,onSignOut}){
     return{
       balance:balance||0,
       realized_pl:+realPL.toFixed(0),
+      // SNAPSHOT (see header comment above): current_equity / unrealized_pl / margin_pct
+      // reflect livePrices at the time of the latest stable-input write — not realtime.
       current_equity:+currentEquity.toFixed(0),
       unrealized_pl:+unrealizedPL.toFixed(0),
       hwm:portfolio?.peakEquity||0,
@@ -7814,7 +7852,9 @@ function App({session,onSignOut}){
         };
       }),
     };
-  },[trades,products,portfolio,balance,currentStep,stepThresholds,livePrices]);
+    // NOTE: livePrices intentionally NOT in deps — read via livePricesRef inside.
+    // This is what prevents livePrices ticks from triggering portfolio_summary writes.
+  },[trades,products,portfolio,balance,currentStep,stepThresholds]);
 
   const stepBase=useMemo(()=>calcStepBaseline(portfolio.transactions),[portfolio.transactions]);
 
