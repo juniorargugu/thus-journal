@@ -329,22 +329,18 @@ const db={
   },
 };
 
-// ─── Trade Events ────────────────────────────────────────────────────────────
+// ─── Trade Events (ARCHIVED 2026-05-12) ─────────────────────────────────────
+// trade_events is a legacy GUGU v1 event/feedback log. Actual table schema is
+// (id, created_at, event_type, symbol, tier, detail, message_sent, error,
+// junior_feedback) — no user_id, no trade_id — so the old writer below was
+// producing schema-mismatched INSERTs that were swallowed by its own try/catch.
+// Both methods are now no-ops to stop new writes to the archived table.
+// See migrations/20260512_archive_trade_events_v1_lockdown.sql.
+// Do NOT restore by adding columns to this table — design a fresh Journal-scoped
+// audit table (with user_id, trade_id, RLS) if/when one is needed.
 const tradeEvents={
-  async insert(tradeId,eventType,payload={}){
-    const event={id:uid(),trade_id:tradeId,event_type:eventType,occurred_at:new Date().toISOString(),payload};
-    try{await SUPA.from("trade_events").insert(event);}
-    catch(e){console.warn("[trade_events] insert failed:",e);}
-    return event;
-  },
-  async forDate(dateStr){
-    const start=`${dateStr}T00:00:00.000Z`;
-    const end=`${dateStr}T23:59:59.999Z`;
-    try{
-      const{data}=await SUPA.from("trade_events").select("*").gte("occurred_at",start).lte("occurred_at",end);
-      return data||[];
-    }catch(e){return[];}
-  }
+  async insert(/*tradeId,eventType,payload*/){return null;},
+  async forDate(/*dateStr*/){return[];}
 };
 
 // ─── Google Sheets sync ───────────────────────────────────────────────────────
@@ -4844,36 +4840,16 @@ function PageDashboard({trades,products,balance,portfolio,equityHWM,l2Loading,l2
             if(!hwm)return null;
             const balNow=balance||0;
             const ddPct=hwm>balNow?(hwm-balNow)/hwm*100:0;
-            const eddPct=equityHWM&&equityHWM>balNow?(equityHWM-balNow)/equityHWM*100:0;
-            return(<>
+            // HWM Equity Layer 2 card intentionally hidden 2026-05-12:
+            // duplicate of canonical HWM Balance and confused by including
+            // unrealized P/L from open positions. useEquityHWM() and Yahoo
+            // fetch path kept quarantined for one release; no UI consumer.
+            return(
               <MetricCard label="HWM (Balance)" icon="🏔️"
                 value={fmtTHB(hwm,0)+" ฿"}
                 sub={ddPct>0?"DD: -"+ddPct.toFixed(1)+"%":"At peak ✅"}
                 color={ddPct>=20?"text-red":ddPct>=10?"text-yellow":"text-green"}/>
-              <div className="bg-card border border-border rounded-xl p-4">
-                <div className="flex items-start justify-between mb-2">
-                  <span className="text-muted text-xs font-medium">HWM (Equity) Layer 2</span>
-                  <span className="text-lg">🌊</span>
-                </div>
-                {equityHWM?(
-                  <>
-                    <div className={`text-xl font-bold tabular-nums ${eddPct>=20?"text-red":eddPct>=10?"text-yellow":"text-green"}`}>{fmtTHB(equityHWM,0)} ฿</div>
-                    <div className="text-muted text-xs mt-1 flex items-center justify-between">
-                      <span>{eddPct>0?"DD: -"+eddPct.toFixed(1)+"%":"At peak ✅"}</span>
-                      <button onClick={fetchLayer2} disabled={l2Loading} className="text-[10px] text-muted hover:text-yellow px-1.5 py-0.5 rounded hover:bg-input transition">{l2Loading?"...":"🔄"}</button>
-                    </div>
-                  </>
-                ):(
-                  <div className="space-y-2 mt-1">
-                    <div className="text-muted text-xs">{l2Error||"ยังไม่ได้คำนวณ"}</div>
-                    <button onClick={fetchLayer2} disabled={l2Loading}
-                      className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${l2Loading?"bg-input text-muted cursor-wait":"bg-yellow text-black hover:bg-yellow/90"}`}>
-                      {l2Loading?"กำลังดึง...":"คำนวณ Equity HWM"}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </>);
+            );
           })()}
           <MetricCard label="Profit Factor" icon="⚖️"
             value={metrics.pf?fmtRatio(metrics.pf,2)+"x":"—"}
@@ -5153,45 +5129,11 @@ function PageDashboard({trades,products,balance,portfolio,equityHWM,l2Loading,l2
         </div>
 
         
-        {traderStyle&&(()=>{
-          var s=traderStyle;
-          return(
-            <div className="bg-card border border-border rounded-xl p-5">
-              <h3 className="font-semibold text-sm mb-3">🧠 Trader Style Profiler</h3>
-              <div className="flex flex-col md:flex-row gap-4">
-                <div className="flex-shrink-0 text-center bg-input/30 rounded-2xl p-5 min-w-[140px]">
-                  <div className="text-5xl mb-2">{s.icon}</div>
-                  <div className="font-bold text-yellow text-base">{s.name}</div>
-                </div>
-                <div className="flex-1 space-y-3">
-                  <p className="text-muted text-sm leading-relaxed">{s.desc}</p>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <div className="text-green text-xs font-semibold mb-1.5">Strengths</div>
-                      <ul className="space-y-1">{s.strengths.map((x,i)=><li key={i} className="text-txt text-xs flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-green flex-shrink-0"/>{x}</li>)}</ul>
-                    </div>
-                    <div>
-                      <div className="text-orange text-xs font-semibold mb-1.5">Watch Out</div>
-                      <ul className="space-y-1">{s.watchOut.map((x,i)=><li key={i} className="text-txt text-xs flex items-center gap-1.5"><span className="w-1.5 h-1.5 rounded-full bg-orange flex-shrink-0"/>{x}</li>)}</ul>
-                    </div>
-                  </div>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    {[["WR",metrics.winRate.toFixed(0)+"%",metrics.winRate>=50?"text-green":"text-red"],
-                      ["PF",metrics.pf?fmtRatio(metrics.pf,2):"—",metrics.pf&&metrics.pf>=1?"text-green":"text-red"],
-                      ["RR",metrics.rr?fmtRatio(metrics.rr,1)+"x":"—","text-yellow"],
-                      ["DD","-"+metrics.maxDDPct.toFixed(1)+"%","text-red"]
-                    ].map(function(item){var l=item[0],v=item[1],c=item[2];return(
-                      <div key={l} className="bg-input/50 rounded-lg px-3 py-1.5 text-center">
-                        <div className="text-muted text-[10px]">{l}</div>
-                        <div className={"font-bold text-sm tabular-nums "+c}>{v}</div>
-                      </div>
-                    );})}
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        })()}
+        {/* Trader Style Profiler hidden 2026-05-12: outcome-based label, noisy
+            at low sample size, conflicts with process-over-outcome review
+            discipline. The traderStyle useMemo above is left in place for one
+            release so this card can be restored by re-rendering it; revisit
+            only with a process-based redesign. */}
 
         
                 {durationBuckets.length>0&&(()=>{
@@ -5516,10 +5458,12 @@ function ProfitWithdrawModal({currentBalance,onSubmit,onCancel}){
 
 function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsChange,showToast,showConfirm}){
   const[txModal,setTxModal]=useState(null);
-  const[aiKey,setAiKey]=useState(()=>ls.get("tj_ai_key",""));
-  const handleAiKeyChange=useCallback((k)=>{
-    setAiKey(k);ls.set("tj_ai_key",k);
-  },[]);
+  // Journal AI-key feature deprecated 2026-05-12: old mentor-note AI route
+  // (NoteFormModal "✨ ให้ AI ช่วย") was unreliable and encouraged plaintext
+  // API-key storage in localStorage. Settings input was never wired into JSX
+  // (state was declared but no consumer existed). Removed dead state. One-time
+  // local cleanup of any stale tj_ai_key value runs on PageSettings mount.
+  useEffect(()=>{try{localStorage.removeItem("tj_ai_key");}catch{}},[]);
   const[sheetsUrl,setSheetsUrl]=useState(()=>sheetsSync.getUrl());
   const[sheetsStatus,setSheetsStatus]=useState(null);
   const[sheetsSyncing,setSheetsSyncing]=useState(false);
@@ -5774,25 +5718,10 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
         </div>
       </section>
 
-      <section className="bg-card border border-border rounded-xl p-5">
-        <h2 className="font-semibold text-txt mb-1">Google Sheets Sync</h2>
-        <p className="text-muted text-xs mb-3">Sync open positions ไปที่ Google Sheets อัตโนมัติ</p>
-        <div className="flex gap-2 mb-2">
-          <input type="text" value={sheetsUrl} onChange={e=>setSheetsUrl(e.target.value)}
-            placeholder="https://script.google.com/macros/s/.../exec"
-            className="flex-1 bg-input border border-border rounded-lg px-3 py-2 text-txt text-xs outline-none focus:border-yellow/50"/>
-          <button onClick={handleSheetsSync} disabled={!sheetsUrl||sheetsSyncing}
-            className={clsBtn("yellow","sm")+" disabled:opacity-40 disabled:cursor-not-allowed"}>
-            {sheetsSyncing?"Syncing...":"🔄 Sync Now"}
-          </button>
-        </div>
-        {sheetsStatus&&(
-          <div className={`text-xs px-3 py-2 rounded-lg ${sheetsStatus.startsWith("OK")?"bg-green/10 text-green":"bg-red/10 text-red"}`}>
-            {sheetsStatus}
-          </div>
-        )}
-        <p className="text-muted/60 text-xs mt-2">ต้องสร้าง Apps Script web app ก่อน — ดู <a href="https://developers.google.com/apps-script" target="_blank" className="text-yellow/70 hover:text-yellow underline">docs</a></p>
-      </section>
+      {/* Google Sheets Sync UI hidden 2026-05-12: feature unused. sheetsSync
+          object, sheetsUrl/sheetsStatus/sheetsSyncing state, and handleSheetsSync
+          are left in place for one release for trivial rollback. Auto-fire on
+          trade save is also disabled (see App save effect below). */}
 
       {txModal&&<PortfolioTxModal type={txModal} onSubmit={handleTx} onCancel={()=>setTxModal(null)} currentBalance={balance}/>}
       {showWithdrawModal&&(
@@ -5903,11 +5832,11 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
           <div className="flex items-center justify-between gap-4">
             <div>
               <div className="text-sm font-medium text-txt">ล้างข้อมูล Trade ทั้งหมด</div>
-              <div className="text-xs text-muted">ลบ trades และ transactions ทั้งหมด — Products และ Settings ยังคงอยู่</div>
+              <div className="text-xs text-muted">ลบ trades, transactions, notes, daily notes, patterns และ user_data ทั้งหมด — Products ยังคงอยู่</div>
             </div>
             <button onClick={()=>showConfirm({
               title:"ล้างข้อมูล Trade ทั้งหมด?",
-              message:"Trades + Transactions จะถูกลบถาวร undo ไม่ได้",
+              message:"Trades + Transactions + Notes + Daily Notes + Patterns จะถูกลบถาวร undo ไม่ได้",
               confirmLabel:"ลบเลย",variant:"danger",
               onConfirm:async()=>{
                 const uid=window._supabaseClient?.auth?.getUser&&(await window._supabaseClient.auth.getUser())?.data?.user?.id;
@@ -6276,6 +6205,12 @@ const STARTER_NOTES=[
 const NOTE_TYPES={quote:{icon:"📖",label:"Quote"},rule:{icon:"🔑",label:"Rule"},lesson:{icon:"💡",label:"Lesson"},idea:{icon:"🌱",label:"Idea"}};
 const NOTE_COLORS={quote:"#3B82F6",rule:"#F59E0B",lesson:"#0ECB81",idea:"#8B5CF6"};
 
+// DEPRECATED 2026-05-12: Journal AI-mentor-note route. The "✨ ให้ AI ช่วย"
+// button in NoteFormModal was removed in the same patch. This function and the
+// surrounding aiLoading/aiResult/aiError state in NoteFormModal are now dead
+// code, kept for one release to make rollback trivial. Do not re-wire without
+// a security review — calling Anthropic from the browser requires an api key
+// stored in plaintext localStorage, which is exactly what we are getting rid of.
 async function aiProcessNote(rawText,existingTags,apiKey){
   const tagList=existingTags.join(", ")||"#mindset, #risk, #entry, #rule, #psychology";
   const res=await fetch("https://api.anthropic.com/v1/messages",{
@@ -6312,7 +6247,10 @@ Raw note: "${rawText}"`}]
 
 
 function NoteFormModal({initial,onSave,onClose,allTags=[]}){
-  const apiKey=ls.get("tj_ai_key","");
+  // AI-mentor-note route deprecated 2026-05-12; force apiKey to empty so the
+  // "✨ ให้ AI ช่วย" button below cannot render. tj_ai_key is also one-time
+  // cleared in PageSettings. Manual cloud cleanup SQL is in the patch report.
+  const apiKey="";
   const[f,setF]=useState({
     type:initial?.type||"quote",
     content:initial?.content||"",
@@ -6389,18 +6327,7 @@ function NoteFormModal({initial,onSave,onClose,allTags=[]}){
             <textarea value={f.content} onChange={set("content")} rows={4}
               placeholder="จด quote, กฎ, บทเรียน หรือไอเดีย..."
               className={clsInput+" resize-none"} autoFocus/>
-            <div className="flex items-center gap-2 mt-2">
-              {apiKey?(
-                <button type="button" onClick={handleAiProcess} disabled={aiLoading||!f.content.trim()}
-                  className={`${clsBtn("default","sm")} flex items-center gap-1.5 disabled:opacity-40`}>
-                  {aiLoading?(
-                    <><span className="w-3 h-3 border-2 border-muted border-t-yellow rounded-full animate-spin inline-block"/>กำลังประมวลผล...</>
-                  ):"✨ ให้ AI ช่วย"}
-                </button>
-              ):(
-                <span className="text-muted text-xs">ตั้งค่า API Key ใน Settings เพื่อใช้ AI</span>
-              )}
-            </div>
+            {/* AI-mentor-note button removed 2026-05-12 (deprecated route). */}
             {aiError&&<p className="text-red text-xs mt-1">{aiError}</p>}
             {aiResult&&(
               <div className="fade-in bg-yellow/5 border border-yellow/20 rounded-xl p-3 space-y-2 mt-2">
@@ -6531,7 +6458,12 @@ function PageNotes({uid,syncNotesToCloud,onPatternsChange,initialPatterns}){
     }
   },[]);
 
+  // Skip the first fire on PageNotes mount: hydration already wrote LS and
+  // cloud is already in sync, so the initial fire was a redundant write per
+  // ROADMAP P3 (deferred until 2026-05-12).
+  const notesDidMountRef=useRef(false);
   useEffect(()=>{
+    if(!notesDidMountRef.current){notesDidMountRef.current=true;return;}
     ls.set("tj_notes",notes);
     if(syncNotesToCloud)syncNotesToCloud(notes,ls.get("tj_daily_notes",{}));
   },[notes]);
@@ -6633,8 +6565,18 @@ function PageNotes({uid,syncNotesToCloud,onPatternsChange,initialPatterns}){
       </div>
 
       {filtered.length===0?(
-        <div className="bg-card border border-border rounded-xl p-10 text-center text-muted text-sm">
-          {search||activeTag?"ไม่พบ note ที่ตรงกับ filter":"ยังไม่มี note — กด + เพิ่ม เพื่อเริ่มต้น"}
+        <div className="bg-card border border-border rounded-xl p-10 text-center text-muted text-sm space-y-2">
+          {search||activeTag?(
+            <div>ไม่พบ note ที่ตรงกับ filter</div>
+          ):(
+            <>
+              <div>ยังไม่มี note — กด + เพิ่ม เพื่อเริ่มต้น</div>
+              <div className="text-muted/70 text-xs leading-relaxed max-w-md mx-auto">
+                ใช้ Notes สำหรับบทเรียน mentor, กฎเทรด, framework, สมมติฐาน, และ quote ที่อยากกลับมาอ่านซ้ำ.
+                อารมณ์รายวันให้ไปที่ Calendar — check-in จาก Telegram อยู่ใน Capture Bot.
+              </div>
+            </>
+          )}
         </div>
       ):(
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
@@ -7569,7 +7511,9 @@ function App({session,onSignOut}){
       // User data
       if(data.notifHistory!=null){ setNotifHistory(data.notifHistory); ls.set("tj_notif_history",data.notifHistory); }
       if(data.patterns!=null)    { setAppPatterns(data.patterns); ls.set("tj_patterns",data.patterns); }
-      if(data.aiKey!=null)         ls.set("tj_ai_key",data.aiKey);
+      // tj_ai_key hydration removed 2026-05-12 — Journal AI-mentor-note route
+      // deprecated; do not repopulate localStorage from any stored cloud value.
+      // data.aiKey is still returned by db.loadAll for one release; ignore here.
       // Tutorial: show setup if no portfolio transactions (new user)
       const hasTx=(data.portfolio?.transactions||[]).length>0;
       setShowSetup(!hasTx&&data.portfolio===null);
@@ -7611,10 +7555,9 @@ function App({session,onSignOut}){
       db.saveTrades(authUid,trades,lastSeenRef.current.tradeIds).then(res=>{
         if(res&&res.ok){lastSeenRef.current.tradeIds=res.ids;}
         else{console.warn("[persist] trades save failed — keeping local knownIds",res);}
-        if(sheetsSync.getUrl()){
-          const sd={currentStep,nextThreshold:stepThresholds[currentStep]||null,stepBase};
-          sheetsSync.push(trades,products,portfolio,balance,sd);
-        }
+        // Sheets-sync auto-fire on trade save disabled 2026-05-12: feature
+        // hidden in Settings. Re-enabling requires un-hiding the Settings UI
+        // and restoring this block; keep sheetsSync object intact for now.
       }).finally(()=>{savingRef.current.trades=false;});
     };
     dbTimers.current.trades=setTimeout(tryFire,1500);
@@ -7704,34 +7647,12 @@ function App({session,onSignOut}){
       clearTimeout(dbTimers.current.notes);
     };
   },[authUid]);
-  useEffect(()=>{
-    if(!authUid||!dbReady)return;
-    const channel=SUPA.channel("bot_knowledge_rt")
-      .on("postgres_changes",
-        {event:"INSERT",schema:"public",table:"bot_knowledge"},
-        payload=>{
-          const row=payload.new;
-          if(!row)return;
-          const newNotif={
-            id:"bk_"+row.id+"_"+Date.now(),
-            type:row.severity==="danger"?"danger":row.severity==="warn"?"warn":"info",
-            icon:"🤖",
-            title:"Gugu: "+(row.title||row.symbol||"New insight"),
-            detail:row.symbol?row.symbol+" · "+(row.setup_type||""):"",
-            msg:row.content||row.lesson||"",
-            time:new Date().toISOString(),
-            read:false,
-          };
-          setNotifHistory(prev=>{
-            const updated=[newNotif,...prev].slice(0,100);
-            ls.set("tj_notif_history",updated);
-            return updated;
-          });
-        }
-      )
-      .subscribe();
-    return()=>SUPA.removeChannel(channel);
-  },[authUid,dbReady]);
+  // bot_knowledge realtime subscription archived 2026-05-12 with GUGU v1.
+  // public.bot_knowledge has 80 historical rows, RLS enabled with ZERO
+  // policies, so anon/authenticated access is already denied — no DB lockdown
+  // needed. Capture Bot v0.1 uses checkin_events for similar surfaces.
+  // The Gugu notification rendering path (notifHistory + 🤖 icon) is left in
+  // place so a future producer can wire in without re-introducing this hook.
 
   // Notes & daily notes Supabase sync
   const syncNotesToCloud=useCallback((freeform,daily)=>{
