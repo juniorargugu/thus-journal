@@ -6204,6 +6204,26 @@ const STARTER_NOTES=[
 ];
 const NOTE_TYPES={quote:{icon:"📖",label:"Quote"},rule:{icon:"🔑",label:"Rule"},lesson:{icon:"💡",label:"Lesson"},idea:{icon:"🌱",label:"Idea"}};
 const NOTE_COLORS={quote:"#3B82F6",rule:"#F59E0B",lesson:"#0ECB81",idea:"#8B5CF6"};
+// Type-specific ghost text for the content textarea. Per docs/notes_taxonomy.md:
+// invalidation / expiry is recorded inside Content only when important — there
+// is no dedicated subfield to validate.
+const NOTE_CONTENT_PLACEHOLDERS={
+  quote:"เช่น: 'Process over outcome' — รักษากระบวนการ ผลลัพธ์จะตามมา\nInvalidation / expiry: ใส่ท้าย note เฉพาะกรณีที่สำคัญจริง",
+  rule:"เช่น: ห้าม force narrative ตอนตลาด sideway — รอ range break หรือ structure ชัดก่อน\nInvalidation / expiry: ใส่ท้าย note เฉพาะกรณีที่สำคัญจริง",
+  lesson:"เช่น: บทเรียนจาก trade/ตลาดครั้งหนึ่ง: เกิดอะไรขึ้น → เราพลาดตรงไหน → ครั้งหน้าจะทำอะไรต่างออกไป\nInvalidation / expiry: ใส่ท้าย note เฉพาะกรณีที่สำคัญจริง",
+  idea:"เช่น: hypothesis ที่อยาก observe ต่อ เช่น ถ้า silver lead gold แล้ว gold ยัง lag อาจเป็น early context แต่ยังไม่ใช่ signal\nInvalidation / expiry: ใส่ท้าย note เฉพาะกรณีที่สำคัญจริง",
+};
+// Grouped mentor-oriented tag suggestion chips. Tags remain freeform — these
+// are convenience chips only. #entry is intentionally in "Process" only (was
+// previously in the flat generic list) to avoid double-rendering.
+const NOTE_TAG_SUGGESTIONS=[
+  {label:"Market / Instrument",tags:["#s50","#gold","#silver","#usdjpy","#all_markets"]},
+  {label:"Behavior / Psychology",tags:["#fomo","#overtrade","#force_narrative","#process_over_outcome"]},
+  {label:"Risk / Setup",tags:["#risk_control","#falling_knife","#advantaged_zone","#partial_tp"]},
+  {label:"Regime / Context",tags:["#sideway","#trend","#breakout","#range"]},
+  {label:"Process",tags:["#trade_management","#trade_selection","#entry","#exit"]},
+  {label:"Generic",tags:["#mindset","#risk","#psychology","#rule","#classic"]},
+];
 
 // DEPRECATED 2026-05-12: Journal AI-mentor-note route. The "✨ ให้ AI ช่วย"
 // button in NoteFormModal was removed in the same patch. This function and the
@@ -6294,10 +6314,11 @@ function NoteFormModal({initial,onSave,onClose,allTags=[]}){
   const removeTag=(t)=>setF(p=>({...p,tags:p.tags.filter(x=>x!==t)}));
   const handleSave=()=>{
     if(!f.content.trim())return;
+    const today=new Date().toISOString().slice(0,10);
     onSave({
       id:initial?.id||uid(),
       type:f.type,content:f.content.trim(),source:f.source.trim(),
-      tags:f.tags,createdAt:initial?.createdAt||new Date().toISOString().slice(0,10),
+      tags:f.tags,createdAt:initial?.createdAt||today,updatedAt:today,
       reviewCount:initial?.reviewCount||0,lastReviewed:initial?.lastReviewed||null,
     });
   };
@@ -6325,7 +6346,7 @@ function NoteFormModal({initial,onSave,onClose,allTags=[]}){
           <div>
             <Label>เนื้อหา *</Label>
             <textarea value={f.content} onChange={set("content")} rows={4}
-              placeholder="จด quote, กฎ, บทเรียน หรือไอเดีย..."
+              placeholder={NOTE_CONTENT_PLACEHOLDERS[f.type]||"จด quote, กฎ, บทเรียน หรือไอเดีย..."}
               className={clsInput+" resize-none"} autoFocus/>
             {/* AI-mentor-note button removed 2026-05-12 (deprecated route). */}
             {aiError&&<p className="text-red text-xs mt-1">{aiError}</p>}
@@ -6360,7 +6381,13 @@ function NoteFormModal({initial,onSave,onClose,allTags=[]}){
             )}
           </div>
           <div>
-            <Label>แหล่งที่มา (ไม่บังคับ)</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label>แหล่งที่มา (ไม่บังคับ)</Label>
+              <button type="button" onClick={()=>setF(p=>({...p,source:"mentor"}))}
+                className="text-[10px] px-2 py-0.5 rounded-full border border-border text-muted hover:text-yellow hover:border-yellow/30 transition">
+                mentor
+              </button>
+            </div>
             <input value={f.source} onChange={set("source")}
               placeholder="เช่น Market Wizards, พี่โอห์ม, ประสบการณ์ตรง..."
               className={clsInput}/>
@@ -6381,15 +6408,22 @@ function NoteFormModal({initial,onSave,onClose,allTags=[]}){
                 className={clsInput+" flex-1"}/>
               <button onClick={addTag} className={clsBtn("default","sm")}>+ เพิ่ม</button>
             </div>
-            <div className="flex flex-wrap gap-1 mt-2">
-              {["#mindset","#risk","#entry","#psychology","#rule","#classic"].map(t=>(
-                !f.tags.includes(t)&&(
-                  <button key={t} onClick={()=>setF(p=>({...p,tags:[...p.tags,t]}))}
-                    className="text-[10px] px-2 py-0.5 rounded-full border border-border text-muted hover:text-yellow hover:border-yellow/30 transition">
-                    {t}
-                  </button>
-                )
-              ))}
+            <div className="mt-2 space-y-1.5">
+              {NOTE_TAG_SUGGESTIONS.map(group=>{
+                const remaining=group.tags.filter(t=>!f.tags.includes(t));
+                if(!remaining.length)return null;
+                return(
+                  <div key={group.label} className="flex flex-wrap items-center gap-1">
+                    <span className="text-[9px] uppercase tracking-wide text-muted/60 mr-1">{group.label}</span>
+                    {remaining.map(t=>(
+                      <button key={t} type="button" onClick={()=>setF(p=>({...p,tags:[...p.tags,t]}))}
+                        className="text-[10px] px-2 py-0.5 rounded-full border border-border text-muted hover:text-yellow hover:border-yellow/30 transition">
+                        {t}
+                      </button>
+                    ))}
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>
