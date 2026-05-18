@@ -327,6 +327,27 @@ const db={
       return{ok:true};
     }catch(e){console.warn("[db] savePortfolioSummary error",e);return{ok:false,error:e};}
   },
+  // checkin_events: READ-ONLY passive activity feed. Capture Bot writes these
+  // rows via the service role; Journal reads ITS OWN rows through normal
+  // Auth/RLS (policy: auth.uid() = user_id). NEVER writes here. free_text and
+  // idempotency_key are deliberately NOT selected (privacy / not needed).
+  async loadCheckinActivity(uid){
+    try{
+      const{data,error}=await SUPA.from("checkin_events")
+        .select("id,surface,trade_id,prompted_at,replied_at,tag_ids,created_at,context")
+        .eq("user_id",uid)
+        .not("replied_at","is",null)
+        .order("created_at",{ascending:false})
+        .limit(50);
+      if(error){console.warn("[db] loadCheckinActivity error",error);return{ok:false,error:error.message||"load failed",rows:[],tags:{}};}
+      let tags={};
+      try{
+        const{data:td}=await SUPA.from("checkin_tags").select("id,display_th,emoji,risk_flag");
+        (td||[]).forEach(t=>{tags[t.id]={display_th:t.display_th,emoji:t.emoji,risk_flag:t.risk_flag};});
+      }catch(te){/* tag labels optional — fall back to raw tag_ids, no toast */}
+      return{ok:true,rows:data||[],tags};
+    }catch(e){console.warn("[db] loadCheckinActivity error",e);return{ok:false,error:(e&&e.message)||"load failed",rows:[],tags:{}};}
+  },
 };
 
 // ─── Trade Events (ARCHIVED 2026-05-12) ─────────────────────────────────────
@@ -901,12 +922,127 @@ const CHECKLIST_ITEMS=[
   {id:"c7",icon:"📐",text:"Sideway: Long กรอบล่าง / Short กรอบบน",sub:"ถ้าตลาด Sideway — เข้า Long ที่กรอบล่าง และ Short ที่กรอบบนเท่านั้น"},
   {id:"c6",icon:"🎓",text:"พี่โอห์มเห็นแล้วโอเค",sub:"ถ้าครูดูไม้นี้ เค้าจะยิ้มหรือส่ายหัว?"},
 ];
-function NotificationCenter({history,show,onClose,onMarkRead,onMarkAllRead,onDeleteAll,onDeleteOne,showConfirm}){
+// Pure: collapse checkin_events rows into passive activity items.
+// Grouped rows (shared context.checkin_group_id) → ONE item. No P/L
+// aggregation, no trade-record merge, no fake trade_id, no inference.
+// Singleton rows keyed by row id. Sorted newest-first by reply/created time.
+function buildCheckinActivity(rows){
+  if(!Array.isArray(rows))return[];
+  const m=new Map();
+  for(const r of rows){
+    const ctx=(r&&r.context)||{};
+    const gid=ctx.checkin_group_id;
+    const key=gid?("g:"+gid):("s:"+r.id);
+    let g=m.get(key);
+    if(!g){
+      g={key,isGroup:!!gid,surface:r.surface,
+         ts:r.replied_at||r.created_at||"",
+         tagIds:[],tagSeen:new Set(),tradeIds:new Set(),
+         legs:Array.isArray(ctx.group_legs)?ctx.group_legs:null,
+         price_symbol:ctx.price_symbol||null,
+         price_resolution:ctx.price_resolution||null,
+         price_status:ctx.price_status||null,
+         rowCount:0};
+      m.set(key,g);
+    }
+    g.rowCount++;
+    (r.tag_ids||[]).forEach(t=>{if(!g.tagSeen.has(t)){g.tagSeen.add(t);g.tagIds.push(t);}});
+    if(r.trade_id)g.tradeIds.add(r.trade_id);
+    const t=r.replied_at||r.created_at||"";
+    if(t>g.ts)g.ts=t;
+    if(!g.legs&&Array.isArray(ctx.group_legs))g.legs=ctx.group_legs;
+  }
+  return Array.from(m.values()).sort((a,b)=>(b.ts||"").localeCompare(a.ts||""));
+}
+
+// Passive read-only render of check-in activity. No unread state, no ack,
+// no mark-read, no delete, no toast, no badge. Never shows free_text / raw
+// context. Capture Bot owns this data — Journal only displays it.
+function CheckinActivityList({items,tagMap,loading,error,fmtTime}){
+  if(loading)return(<div className="px-5 py-12 text-center text-muted text-sm">กำลังโหลด check-in activity…</div>);
+  if(error)return(
+    <div className="px-5 py-12 text-center">
+      <p className="text-muted text-sm">โหลด check-in activity ไม่สำเร็จ</p>
+      <p className="text-muted/40 text-xs mt-1">{String(error)}</p>
+    </div>
+  );
+  if(!items||items.length===0)return(
+    <div className="flex flex-col items-center justify-center py-16 px-8 text-center">
+      <div className="text-5xl mb-4">🗒️</div>
+      <p className="text-txt font-semibold">ยังไม่มี check-in activity</p>
+      <p className="text-muted text-sm mt-1">check-in จาก Capture Bot จะปรากฏที่นี่</p>
+    </div>
+  );
+  const STATUS_TH={ok:"ราคาสด",stale:"ราคาหน่วง",market_closed:"ตลาดปิด",missing:"ไม่มีราคา",no_position:"",no_mapping:""};
+  return(
+    <div>
+      {items.map(it=>{
+        const isDuring=it.surface==="during_trade";
+        const legs=Array.isArray(it.legs)?it.legs:[];
+        let title;
+        if(it.isGroup&&legs.length){
+          const d0=legs[0]&&legs[0].direction;
+          const dir=d0==="long"?"Long":d0==="short"?"Short":"";
+          const base=((legs[0]&&legs[0].product_id)||"").toString().toUpperCase();
+          const series=legs.map(l=>((l.series||l.contractCode||"")+"").toUpperCase()).filter(Boolean);
+          title=(base||"Group")+(dir?(" "+dir):"")+" ×"+legs.length+(series.length?(" — "+series.join(" + ")):"");
+        }else if(it.isGroup){
+          title="Grouped check-in — "+it.rowCount+" positions";
+        }else if(isDuring){
+          const tid=it.tradeIds.size?Array.from(it.tradeIds)[0]:"";
+          title="During-trade check-in"+(tid?(" — "+String(tid).slice(0,8)):"");
+        }else{
+          title="Daily check-in completed";
+        }
+        const tags=it.tagIds.map(id=>{const t=tagMap&&tagMap[id];return t?{label:t.display_th||id,emoji:t.emoji||"",risk:!!t.risk_flag}:{label:id,emoji:"",risk:false};});
+        const statusTxt=it.price_status?(STATUS_TH[it.price_status]||""):"";
+        return(
+          <div key={it.key} style={{borderBottom:"1px solid rgba(255,255,255,0.06)"}} className="px-5 py-4">
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-full flex items-center justify-center text-lg flex-shrink-0"
+                style={{background:"rgba(255,255,255,0.05)",border:"1.5px solid rgba(255,255,255,0.10)"}}>
+                {isDuring?"📍":"🗒️"}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-start justify-between gap-2 mb-0.5">
+                  <span className="font-semibold text-sm leading-tight text-txt">{title}</span>
+                  <span className="text-[9px] font-bold px-1.5 py-0.5 rounded-full flex-shrink-0"
+                    style={{background:"rgba(255,255,255,0.06)",color:"#848E9C"}}>
+                    {isDuring?"During":"Daily"}
+                  </span>
+                </div>
+                {tags.length>0&&(
+                  <div className="flex flex-wrap gap-1 mt-1">
+                    {tags.map((tg,i)=>(
+                      <span key={i} className="text-[10px] px-1.5 py-0.5 rounded"
+                        style={{background:tg.risk?"rgba(246,70,93,0.10)":"rgba(255,255,255,0.05)",color:tg.risk?"#F6465D":"#B7BDC6"}}>
+                        {tg.emoji?tg.emoji+" ":""}{tg.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {(statusTxt||it.price_symbol)&&(
+                  <p className="text-muted/60 text-[10px] mt-1.5">
+                    {it.price_symbol||""}{statusTxt?(" · "+statusTxt):""}{it.price_resolution?(" · "+it.price_resolution):""}
+                  </p>
+                )}
+                <p className="text-muted/40 text-[10px] mt-1">{fmtTime(it.ts)}</p>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function NotificationCenter({history,show,onClose,onMarkRead,onMarkAllRead,onDeleteAll,onDeleteOne,showConfirm,checkinItems,checkinTagMap,checkinLoading,checkinError}){
   if(!show)return null;
   const typeAccent={danger:"#F6465D",warn:"#F0B90B",info:"#0ECB81"};
   const typeBg={danger:"rgba(246,70,93,0.06)",warn:"rgba(240,185,11,0.06)",info:"rgba(14,203,129,0.06)"};
   const typeLabel={danger:"⚠️ Alert",warn:"⚡ Warning",info:"💡 Info"};
   const unread=(history||[]).filter(n=>!n.read).length;
+  const[filter,setFilter]=useState("alerts"); // 'alerts' (default, unchanged) | 'checkins' (passive)
 
   const fmtTime=(iso)=>{
     if(!iso)return"";
@@ -939,12 +1075,13 @@ function NotificationCenter({history,show,onClose,onMarkRead,onMarkAllRead,onDel
             </p>
           </div>
           <div className="flex items-center gap-2">
-            {unread>0&&(
+            {/* Alert-only actions — hidden on Check-ins tab (passive, no ack/delete) */}
+            {filter==="alerts"&&unread>0&&(
               <button onClick={onMarkAllRead}
                 className="text-xs text-muted/60 hover:text-muted transition px-2 py-1 rounded"
                 style={{background:"rgba(255,255,255,0.04)"}}>อ่านหมด</button>
             )}
-            {(history||[]).length>0&&(
+            {filter==="alerts"&&(history||[]).length>0&&(
               <button onClick={()=>showConfirm({title:"ลบ notification ทั้งหมด?",variant:"danger",onConfirm:()=>onDeleteAll&&onDeleteAll()})}
                 className="text-xs text-red/50 hover:text-red transition px-2 py-1 rounded"
                 style={{background:"rgba(255,255,255,0.04)"}}>🗑 ล้าง</button>
@@ -954,9 +1091,23 @@ function NotificationCenter({history,show,onClose,onMarkRead,onMarkAllRead,onDel
               style={{background:"rgba(255,255,255,0.06)"}}>✕</button>
           </div>
         </div>
+        {/* Filter — Alerts (default, unchanged) | Check-ins (passive, badge-excluded) */}
+        <div className="flex gap-1 px-5 py-2" style={{borderBottom:"1px solid rgba(255,255,255,0.06)"}}>
+          {[["alerts","Alerts"],["checkins","Check-ins"]].map(([k,lbl])=>(
+            <button key={k} onClick={()=>setFilter(k)}
+              className="text-xs px-3 py-1 rounded-full transition"
+              style={{background:filter===k?"rgba(240,185,11,0.12)":"rgba(255,255,255,0.04)",
+                      color:filter===k?"#F0B90B":"#848E9C",
+                      border:"1px solid "+(filter===k?"rgba(240,185,11,0.35)":"transparent")}}>
+              {lbl}
+            </button>
+          ))}
+        </div>
         {/* List */}
-        <div className="overflow-y-auto" style={{maxHeight:"calc(100vh - 80px)"}}>
-          {(!history||history.length===0)?(
+        <div className="overflow-y-auto" style={{maxHeight:"calc(100vh - 117px)"}}>
+          {filter==="checkins"?(
+            <CheckinActivityList items={checkinItems} tagMap={checkinTagMap} loading={checkinLoading} error={checkinError} fmtTime={fmtTime}/>
+          ):(!history||history.length===0)?(
             <div className="flex flex-col items-center justify-center py-16 px-8 text-center">
               <div className="text-5xl mb-4">🔔</div>
               <p className="text-txt font-semibold">ยังไม่มีการแจ้งเตือน</p>
@@ -7273,6 +7424,11 @@ function App({session,onSignOut}){
   const[mobileMenu,setMobileMenu]=useState(false);
   const[showNotif, setShowNotif] =useState(false);
   const[notifHistory,setNotifHistory]=useState([]);
+  // Read-only Capture Bot check-in activity — never persisted, never in badge.
+  const[checkinItems,setCheckinItems]=useState([]);
+  const[checkinTagMap,setCheckinTagMap]=useState({});
+  const[checkinLoading,setCheckinLoading]=useState(false);
+  const[checkinError,setCheckinError]=useState(null);
   const[clock,    setClock]    =useState(new Date());
   const[profitDismissed,setProfitDismissed]=useState(false);
   const tfex=useTFEXMarketStatus();
@@ -7460,6 +7616,24 @@ function App({session,onSignOut}){
 
   // ─── Supabase sync ───────────────────────────────────────────────────────
   const authUid=session?.user?.id;
+  // Lazy, read-only check-in activity load — only when the Center is opened.
+  // Never writes, never persists, never touches notifHistory/badge/toast.
+  useEffect(()=>{
+    if(!showNotif||!authUid)return;
+    let cancelled=false;
+    setCheckinLoading(true);setCheckinError(null);
+    db.loadCheckinActivity(authUid).then(res=>{
+      if(cancelled)return;
+      if(res&&res.ok){
+        setCheckinItems(buildCheckinActivity(res.rows));
+        setCheckinTagMap(res.tags||{});
+      }else{
+        setCheckinError((res&&res.error)||"load failed");
+        setCheckinItems([]);
+      }
+    }).finally(()=>{if(!cancelled)setCheckinLoading(false);});
+    return()=>{cancelled=true;};
+  },[showNotif,authUid]);
   const dbTimers=useRef({});
   // Optimistic-concurrency tokens — track server-side updated_at per table/key
   // and the loaded set of trade ids. Updated on load + on every successful save.
@@ -7998,6 +8172,10 @@ function App({session,onSignOut}){
         onDeleteAll={deleteAllNotifs}
         onDeleteOne={deleteOneNotif}
         showConfirm={showConfirm}
+        checkinItems={checkinItems}
+        checkinTagMap={checkinTagMap}
+        checkinLoading={checkinLoading}
+        checkinError={checkinError}
       />
 <nav className="bg-card border-b border-border sticky top-0 z-30">
         <div className="max-w-screen-xl mx-auto px-4 flex items-center justify-between h-14">
