@@ -3083,11 +3083,11 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
 
   const totalPV=useMemo(()=>{
     if(!openTrades.length)return 0;
-    return openTrades.reduce((s,t)=>{const p=products.find(p=>p.id===t.productId);return s+calcPositionValue(p,t.contracts,t.entryPrice);},0);
+    return openTrades.reduce((s,t)=>{const p=resolveProduct(products,t.productId);return s+calcPositionValue(p,t.contracts,t.entryPrice);},0);
   },[openTrades,products]);
   const totalGearingX=useMemo(()=>calcGearingX(totalPV,balance),[totalPV,balance]);
   const totalUnreal=useMemo(()=>openTrades.reduce((s,t)=>{
-    const p=products.find(p=>p.id===t.productId);
+    const p=resolveProduct(products,t.productId);
     const lp=getLivePrice(livePrices,t,p);
     const cp=lp!=null?lp:(t.currentPrice||t.entryPrice);
     return s+calcPL(p,t.contracts,t.entryPrice,cp,t.direction);
@@ -3278,7 +3278,7 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
           :(
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
               {openTrades.map(t=>{
-                const p=products.find(p=>p.id===t.productId);
+                const p=resolveProduct(products,t.productId);
                 const tradeKey=`${t.productId}_${t.direction}`;
                 return(
                   <PositionCard key={t.id} trade={t} product={p} isDraft={false} balance={balance}
@@ -3292,8 +3292,8 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
                     onUpdatePrice={()=>setUpdatingPrice(t)}
                     onMergeStart={startMerge}
                     onDuplicate={()=>handleDuplicate(t)}
-                    livePrice={(()=>{const p=products.find(x=>x.id===t.productId);return getLivePrice(livePrices,t,p);})()}
-                    liveTimestamp={(()=>{const p=products.find(x=>x.id===t.productId);const key=p?contractToLiveKey(p._baseId||p.id,t.contractCode||p.currentContract,p.baseSymbol):t.productId;return liveTimestamps[key]??liveTimestamps[t.productId]??null;})()}
+                    livePrice={(()=>{const p=resolveProduct(products,t.productId);return getLivePrice(livePrices,t,p);})()}
+                    liveTimestamp={(()=>{const p=resolveProduct(products,t.productId);const key=p?contractToLiveKey(p._baseId||p.id,t.contractCode||p.currentContract,p.baseSymbol):t.productId;return liveTimestamps[key]??liveTimestamps[t.productId]??null;})()}
                     liveError={!!liveErrors[t.productId]}
                     onShowDetail={setDetailTrade}
                   />
