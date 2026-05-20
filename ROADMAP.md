@@ -84,6 +84,133 @@ Do not start grouping work until **all** of these hold:
 
 ---
 
+## Trade Grouping Design Locked — 2026-05-20
+
+Companion to the existing "Future: Trade Grouping / Thesis Grouping" section.
+Locks the design produced in the G0 audit + design pass.
+Implementation does not begin until the gates below are satisfied.
+
+### Data model
+
+- New table `trade_groups (id uuid PK, user_id uuid, label text NOT NULL, group_pre_note text, group_post_note text, created_at, updated_at, archived_at nullable)`.
+- New column `trades.group_id uuid REFERENCES trade_groups(id) ON DELETE SET NULL`.
+- RLS on `trade_groups`: `user_id = auth.uid()` mirror of existing trades policy.
+- Indexes:
+  - `trade_groups(user_id)`
+  - `trade_groups(user_id) WHERE archived_at IS NULL`
+  - `trades(group_id) WHERE group_id IS NOT NULL`
+
+### Source of truth
+
+- `trades` rows remain the canonical execution records.
+- `trade_groups` is metadata + group-level notes. It is never a trade.
+- No synthetic group row is ever inserted into `trades[]`.
+
+### P/L invariant
+
+All calculations for Balance, Equity, Unrealized P/L, Realized P/L, Win Rate, HWM, Dashboard stats, Journal totals, Calendar daily P/L, and Excel/Sheets export totals must walk raw `trades[]` and ignore `group_id`.
+
+Group totals are computed at render time from child rows.
+No reducer reads group-level totals from `trade_groups`.
+A pre/post snapshot diff before and after grouping must show byte-identical totals.
+
+This invariant protects against the P0-2 double-count class of bugs.
+
+### Group status
+
+Derived from child trades at render time:
+
+- `open` if any child has `status === "open"`.
+- `closed` if all children have `status === "closed"`.
+- Status is not stored on `trade_groups` in v0.1.
+
+### Group label
+
+Auto-suggested on create, user-editable.
+
+Format:
+`{FAMILY} {Direction} — {series_set}{ ×n if useful}`
+
+Examples:
+- `S50 Long — M26+U26 ×4`
+- `GOLD Long — M26 ×3`
+- `SVF Short — M26 ×2`
+
+Family display map:
+- `GO → GOLD`
+- `SVF → SILVER`
+- `S50 → S50`
+- `USDJPY → USDJPY`
+
+Label is display metadata only. No reducer reads it.
+
+### Validation rules v0.1
+
+- Same product family required: `t.productId.replace(/_next$/,"")`.
+- Same direction required.
+- Current + next series allowed, e.g. `S50M26 Long + S50U26 Long`.
+- Mixed product family rejected.
+- Mixed direction rejected; hedge groups deferred to advanced mode.
+- Minimum 2 children.
+- Drafts (`status === "draft"`) rejected.
+- Already-grouped trades rejected; user must ungroup first.
+- Legacy `isMerged:true` rows rejected.
+- No hard cap on group size; soft warning at >10.
+
+### Group notes
+
+- `group_pre_note` and `group_post_note` are a fresh write layer.
+- Templates reuse existing `<TemplateButtons kind="pre"|"post">` and `appendTemplate`.
+- Child `preNote`, `postNote`, `preImages`, and `postImages` stay on child trade rows.
+- Child notes appear in the group view as a read-only live timeline.
+- No snapshot by default.
+- No auto-copy.
+- No two-way sync.
+- Editing a child note from group view opens the child's existing `TradeDetailModal`.
+
+### Ungroup
+
+- `UPDATE trades SET group_id = NULL WHERE group_id = g.id`.
+- `UPDATE trade_groups SET archived_at = now() WHERE id = g.id`.
+- Child rows return to flat display.
+- Group + notes are recoverable from `trade_groups`.
+- No child trade is deleted, modified, or hidden by ungrouping.
+
+### Legacy `isMerged` coexistence
+
+- Existing `isMerged:true` rows remain readable and closeable via `MergedCloseForm`.
+- New grouping system never creates `isMerged` rows.
+- New grouping system never sets `subTrades`, `mergedFromIds`, or `_hiddenByMerge`.
+- Validation rejects grouping of legacy merged rows.
+- No migration in v0.1.
+- G6 legacy cleanup is gated on Junior decision after G1–G5 stabilize.
+
+### Phase order
+
+- G0 — Design only. Delivered 2026-05-20.
+- G1 — Schema + RLS only. SQL applied via Supabase SQL Editor. No app reads or writes against the new table.
+- G2 — Read-only display. `GroupCard` renders for `group_id IS NOT NULL` rows. Create/ungroup still manual or test-only.
+- G3 — Open-position create + ungroup UI. Replaces the visible-disabled merge affordance with `[+ Group]`. Removes dead `handleMerge`, `startMerge`, `mergeMode`, and `mergeIds` from PositionsBoard.
+- G3.5 — Closed-trade retroactive grouping UI, optional later.
+- G4 — Group pre/post notes + child note timeline.
+- G5 — `[Insert GUGU summary]` button. Reads `checkin_events` filtered by child trade IDs. Blocks until Capture Bot Day 4 ships.
+- G6 — Legacy `isMerged` cleanup. Gated on zero or near-zero `isMerged:true` rows plus Junior approval.
+
+Each phase must pass the P/L-invariant snapshot test before the next begins.
+Do not bundle G1 with any UI phase in the same PR.
+
+### Gates before G1
+
+These must all hold before G1 schema work begins:
+
+1. Clean persistence logs ≥ 2 weeks. No `[trades][write] upserted-affected=0/N` events in production console or Supabase logs over the trailing 14-day window.
+2. Block 5 validation passed. Delete-the-last-trade smoke completed manually on the deployed build and documented.
+3. `[DIAG] TEMPORARY` runtime logs removed in production. Permanent `affected===0` tripwire stays.
+4. Migration SQL reviewed and approved manually by Junior in Supabase SQL Editor before execution.
+5. P/L snapshot baseline ready.
+
+---
+
 ## Diagnostic logs (`[DIAG] TEMPORARY`)
 
 Several `[trades] [DIAG] TEMPORARY`-prefixed `console.warn` calls exist throughout
