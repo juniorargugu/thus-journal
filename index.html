@@ -36,6 +36,7 @@ input[type="date"]::-webkit-calendar-picker-indicator{filter:invert(0.5);cursor:
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 .fade-in{animation:fadeIn 0.18s ease-out forwards;}
 .line-clamp-2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
+.line-clamp-3{display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
 .no-spin::-webkit-inner-spin-button,.no-spin::-webkit-outer-spin-button{-webkit-appearance:none;}
 .no-spin{-moz-appearance:textfield;}
 .tv-widget-wrap iframe{border:none!important;}
@@ -88,6 +89,90 @@ const SETUP_TYPES=["ประคองตลาด","สวนเทรนด์
 const GEARING_LIMITS={"ประคองตลาด":2,"สวนเทรนด์":2,"Sideway":5,"Snow Ball":5,"Scalp":8,"Run-Trend":15,"Other":5};
 const FEELINGS=["😊","😐","😠","😰","😢"];
 const EXIT_REASONS=["SL Hit","TP Hit","Manual","Other"];
+
+const PRE_TRADE_QUICK_TEMPLATE=`Thesis:
+-
+
+ถ้าคิดผิด จะรู้จากอะไร:
+-
+
+ถ้าคิดถูก จะทำอะไรต่อ:
+-
+
+Risk / size:
+- size นี้รู้สึกใหญ่ไปไหม:
+
+สิ่งที่ห้ามทำ:
+-`;
+
+const PRE_TRADE_FULL_TEMPLATE=`Thesis ของ trade / position นี้:
+- ตอนนี้เห็นอะไรถึงอยากเข้า:
+- ไม้นี้เป็น trade ตามแผน หรือ trade จาก feeling:
+- Context / setup ที่สำคัญ:
+
+ถ้าคิดถูก:
+- ตลาดควร behave ยังไง:
+- อยากเห็น follow-through แบบไหน:
+
+ถ้าคิดผิด:
+- อะไรคือสัญญาณว่า thesis เริ่ม invalid:
+- ถ้า sideway / ไม่ไปต่อ จะทำยังไง:
+
+แผนระหว่างถือ:
+- ถ้าไปทางเรา:
+- ถ้าสวน:
+- จะเพิ่มไม้ได้เมื่อไหร่:
+- จะลด/ปิดเมื่อไหร่:
+
+Risk / size:
+- size นี้รู้สึกใหญ่ไปไหม:
+- รับ drawdown ทางใจได้ไหม:
+- สิ่งที่ต้องระวังตัวเอง:
+
+Commitment:
+- สิ่งที่ต้องทำตามแผน:
+- สิ่งที่ห้ามทำ:`;
+
+const POST_TRADE_QUICK_TEMPLATE=`ออกเพราะ:
+-
+
+ทำตามแผนไหม:
+-
+
+สิ่งที่ทำได้ดี:
+-
+
+สิ่งที่ทำพลาด:
+-
+
+รอบหน้าจะแก้อะไร:
+-`;
+
+const POST_TRADE_FULL_TEMPLATE=`เหตุผลที่ออก:
+- ออกเพราะอะไร:
+- ออกตามแผนไหม:
+
+เทียบกับ thesis:
+- สิ่งที่คาดไว้เกิดขึ้นไหม:
+- thesis ถูก / ผิด / ไม่ชัด:
+- มีเปลี่ยน thesis ระหว่างถือไหม:
+
+Process:
+- สิ่งที่ทำได้ดี:
+- สิ่งที่ทำได้ไม่ดี:
+- มี force narrative / FOMO / กลัวกำไรหาย / size ใหญ่ไป ไหม:
+
+Lesson:
+- รอบหน้าจะทำอะไรต่างออกไป:
+- rule/reminder ที่ควรจำ:
+- price action สอนอะไร:`;
+
+// Empty → replace with template. Non-empty → append below blank line.
+// Never overwrites existing user text. Repeated clicks append additively.
+const appendTemplate=(currentText,templateText)=>{
+  if(!currentText||!String(currentText).trim())return templateText;
+  return String(currentText).trimEnd()+"\n\n"+templateText;
+};
 
 const ls={
   get:(k,def)=>{try{const v=localStorage.getItem(k);return v?JSON.parse(v):def;}catch{return def;}},
@@ -731,6 +816,9 @@ const fileToBase64=(file)=>new Promise((res,rej)=>{
 });
 
 const clsInput="w-full bg-input border border-border rounded-lg px-3 py-2 text-txt text-sm focus:outline-none focus:border-yellow/60 focus:ring-1 focus:ring-yellow/20 transition placeholder-muted";
+// Sizing for long-form pre/post note textareas — comfortable for full templates,
+// capped to 50vh so Save/Cancel stays reachable inside modals. Mobile-safe.
+const clsNoteArea=clsInput+" min-h-[200px] md:min-h-[240px] max-h-[50vh] resize-y overflow-y-auto";
 const clsBtn=(variant="default",sz="md")=>{
   const base="inline-flex items-center justify-center font-medium transition-all rounded-lg cursor-pointer";
   const v={
@@ -1522,7 +1610,11 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
             <div><Label>Take Profit</Label><input type="number" value={f.takeProfit} onChange={set("takeProfit")} className={clsInput+" no-spin"}/></div>
           </div>
           <div><Label>Open Date & Time</Label><input type="datetime-local" value={f.openDateTime} onChange={set("openDateTime")} className={clsInput}/></div>
-          <div><Label>Pre-trade Note</Label><textarea value={f.preNote} onChange={set("preNote")} rows={2} className={clsInput+" resize-none"}/></div>
+          <div>
+            <Label>Pre-trade Note</Label>
+            <textarea value={f.preNote} onChange={set("preNote")} rows={8} className={clsNoteArea}/>
+            <TemplateButtons kind="pre" onInsert={tpl=>setF(p=>({...p,preNote:appendTemplate(p.preNote,tpl)}))}/>
+          </div>
         </div>
         <div className="flex gap-2 px-5 py-4 border-t border-border flex-shrink-0">
           <button onClick={onCancel} className={clsBtn("default")}>ยกเลิก</button>
@@ -1683,7 +1775,11 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
           {step===6&&(
             <div className="space-y-4">
               <p className="text-txt font-semibold text-lg">บันทึก Pre-trade</p>
-              <div><Label>เหตุผลที่เข้า trade</Label><textarea value={f.preNote} onChange={set("preNote")} rows={4} placeholder="เหตุผล, แนวรับ, pattern..." className={clsInput+" resize-none"}/></div>
+              <div>
+                <Label>เหตุผลที่เข้า trade</Label>
+                <textarea value={f.preNote} onChange={set("preNote")} rows={8} placeholder="เหตุผล, แนวรับ, pattern..." className={clsNoteArea}/>
+                <TemplateButtons kind="pre" onInsert={tpl=>setF(p=>({...p,preNote:appendTemplate(p.preNote,tpl)}))}/>
+              </div>
               <ImageUploader images={f.preImages} onChange={imgs=>setF(p=>({...p,preImages:imgs}))} label="📎 แนบรูป Pre-trade"/>
             </div>
           )}
@@ -1703,7 +1799,18 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
                   <span className="text-muted">{k}</span><span className="font-medium">{v}</span>
                 </div>
               ))}
-              {f.preNote&&<div className="bg-input/40 rounded-xl px-3 py-2 text-sm text-muted whitespace-pre-wrap">{f.preNote}</div>}
+              {/* Compact preview only — the editable textarea on the same step shows the full note.
+                  Avoid duplicating the entire template body twice on one screen. */}
+              {f.preNote
+                ?(<div className="space-y-1">
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-muted">Pre-trade note</span>
+                      <span className="text-muted/60">ดู/แก้ไขในกล่องด้านบน</span>
+                    </div>
+                    <div className="bg-input/40 rounded-xl px-3 py-2 text-xs text-muted whitespace-pre-wrap line-clamp-3">{f.preNote}</div>
+                  </div>)
+                :(<div className="text-muted/60 text-[11px]">Pre-trade note: empty</div>)
+              }
             </div>
           )}
         </div>
@@ -1799,7 +1906,11 @@ function CloseTradeForm({trade,product,onClose,onCancel,showToast}){
           </div>
         </div>
         <div><Label>Win/Loss Reason</Label><textarea value={f.winLossReason} onChange={set("winLossReason")} rows={2} placeholder="เหตุผลที่ชนะ/แพ้..." className={clsInput+" resize-none"}/></div>
-        <div><Label>Post-trade Note</Label><textarea value={f.postNote} onChange={set("postNote")} rows={2} placeholder="บทเรียนที่ได้รับ..." className={clsInput+" resize-none"}/></div>
+        <div>
+          <Label>Post-trade Note</Label>
+          <textarea value={f.postNote} onChange={set("postNote")} rows={8} placeholder="บทเรียนที่ได้รับ..." className={clsNoteArea}/>
+          <TemplateButtons kind="post" onInsert={tpl=>setF(p=>({...p,postNote:appendTemplate(p.postNote,tpl)}))}/>
+        </div>
         <ImageUploader images={f.postImages} onChange={imgs=>setF(p=>({...p,postImages:imgs}))} label="📎 แนบรูป Post-trade"/>
       </div>
       <div className="flex gap-2 px-5 py-4 border-t border-border flex-shrink-0">
@@ -1930,7 +2041,11 @@ function MergedCloseForm({trade,product,onClose,onCancel,showToast}){
             </div>
           </div>
           <div><Label>Win/Loss Reason</Label><textarea value={overall.winLossReason} onChange={e=>setOverall(p=>({...p,winLossReason:e.target.value}))} rows={2} placeholder="เหตุผล..." className={clsInput+" resize-none"}/></div>
-          <div><Label>Post-trade Note</Label><textarea value={overall.postNote} onChange={e=>setOverall(p=>({...p,postNote:e.target.value}))} rows={2} placeholder="บทเรียน..." className={clsInput+" resize-none"}/></div>
+          <div>
+            <Label>Post-trade Note</Label>
+            <textarea value={overall.postNote} onChange={e=>setOverall(p=>({...p,postNote:e.target.value}))} rows={8} placeholder="บทเรียน..." className={clsNoteArea}/>
+            <TemplateButtons kind="post" onInsert={tpl=>setOverall(p=>({...p,postNote:appendTemplate(p.postNote,tpl)}))}/>
+          </div>
           <ImageUploader images={overall.postImages} onChange={imgs=>setOverall(p=>({...p,postImages:imgs}))} label="📎 แนบรูป Post-trade"/>
         </div>
       </div>
@@ -1945,7 +2060,20 @@ function MergedCloseForm({trade,product,onClose,onCancel,showToast}){
   );
 }
 
-function NoteField({label,value,onSave,editable=true}){
+function TemplateButtons({kind,onInsert}){
+  const quick=kind==="pre"?PRE_TRADE_QUICK_TEMPLATE:POST_TRADE_QUICK_TEMPLATE;
+  const full =kind==="pre"?PRE_TRADE_FULL_TEMPLATE :POST_TRADE_FULL_TEMPLATE;
+  return(
+    <div className="flex gap-2 mt-1.5">
+      <button type="button" onClick={()=>onInsert(quick)}
+        className={clsBtn("ghost","sm")+" text-[11px]"}>ใส่ Quick template</button>
+      <button type="button" onClick={()=>onInsert(full)}
+        className={clsBtn("ghost","sm")+" text-[11px]"}>ใส่ Full template</button>
+    </div>
+  );
+}
+
+function NoteField({label,value,onSave,editable=true,templateKind}){
   const[editing,setEditing]=useState(false);
   const[draft,setDraft]=useState(value||"");
   const start=()=>{setDraft(value||"");setEditing(true);};
@@ -1955,8 +2083,9 @@ function NoteField({label,value,onSave,editable=true}){
     return(
       <div>
         <span className="text-muted text-xs font-medium block mb-1.5">{label}</span>
-        <textarea value={draft} onChange={e=>setDraft(e.target.value)} rows={3} autoFocus
-          className={clsInput+" resize-none text-sm"}/>
+        <textarea value={draft} onChange={e=>setDraft(e.target.value)} rows={templateKind?8:3} autoFocus
+          className={(templateKind?clsNoteArea:(clsInput+" resize-none"))+" text-sm"}/>
+        {templateKind&&<TemplateButtons kind={templateKind} onInsert={tpl=>setDraft(d=>appendTemplate(d,tpl))}/>}
         <div className="flex gap-2 mt-2">
           <button onClick={cancel} className={clsBtn("default","sm")}>ยกเลิก</button>
           <button onClick={save} className={clsBtn("yellow","sm")}>💾 บันทึก</button>
@@ -2064,12 +2193,12 @@ function TradeDetailModal({trade,product,onClose,onUpdateTrade,onDelete,showConf
                 images={preImages}
                 onChange={imgs=>{if(onUpdateTrade)onUpdateTrade({...trade,preImages:imgs});}}
                 label="📸 Pre-trade รูป"/>
-              <NoteField label="📸 Pre-trade Note" value={trade.preNote} onSave={saveNote("preNote")} editable={true}/>
+              <NoteField label="📸 Pre-trade Note" value={trade.preNote} onSave={saveNote("preNote")} editable={true} templateKind="pre"/>
               <ImageUploader
                 images={postImages}
                 onChange={imgs=>{if(onUpdateTrade)onUpdateTrade({...trade,postImages:imgs});}}
                 label="📝 Post-trade รูป"/>
-              <NoteField label="📝 Post-trade Note" value={trade.postNote} onSave={saveNote("postNote")} editable={true}/>
+              <NoteField label="📝 Post-trade Note" value={trade.postNote} onSave={saveNote("postNote")} editable={true} templateKind="post"/>
             </>
           ):(
             <>
@@ -2628,7 +2757,12 @@ function PositionCard({trade,product,isDraft,balance,mergeMode,mergeSym,isChecke
           ):(
             <>
               <button onClick={onClose} className={`${clsBtn("red","sm")} flex-1`}>✕ ปิด</button>
-              <button onClick={()=>onMergeStart(tradeKey)} className={`${clsBtn(isMergeMode&&isChecked?"yellow":"default","sm")} px-2.5`}>🔗</button>
+              {/* Disabled: destructive merge deletes child trade rows and loses per-leg notes/images.
+                  Future replacement should be non-destructive logical grouping via group_id/trade_groups.
+                  Do not re-enable. See ROADMAP.md "Trade Grouping / Thesis Grouping". */}
+              <button type="button" disabled
+                title="Merge ปิดชั่วคราว — กำลังรอ feature ใหม่ที่ไม่ลบ note ของแต่ละไม้"
+                className={`${clsBtn("default","sm")} px-2.5 opacity-40 cursor-not-allowed`}>🔗</button>
               <button onClick={onDuplicate} className={`${clsBtn("default","sm")} px-2.5`}>⎘</button>
             </>
           )}
