@@ -191,8 +191,6 @@ const db={
         SUPA.from("notes").select("freeform,daily,updated_at").eq("user_id",uid).maybeSingle(),
         SUPA.from("user_data").select("key,value,updated_at").eq("user_id",uid),
       ]);
-      // [DIAG] trades read — TEMPORARY
-      console.warn("[trades][read] rows="+(t.data?t.data.length:"null")+" raw_present="+(t.data?t.data.filter(r=>r&&r.raw!=null).length:0)+(t.error?" error="+JSON.stringify(t.error):""));
       // Per-table errors arrive as {data:null, error:...}. Critical = trades + portfolio.
       const errors={trades:t.error,portfolio:p.error,products:pr.error,notes:n.error,user_data:ud.error};
       const failedAny=Object.values(errors).some(e=>!!e);
@@ -229,8 +227,6 @@ const db={
   },
   async saveTrades(uid,trades,knownIds){
     try{
-      // [DIAG] saveTrades entry — TEMPORARY
-      console.warn("[trades][save] entry length="+(trades?trades.length:"null")+" knownIds.size="+(knownIds?knownIds.size:0)+(trades&&trades[0]?" firstId="+trades[0].id+" firstStatus="+trades[0].status:""));
       // Null guard only. Empty-array MUST fall through so reconcile-delete can
       // propagate "user deleted their last trade" to the server. Reconcile is
       // bounded by knownIds (this tab's known set) — brand-new account
@@ -253,7 +249,7 @@ const db={
       if(rows.length>0){
         const{data:upsertedRows,error:upErr}=await SUPA.from("trades").upsert(rows,{onConflict:"id"}).select();
         if(upErr){console.warn("[trades][write] upsert-error",upErr);return{ok:false,error:upErr};}
-        // [DIAG] upsert affected rows — TEMPORARY
+        // Permanent tripwire: report and fail-fast on 0 affected rows so silent RLS / constraint denials don't pass.
         const affected=upsertedRows?upsertedRows.length:0;
         console.warn("[trades][write] upserted-affected="+affected+"/"+rows.length+" ids="+rows.map(r=>r.id).join(",")+(affected===0?" — POSSIBLE RLS / CONSTRAINT DENIAL":""));
         if(affected===0){return{ok:false,error:new Error("upsert returned 0 rows — possible RLS or constraint issue")};}
@@ -7804,8 +7800,6 @@ function App({session,onSignOut}){
       if(data.partial)console.warn("[hydrate] partial load — proceeding with available tables",data.errors);
       // Trades
       if(data.trades!=null){
-        // [DIAG] hydrate trades — TEMPORARY
-        console.warn("[trades][hydrate] length="+data.trades.length+(data.trades[0]?" firstId="+data.trades[0].id+" firstStatus="+data.trades[0].status:""));
         setTrades(data.trades);
         ls.set("tj_trades",data.trades);
       }else{
@@ -7881,8 +7875,6 @@ function App({session,onSignOut}){
   useEffect(()=>{
     if(!authUid)return;
     if(!dbReady){console.warn("[persist] skipped trades save — hydration not ready");return;}
-    // [DIAG] effect re-run — TEMPORARY
-    console.warn("[trades][set] effect-rerun length="+trades.length+(trades[0]?" firstId="+trades[0].id:""));
     clearTimeout(dbTimers.current.trades);
     const tryFire=()=>{
       if(savingRef.current.trades){
@@ -7892,8 +7884,6 @@ function App({session,onSignOut}){
         return;
       }
       savingRef.current.trades=true;
-      // [DIAG] timer fired — TEMPORARY
-      console.warn("[trades][save] timer-fired closureLength="+trades.length+" knownIds.size="+(lastSeenRef.current.tradeIds?lastSeenRef.current.tradeIds.size:0));
       db.saveTrades(authUid,trades,lastSeenRef.current.tradeIds).then(res=>{
         if(res&&res.ok){lastSeenRef.current.tradeIds=res.ids;}
         else{console.warn("[persist] trades save failed — keeping local knownIds",res);}
@@ -8168,8 +8158,6 @@ function App({session,onSignOut}){
   },[pendingWithdrawal]);
 
   const addTrade   =useCallback(t=>{
-    // [DIAG] addTrade — TEMPORARY
-    console.warn("[trades][set] source=add id="+t.id+" status="+t.status+" productId="+t.productId);
     tradeEvents.insert(t.id,"opened",{entry_price:t.entryPrice,contracts:t.contracts,direction:t.direction,product_id:t.productId});
     setTrades(p=>{
       // Arm CB if new open trade AND balance has grown >= 1 step
@@ -8195,8 +8183,6 @@ function App({session,onSignOut}){
     });
   },[products]);
   const addTrades  =useCallback(ts=>{
-    // [DIAG] addTrades (bulk import) — TEMPORARY
-    console.warn("[trades][set] source=addTrades count="+(ts?ts.length:0));
     setTrades(p=>{
       const next=[...p,...ts];
       const hasOpen=ts.some(x=>x.status==="open"||x.status==="draft");
@@ -8243,8 +8229,6 @@ function App({session,onSignOut}){
     });
   },[]);
   const updateTrade=useCallback(t=>{
-    // [DIAG] updateTrade — TEMPORARY
-    console.warn("[trades][set] source=update id="+t.id+" status="+t.status);
     if(t.status==="closed"&&t.exitPrice!=null){
       tradeEvents.insert(t.id,"closed",{exit_price:t.exitPrice,contracts:t.contracts});
     }
@@ -8261,8 +8245,6 @@ function App({session,onSignOut}){
     });
   },[]);
   const deleteTrade=useCallback(id=>{
-    // [DIAG] deleteTrade — TEMPORARY
-    console.warn("[trades][set] source=delete id="+id);
     setTrades(p=>{
       const deleted=p.find(x=>x.id===id);
       const next=p.filter(x=>x.id!==id);
