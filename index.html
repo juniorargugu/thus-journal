@@ -454,7 +454,7 @@ const sheetsSync={
   _calcMetrics(trades,products,portfolio,balance){
     const m=buildCanonicalMetrics(trades,products,portfolio,balance||0);
     const ticks=(trades||[]).filter(t=>t.status==="closed"&&t.exitPrice!=null).map(t=>{
-      const p=(products||[]).find(x=>x.id===t.productId);
+      const p=resolveProduct(products||[],t.productId);
       return p?((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1):null;
     }).filter(v=>v!=null);
     const avgTicks=ticks.length?ticks.reduce((s,v)=>s+v,0)/ticks.length:null;
@@ -468,7 +468,7 @@ const sheetsSync={
       // ── Tab 1: Open Positions ────────────────────────────────────────────
       const open=(trades||[]).filter(t=>t.status==="open"&&t.entryPrice);
       const positions=open.map(t=>{
-        const p=(products||[]).find(x=>x.id===t.productId);
+        const p=resolveProduct(products||[],t.productId);
         const rc=t.remainingContracts||t.contracts;
         const posVal=p&&t.entryPrice?((p.contractSize||1)*t.entryPrice*rc):0;
         const margin=p?(p.initialMargin||0)*rc:0;
@@ -501,13 +501,13 @@ const sheetsSync={
       const m=sheetsSync._calcMetrics(trades,products,portfolio,balance);
       const txBal=(portfolio?.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
       const realPL=(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
-        const p=(products||[]).find(x=>x.id===t.productId);
+        const p=resolveProduct(products||[],t.productId);
         return s+tradeNetPL(t,p);
       },0);
       const hwm=portfolio?.peakEquity||0;
       const ddPct=hwm>0&&balance<hwm?((hwm-balance)/hwm*100):0;
       const usedMargin=(trades||[]).filter(t=>t.status==="open").reduce((s,t)=>{
-        const p=(products||[]).find(x=>x.id===t.productId);
+        const p=resolveProduct(products||[],t.productId);
         return s+(p?(p.initialMargin||0)*(t.remainingContracts||t.contracts):0);
       },0);
       const summary={
@@ -535,7 +535,7 @@ const sheetsSync={
         next_threshold:stepData?.nextThreshold||0,
         realized_pl_by_product:Object.fromEntries(
           ["s50","gold","silver","usdjpy"].map(id=>{
-            const pl=(trades||[]).filter(t=>t.status==="closed"&&t.productId===id)
+            const pl=(trades||[]).filter(t=>t.status==="closed"&&(t.productId===id||t.productId===id+"_next"))
               .reduce((s,t)=>{const p=(products||[]).find(x=>x.id===id);return s+tradeNetPL(t,p);},0);
             return[id,+pl.toFixed(0)];
           })
@@ -554,7 +554,7 @@ const sheetsSync={
       // ── Tab 4: Closed Trades ─────────────────────────────────────────────
       const closed=(trades||[]).filter(t=>t.status==="closed");
       const closedRows=closed.map(t=>{
-        const p=(products||[]).find(x=>x.id===t.productId);
+        const p=resolveProduct(products||[],t.productId);
         const net=tradeNetPL(t,p);
         const tks=p&&t.exitPrice!=null?((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1):null;
         return{
@@ -637,11 +637,11 @@ const calcTotalDeposited=(txs)=>
 const calcCBStatus=(txs,trades,portfolio,products,livePrices)=>{
   const txBalance=txs.reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
   const realizedPL=(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
-    const p=(products||[]).find(x=>x.id===t.productId);
+    const p=resolveProduct(products||[],t.productId);
     return s+(tradeNetPL(t,p)||0);
   },0);
   const unrealizedPL=(trades||[]).filter(t=>t.status==="open"&&t.entryPrice).reduce((s,t)=>{
-    const p=(products||[]).find(x=>x.id===t.productId);if(!p)return s;
+    const p=resolveProduct(products||[],t.productId);if(!p)return s;
     const lp=(livePrices&&getLivePriceForProduct?getLivePriceForProduct(livePrices,p):null)||t.currentPrice||t.entryPrice;
     return s+((lp-t.entryPrice)/p.tickSize)*p.tickValue*(t.remainingContracts||t.contracts)*(t.direction==="Long"?1:-1);
   },0);
@@ -684,7 +684,7 @@ const tradeNetPL=(trade,product)=>{
 };
 function calcWinningPL(trades, products) {
   return (trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
-    const p=(products||[]).find(x=>x.id===t.productId);
+    const p=resolveProduct(products||[],t.productId);
     if(!p) return s;
     const pl=tradeNetPL(t,p);
     return pl>0?s+pl:s;
@@ -693,7 +693,7 @@ function calcWinningPL(trades, products) {
 const buildCanonicalMetrics=(trades,products,portfolio,balance)=>{
   const closed=(trades||[]).filter(t=>t.status==="closed"&&t.exitPrice!=null);
   const bePct=portfolio?.breakevenPct??1.0;
-  const getP=t=>(products||[]).find(p=>p.id===t.productId);
+  const getP=t=>resolveProduct(products||[],t.productId);
 
   // P/L per trade — always broker-first
   const nets=closed.map(t=>tradeNetPL(t,getP(t)));
@@ -1260,7 +1260,7 @@ function ProfitReminderBanner({trades,products,balance}){
   // Find open trades with unrealized P/L > 5% of balance
   const alerts=[];
   (trades||[]).filter(t=>t.status==="open"&&t.entryPrice).forEach(t=>{
-    const p=(products||[]).find(x=>x.id===t.productId);
+    const p=resolveProduct(products||[],t.productId);
     if(!p)return;
     const livePrice=p._livePrice||p.entryPrice;
     const unrealPL=calcNetPL(p,t.contracts,t.entryPrice,livePrice,t.direction);
@@ -1288,7 +1288,7 @@ function ProfitReminderBanner({trades,products,balance}){
 
 function IMAlertBanner({trades,products,balance,livePrices,liveTimestamps}){
   const usedMargin=(trades||[]).filter(t=>t.status==="open").reduce((s,t)=>{
-    const p=(products||[]).find(x=>x.id===t.productId);
+    const p=resolveProduct(products||[],t.productId);
     return s+(p?(p.initialMargin||0)*(t.remainingContracts||t.contracts):0);
   },0);
   // Gold market hours check (ICT = UTC+7)
@@ -1307,7 +1307,7 @@ function IMAlertBanner({trades,products,balance,livePrices,liveTimestamps}){
     const seen=new Set();
     return openTrades.filter(t=>{
       if(seen.has(t.productId))return false;
-      const p=(products||[]).find(x=>x.id===t.productId);
+      const p=resolveProduct(products||[],t.productId);
       const key=p?contractToLiveKey(p._baseId||p.id,t.contractCode||p.currentContract,p.baseSymbol):t.productId;
       const ts=liveTimestamps&&(liveTimestamps[key]||liveTimestamps[t.productId]);
       if(!ts)return false;
@@ -1460,7 +1460,7 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
     const pv=calcPositionValue(product,contracts,ep);
     const gx=calcGearingX(pv,balance);
     const existingPV=(openTrades||[]).filter(t=>t.id!==initialData?.id&&t.status==="open")
-      .reduce((s,t)=>{const p=products.find(x=>x.id===t.productId)||products.find(x=>t.productId.startsWith(x.id));return s+calcPositionValue(p,t.contracts,t.entryPrice);},0);
+      .reduce((s,t)=>{const p=resolveProduct(products,t.productId)||products.find(x=>t.productId.startsWith(x.id));return s+calcPositionValue(p,t.contracts,t.entryPrice);},0);
     const combinedGX=calcGearingX(existingPV+pv,balance);
     const vpc=product&&ep>0?product.contractSize*ep:0;
     const limit=GEARING_LIMITS[f.setupType]||5;
@@ -1516,7 +1516,7 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
     const recentBigWins=(trades||[]).filter(t=>{
       if(t.status!=="closed"||!t.exitDateTime)return false;
       if(t.exitDateTime.slice(0,10)!==today2)return false;
-      const p=products.find(x=>x.id===t.productId);
+      const p=resolveProduct(products,t.productId);
       const n=calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);
       return balance>0&&n/balance*100>=threshold;
     });
@@ -2514,7 +2514,7 @@ function useEquityHWM(trades,portfolio,products,authUid){
       delta:tx.type==="deposit"?tx.amount:-tx.amount,
     }));
     const tradeEvents=trades.filter(t=>t.status==="closed"&&t.exitDateTime).map(t=>{
-      const prod=products.find(p=>p.id===t.productId);
+      const prod=resolveProduct(products,t.productId);
       return{date:t.exitDateTime.slice(0,10),delta:tradeNetPL(t,prod)};
     });
     const allEvents=[...txEvents,...tradeEvents].sort((a,b)=>a.date.localeCompare(b.date));
@@ -2543,7 +2543,7 @@ function useEquityHWM(trades,portfolio,products,authUid){
         const openDate=t.openDateTime.slice(0,10);
         const closeDate=t.exitDateTime?t.exitDateTime.slice(0,10):"9999-12-31";
         if(date<openDate||date>closeDate)return;
-        const prod=products.find(p=>p.id===t.productId);
+        const prod=resolveProduct(products,t.productId);
         if(!prod)return;
         const sym=prod.yahooSymbol;
         const prices=cache[sym]||{};
@@ -2777,7 +2777,7 @@ function StepsProgressBar({portfolio,trades,products,compact=true}){
   const totalDeposited=calcTotalDeposited(txs);
 
   const realizedPL=useMemo(()=>(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
-    const p=(products||[]).find(p=>p.id===t.productId);
+    const p=resolveProduct(products||[],t.productId);
     return s+tradeNetPL(t,p);
   },0),[trades,products]);
 
@@ -2885,7 +2885,7 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authU
   const[selectedStepCell,setSelectedStepCell]=useState(null);
 
   const realizedPL=useMemo(()=>(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
-    const p=(products||[]).find(p=>p.id===t.productId);
+    const p=resolveProduct(products||[],t.productId);
     return s+tradeNetPL(t,p);
   },0),[trades,products]);
 
@@ -3111,12 +3111,12 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authU
             const cl2=(trades||[]).filter(t=>t.status==="closed");
             const bePct3=portfolio?.breakevenPct??1.0;
             let w2=0,l2=0,be2=0;
-            cl2.forEach(t=>{const p=(products||[]).find(x=>x.id===t.productId);const n=calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);const pct3=balance>0?n/balance*100:0;if(Math.abs(pct3)<bePct3)be2++;else if(n>0)w2++;else l2++;});
+            cl2.forEach(t=>{const p=resolveProduct(products||[],t.productId);const n=calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);const pct3=balance>0?n/balance*100:0;if(Math.abs(pct3)<bePct3)be2++;else if(n>0)w2++;else l2++;});
             return <span className="text-xs text-muted">{cl2.length} trades · <span className="text-green font-semibold">{w2}W</span> <span className="text-red font-semibold">{l2}L</span> <span className="text-muted font-semibold">{be2}BE</span></span>;
           })()} · avg P/L: {(()=>{
             const cl=(trades||[]).filter(t=>t.status==="closed");
             if(!cl.length)return"—";
-            const tot=cl.reduce((s,t)=>{const p=(products||[]).find(p=>p.id===t.productId);return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);},0);
+            const tot=cl.reduce((s,t)=>{const p=resolveProduct(products||[],t.productId);return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);},0);
             return`${tot/cl.length>=0?"+":""}${fmtTHB(tot/cl.length,0)} ฿`;
           })()}
         </div>
@@ -3222,12 +3222,12 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
     const cp=lp!=null?lp:(t.currentPrice||t.entryPrice);
     return s+calcPL(p,t.contracts,t.entryPrice,cp,t.direction);
   },0),[openTrades,products,livePrices]);
-  const wins=closedTrades.filter(t=>{const p=products.find(p=>p.id===t.productId);return calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction)>0;}).length;
+  const wins=closedTrades.filter(t=>{const p=resolveProduct(products,t.productId);return calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction)>0;}).length;
   const winRate=closedTrades.length?((wins/closedTrades.length)*100).toFixed(0):null;
   const todayStr=new Date().toDateString();
   const todayPL=useMemo(()=>closedTrades
     .filter(t=>t.exitDateTime&&new Date(t.exitDateTime).toDateString()===todayStr)
-    .reduce((s,t)=>{const p=products.find(p=>p.id===t.productId);return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);},0)
+    .reduce((s,t)=>{const p=resolveProduct(products,t.productId);return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);},0)
   ,[closedTrades,products,todayStr]);
 
   const handleDuplicate=(trade)=>{
@@ -3270,7 +3270,7 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
     if(tid)setMergeIds(prev=>[...prev,tid]);
   };
   const cancelMerge=()=>{setMergeMode(false);setMergeSym(null);setMergeIds([]);};
-  const closingProduct=closingTrade?products.find(p=>p.id===closingTrade.productId):null;
+  const closingProduct=closingTrade?resolveProduct(products,closingTrade.productId):null;
   const useMergedClose=closingTrade?.isMerged&&(closingTrade?.subTrades||[]).length>0;
 
   return(
@@ -3344,7 +3344,7 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
                 {(()=>{
                   const bePctX=portfolio?.breakevenPct??1.0;
                   let wX=0,lX=0,beX=0;
-                  closedTrades.forEach(t=>{const p=products.find(x=>x.id===t.productId);const n=calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);const pct=balance>0?n/balance*100:0;if(Math.abs(pct)<bePctX)beX++;else if(n>0)wX++;else lX++;});
+                  closedTrades.forEach(t=>{const p=resolveProduct(products,t.productId);const n=calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);const pct=balance>0?n/balance*100:0;if(Math.abs(pct)<bePctX)beX++;else if(n>0)wX++;else lX++;});
                   return(<div><span className={`text-xs font-semibold ${winRate&&+winRate>=50?"text-green":winRate?"text-red":"text-muted"}`}>{winRate?`${winRate}%`:"—"}</span><div className="flex items-center gap-1 mt-0.5 flex-wrap"><span className="text-[10px] font-bold px-1 py-0.5 rounded bg-green/15 text-green">{wX}W</span><span className="text-[10px] font-bold px-1 py-0.5 rounded bg-red/15 text-red">{lX}L</span>{beX>0&&<span className="text-[10px] font-bold px-1 py-0.5 rounded bg-muted/15 text-muted">{beX}BE</span>}</div></div>);
                 })()}
               </div>
@@ -3440,7 +3440,7 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
           <h2 className="font-semibold text-txt mb-3">Plans / Drafts <span className="text-muted font-normal text-sm">({draftTrades.length})</span></h2>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
             {draftTrades.map(t=>{
-              const p=products.find(p=>p.id===t.productId);
+              const p=resolveProduct(products,t.productId);
               return(
                 <PositionCard key={t.id} trade={t} product={p} isDraft={true} balance={balance}
                   mergeMode={false} mergeSym={null} isChecked={false} onCheck={()=>{}}
@@ -3481,12 +3481,12 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
         )
       )}
       {updatingPrice&&(
-        <UpdatePriceModal trade={updatingPrice} product={products.find(p=>p.id===updatingPrice.productId)}
+        <UpdatePriceModal trade={updatingPrice} product={resolveProduct(products,updatingPrice.productId)}
           onSubmit={price=>{onUpdateTrade({...updatingPrice,currentPrice:price});setUpdatingPrice(null);}}
           onCancel={()=>setUpdatingPrice(null)}/>
       )}
       {detailTrade&&(
-        <TradeDetailModal trade={detailTrade} product={products.find(p=>p.id===detailTrade.productId)}
+        <TradeDetailModal trade={detailTrade} product={resolveProduct(products,detailTrade.productId)}
           onClose={()=>setDetailTrade(null)}
           onUpdateTrade={t=>{onUpdateTrade(t);setDetailTrade(t);}}/>
       )}
@@ -3532,22 +3532,22 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onDeleteTr
 
   const filtered=useMemo(()=>{
     let r=[...closed];
-    if(filters.product)  r=r.filter(t=>t.productId===filters.product);
+    if(filters.product)  r=r.filter(t=>t.productId===filters.product||t.productId===filters.product+"_next");
     if(filters.direction)r=r.filter(t=>t.direction===filters.direction);
     if(filters.setup)    r=r.filter(t=>t.setupType===filters.setup);
     if(filters.rating)   r=r.filter(t=>t.tradeRating===+filters.rating);
     if(filters.dateFrom) r=r.filter(t=>t.exitDateTime&&new Date(t.exitDateTime)>=new Date(filters.dateFrom));
     if(filters.dateTo)   r=r.filter(t=>t.exitDateTime&&new Date(t.exitDateTime)<=new Date(filters.dateTo+"T23:59:59"));
     r.sort((a,b)=>{
-      const getPL=t=>{const p=products.find(p=>p.id===t.productId);return t.exitPrice!=null?calcPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0;};
-      const getNetPL=t=>{const p=products.find(p=>p.id===t.productId);return t.exitPrice!=null?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0;};
+      const getPL=t=>{const p=resolveProduct(products,t.productId);return t.exitPrice!=null?calcPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0;};
+      const getNetPL=t=>{const p=resolveProduct(products,t.productId);return t.exitPrice!=null?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0;};
       let va,vb;
-      const getTks=t=>{const p=products.find(p=>p.id===t.productId);if(!p||t.exitPrice==null)return 0;return((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1);};
+      const getTks=t=>{const p=resolveProduct(products,t.productId);if(!p||t.exitPrice==null)return 0;return((t.exitPrice-t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1);};
       if(sortKey==="pl"){va=getPL(a);vb=getPL(b);}
       else if(sortKey==="netpl"){va=getNetPL(a);vb=getNetPL(b);}
       else if(sortKey==="ticks"){va=getTks(a);vb=getTks(b);}
-    else if(sortKey==="comm"){const pa=products.find(p=>p.id===a.productId);const pb2=products.find(p=>p.id===b.productId);va=pa?getRoundTripComm(pa)*a.contracts:0;vb=pb2?getRoundTripComm(pb2)*b.contracts:0;}
-    else if(sortKey==="outcome"){const bePct2=portfolio?.breakevenPct??1.0;const toOrd=t=>{const pp=products.find(p=>p.id===t.productId);const n=calcNetPL(pp,t.contracts,t.entryPrice,t.exitPrice,t.direction);const bal=balance||1;const pct2=n/bal*100;return Math.abs(pct2)<bePct2?1:n>0?0:2;};va=toOrd(a);vb=toOrd(b);}
+    else if(sortKey==="comm"){const pa=resolveProduct(products,a.productId);const pb2=resolveProduct(products,b.productId);va=pa?getRoundTripComm(pa)*a.contracts:0;vb=pb2?getRoundTripComm(pb2)*b.contracts:0;}
+    else if(sortKey==="outcome"){const bePct2=portfolio?.breakevenPct??1.0;const toOrd=t=>{const pp=resolveProduct(products,t.productId);const n=calcNetPL(pp,t.contracts,t.entryPrice,t.exitPrice,t.direction);const bal=balance||1;const pct2=n/bal*100;return Math.abs(pct2)<bePct2?1:n>0?0:2;};va=toOrd(a);vb=toOrd(b);}
       else{
         var isDate=(sortKey==="openDateTime"||sortKey==="exitDateTime");
         if(isDate){
@@ -3570,7 +3570,7 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onDeleteTr
       {children}{sortKey===k&&<span className="ml-0.5">{sortAsc?"▲":"▼"}</span>}
     </th>
   );
-  const filteredWins=filtered.filter(t=>{const p=products.find(p=>p.id===t.productId);return t.exitPrice!=null&&tradeNetPL(t,p)>0;}).length;
+  const filteredWins=filtered.filter(t=>{const p=resolveProduct(products,t.productId);return t.exitPrice!=null&&tradeNetPL(t,p)>0;}).length;
   const closedFiltered=filtered.filter(t=>t.exitPrice!=null);
 
   const[mergeActive,setMergeActive]=useState(false);
@@ -3612,7 +3612,7 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onDeleteTr
     let wCount=0,lCount=0,beCount=0;
     filtered.forEach(t=>{
       if(t.exitPrice==null)return;
-      const pp=products.find(p=>p.id===t.productId);
+      const pp=resolveProduct(products,t.productId);
       const n=tradeNetPL(t,pp);
       const pct4=balance>0?n/balance*100:0;
       if(Math.abs(pct4)<bePct4)beCount++;
@@ -3658,7 +3658,7 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onDeleteTr
               var wb=window.XLSX.utils.book_new();
               var headers=["Date","Product","Direction","Contracts","Entry","Exit","Ticks","Gross P/L","Net P/L","Commission","Setup","Note"];
               var rows=filtered.map(function(t){
-                var p=(products||[]).find(function(x){return x.id===t.productId;});
+                var p=resolveProduct(products||[],t.productId);
                 var tks=(p&&t.exitPrice!=null)?((+t.exitPrice-+t.entryPrice)/p.tickSize)*(t.direction==="Long"?1:-1):null;
                 var gross=p&&t.exitPrice!=null?calcPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
                 var net=p&&t.exitPrice!=null?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
@@ -3695,9 +3695,9 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onDeleteTr
       {filtered.length>0&&(
         <div className="flex gap-5 px-1 text-sm items-center flex-wrap">
           <span className="text-muted">{filtered.length} trades</span>
-          <span className="text-muted text-xs">Gross: <PLDisplay value={filtered.reduce((s,t)=>{const p=products.find(p=>p.id===t.productId);return s+(t.exitPrice!=null?calcPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0);},0)}/></span>
-          <span className="text-muted text-xs">Comm: <span className="text-red/60 font-semibold tabular-nums">-{fmtTHB(filtered.filter(t=>t.exitPrice!=null).reduce((s,t)=>{const p=products.find(p=>p.id===t.productId);return s+(p?getRoundTripComm(p)*t.contracts:0);},0),0)} ฿</span></span>
-          <span className="text-muted text-xs">Net: <PLDisplay value={filtered.reduce((s,t)=>{const p=products.find(p=>p.id===t.productId);return s+(t.exitPrice!=null?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0);},0)}/></span>
+          <span className="text-muted text-xs">Gross: <PLDisplay value={filtered.reduce((s,t)=>{const p=resolveProduct(products,t.productId);return s+(t.exitPrice!=null?calcPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0);},0)}/></span>
+          <span className="text-muted text-xs">Comm: <span className="text-red/60 font-semibold tabular-nums">-{fmtTHB(filtered.filter(t=>t.exitPrice!=null).reduce((s,t)=>{const p=resolveProduct(products,t.productId);return s+(p?getRoundTripComm(p)*t.contracts:0);},0),0)} ฿</span></span>
+          <span className="text-muted text-xs">Net: <PLDisplay value={filtered.reduce((s,t)=>{const p=resolveProduct(products,t.productId);return s+(t.exitPrice!=null?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0);},0)}/></span>
           <span className={closedFiltered.length>0&&filteredWins/closedFiltered.length>=0.5?"text-green":"text-red"}>
             WR {closedFiltered.length>0?(filteredWins/closedFiltered.length*100).toFixed(0):"—"}%
           </span>
@@ -3750,7 +3750,7 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onDeleteTr
                 </td></tr>
               )}
               {filtered.map((t,i)=>{
-                const p=products.find(p=>p.id===t.productId);
+                const p=resolveProduct(products,t.productId);
                 const grossPL=calcPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);
                 const netPL=calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);
                 const pct=balance&&balance>0?(netPL/balance*100):null;
@@ -3819,7 +3819,7 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onDeleteTr
       {detail&&(
         <TradeDetailModal
           trade={detail}
-          product={products.find(p=>p.id===detail.productId)}
+          product={resolveProduct(products,detail.productId)}
           onClose={()=>setDetail(null)}
           onUpdateTrade={t=>{onUpdateTrade(t);setDetail(t);}}
           onDelete={onDeleteTrade}
@@ -4781,7 +4781,7 @@ function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onP
                             <td className="py-1.5 pl-2 text-muted whitespace-nowrap">{t.openDateTime?.slice(0,10)||"—"}</td>
                             <td className="py-1.5 text-center">{(()=>{
                               if(t.status!=="closed"||t.exitPrice==null)return<span className="text-[10px] px-1.5 py-0.5 rounded bg-yellow/10 text-yellow/70">open</span>;
-                              const p=products.find(p=>p.id===t.productId);
+                              const p=resolveProduct(products,t.productId);
                               const net=p?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
                               if(net==null)return<span className="text-muted text-[10px]">—</span>;
                               return net>0
@@ -4845,7 +4845,7 @@ function OvertradeDet({overtrades,getUnit,balance,products}){
       <div className="space-y-1.5">
         {show.map(function(t){
           var unit=getUnit(t.productId);
-          var p=t._p||(products||[]).find(function(pr){return pr.id===t.productId;});
+          var p=t._p||resolveProduct(products||[],t.productId);
           var pv=p?calcPositionValue(p,t.contracts,t.entryPrice):0;
           var gearing=balance>0?pv/balance:0;
           var loss=p?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):0;
@@ -4886,7 +4886,7 @@ function PageDashboard({trades,products,balance,portfolio,equityHWM,l2Loading,l2
   const[timeFilter,setTimeFilter]=useState("all");
   const[activeSetups,setActiveSetups]=useState(()=>new Set(SETUP_TYPES));
 
-  const getP=useCallback(t=>(products||[]).find(p=>p.id===t.productId),[products]);
+  const getP=useCallback(t=>resolveProduct(products||[],t.productId),[products]);
 
   const allClosed=useMemo(()=>(trades||[]).filter(t=>t.status==="closed"&&t.exitDateTime).sort((a,b)=>new Date(a.exitDateTime)-new Date(b.exitDateTime)),[trades]);
 
@@ -5764,7 +5764,7 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
   const totalWithdrawals=portfolio.transactions.filter(t=>t.type!=="deposit").reduce((s,t)=>s+t.amount,0);
 
   const realizedPL=useMemo(()=>(trades||[]).filter(t=>t.status==="closed").reduce((s,t)=>{
-    const p=(products||[]).find(x=>x.id===t.productId);
+    const p=resolveProduct(products||[],t.productId);
     return s+tradeNetPL(t,p);
   },0),[trades,products]);
 
@@ -5948,7 +5948,7 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
         </div>
         <div className="space-y-3">
           {products.map(p=>{
-            const openCount=(trades||[]).filter(t=>t.productId===p.id&&t.status==="open").length;
+            const openCount=(trades||[]).filter(t=>(t.productId===p.id||t.productId===p.id+"_next")&&t.status==="open").length;
             return(
               <div key={p.id} className="bg-input/20 border border-border rounded-xl p-4 space-y-3">
                 <div className="flex items-start justify-between gap-2">
@@ -7065,7 +7065,7 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
   const calData=useMemo(()=>{
     const m={};
     (trades||[]).forEach(t=>{
-      const prod=(products||[]).find(p=>p.id===t.productId);
+      const prod=resolveProduct(products||[],t.productId);
       // closed trades
       if(t.status==="closed"&&t.exitDateTime){
         const net=calcNetPL(prod,t.contracts,t.entryPrice,t.exitPrice,t.direction);
@@ -7213,11 +7213,11 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
                       const dayTrades=(trades||[]).filter(t=>isActiveOnDate(t,selectedDate));
                       const closedToday=dayTrades.filter(t=>t.status==="closed"&&t.exitDateTime?.startsWith(selectedDate));
                       const activePositions=dayTrades.filter(t=>t.status==="open"||!t.exitDateTime?.startsWith(selectedDate));
-                      const w=closedToday.filter(t=>{const p=(products||[]).find(pr=>pr.id===t.productId);return t.exitPrice!=null&&calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction)>0;}).length;
+                      const w=closedToday.filter(t=>{const p=resolveProduct(products||[],t.productId);return t.exitPrice!=null&&calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction)>0;}).length;
                       const l=closedToday.filter(t=>t.exitPrice!=null).length-w;
 
                       const renderTradeCard=(t)=>{
-                        const p=(products||[]).find(pr=>pr.id===t.productId);
+                        const p=resolveProduct(products||[],t.productId);
                         const netPL=t.exitPrice!=null?calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction):null;
                         const isWin=netPL!=null&&netPL>0;
                         const isOpen=t.exitPrice==null;
@@ -7363,7 +7363,7 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
             )}
 
             {timelineTrades.map(t=>{
-              const p=(products||[]).find(x=>x.id===t.productId);
+              const p=resolveProduct(products||[],t.productId);
               const tStart=t.openDateTime.slice(0,10);
               const rawEnd=t.status==="open"?today:(t.exitDateTime?.slice(0,10)||today);
               const clampedStart=tStart<moStartStr?moStartStr:tStart;
@@ -7605,7 +7605,7 @@ function App({session,onSignOut}){
     const now=new Date().toISOString();
     const txBalance2=(portfolio?.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-t.amount),0);
     const realizedPL2=trades.filter(t=>t.status==="closed").reduce((s,t)=>{
-      const p=products.find(x=>x.id===t.productId);
+      const p=resolveProduct(products,t.productId);
       return s+tradeNetPL(t,p);
     },0);
     const bal2=txBalance2+realizedPL2;
@@ -7613,7 +7613,7 @@ function App({session,onSignOut}){
 
     // IM Alert
     const usedM=trades.filter(t=>t.status==="open").reduce((s,t)=>{
-      const p=products.find(x=>x.id===t.productId);
+      const p=resolveProduct(products,t.productId);
       return s+(p?(p.initialMargin||0)*(t.remainingContracts||t.contracts):0);
     },0);
     if(bal2>0&&usedM/bal2>=0.8){
@@ -7644,7 +7644,7 @@ function App({session,onSignOut}){
 
     // Profit reminder per open trade
     trades.filter(t=>t.status==="open"&&t.entryPrice).forEach(t=>{
-      const p=products.find(x=>x.id===t.productId);
+      const p=resolveProduct(products,t.productId);
       if(!p)return;
       const lp=getLivePrice(livePrices,t,p)||t.currentPrice||t.entryPrice;
       const unreal=((lp-t.entryPrice)/p.tickSize)*p.tickValue*(t.remainingContracts||t.contracts)*(t.direction==="Long"?1:-1);
@@ -7667,7 +7667,7 @@ function App({session,onSignOut}){
     const cooldownPct=portfolio?.cooldownPct??20;
     const todayClosedTrades=trades.filter(t=>t.status==="closed"&&t.exitDateTime&&t.exitDateTime.slice(0,10)===today);
     todayClosedTrades.forEach(t=>{
-      const p=products.find(x=>x.id===t.productId);
+      const p=resolveProduct(products,t.productId);
       const n=calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);
       if(bal2>0&&n/bal2*100>=cooldownPct){
         const notifId="bigwin_"+t.id+"_"+today;
@@ -7682,7 +7682,7 @@ function App({session,onSignOut}){
     if(pRB.length>0){
       const dRB=["อาทิตย์","จันทร์","อังคาร","พุธ","พฤหัส","ศุกร์","เสาร์"][new Date().getDay()];
       trades.filter(t=>t.status==="open").forEach(t=>{
-        const p=products.find(x=>x.id===t.productId);
+        const p=resolveProduct(products,t.productId);
         const base=p?.baseSymbol||t.productId||"";
         pRB.forEach(pat=>{if((pat.product==="ทุก Product"||pat.product===base||pat.product===t.productId)&&(pat.day==="ทุกวัน"||pat.day===dRB)){candidates.push({id:"pat_"+pat.id+"_"+t.id+"_"+today,type:pat.severity==="danger"?"danger":pat.severity==="info"?"info":"warn",icon:"🧠",title:"Pattern: "+pat.trigger.slice(0,40),detail:(t.contractCode||p?.currentContract||t.productId)+" · "+t.direction,msg:pat.action,time:now});}});
       });
@@ -8010,7 +8010,7 @@ function App({session,onSignOut}){
 
   const txBalance=useMemo(()=>(portfolio.transactions||[]).reduce((s,t)=>s+(t.type==="deposit"?t.amount:-(t.amount)),0),[portfolio]);
   const realizedPL=useMemo(()=>trades.filter(t=>t.status==="closed").reduce((s,t)=>{
-    const p=products.find(x=>x.id===t.productId);
+    const p=resolveProduct(products,t.productId);
     return s+tradeNetPL(t,p);
   },0),[trades,products]);
   const balance=txBalance+realizedPL;
@@ -8040,14 +8040,14 @@ function App({session,onSignOut}){
     const m=buildCanonicalMetrics(trades,products,portfolio,balance);
     const open=trades.filter(t=>t.status==="open"&&t.entryPrice);
     const usedMargin=open.reduce((s,t)=>{
-      const p=products.find(x=>x.id===t.productId);
+      const p=resolveProduct(products,t.productId);
       return s+(p?(p.initialMargin||0)*(t.remainingContracts||t.contracts):0);
     },0);
     const realPL=trades.filter(t=>t.status==="closed")
-      .reduce((s,t)=>s+tradeNetPL(t,products.find(x=>x.id===t.productId)),0);
+      .reduce((s,t)=>s+tradeNetPL(t,resolveProduct(products,t.productId)),0);
     const livePricesSnap=livePricesRef.current||{};
     const unrealizedPL=open.reduce((s,t)=>{
-      const p=products.find(x=>x.id===t.productId);
+      const p=resolveProduct(products,t.productId);
       if(!p)return s;
       const livePrice=livePricesSnap[t.productId]||t.currentPrice||t.entryPrice;
       if(!livePrice)return s;
@@ -8085,13 +8085,13 @@ function App({session,onSignOut}){
       next_threshold:stepThresholds[currentStep]||0,
       realized_pl_by_product:Object.fromEntries(
         ["s50","gold","silver","usdjpy"].map(id=>{
-          const pl=trades.filter(t=>t.status==="closed"&&t.productId===id)
+          const pl=trades.filter(t=>t.status==="closed"&&(t.productId===id||t.productId===id+"_next"))
             .reduce((s,t)=>s+tradeNetPL(t,products.find(x=>x.id===id)),0);
           return[id,+pl.toFixed(0)];
         })
       ),
       open_positions:open.map(t=>{
-        const p=products.find(x=>x.id===t.productId);
+        const p=resolveProduct(products,t.productId);
         return{
           symbol:t.contractCode||(p?p.currentContract:t.productId)||"",
           side:t.direction||"",
@@ -8163,7 +8163,7 @@ function App({session,onSignOut}){
       // Arm CB if new open trade AND balance has grown >= 1 step
       if(t.status==="open"||t.status==="draft"){
         const closedPL=p.filter(x=>x.status==="closed").reduce((s,x)=>{
-          const prod=products.find(pr=>pr.id===x.productId);
+          const prod=resolveProduct(products,x.productId);
           return s+(tradeNetPL(x,prod)||0);
         },0);
         setPortfolio(pf=>{
@@ -8188,7 +8188,7 @@ function App({session,onSignOut}){
       const hasOpen=ts.some(x=>x.status==="open"||x.status==="draft");
       if(hasOpen){
         const closedPL=next.filter(x=>x.status==="closed").reduce((s,x)=>{
-          const prod=products.find(pr=>pr.id===x.productId);
+          const prod=resolveProduct(products,x.productId);
           return s+(tradeNetPL(x,prod)||0);
         },0);
         setPortfolio(pf=>{
