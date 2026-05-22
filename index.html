@@ -1316,6 +1316,18 @@ function IMAlertBanner({trades,products,balance,livePrices,liveTimestamps}){
     }).map(t=>t.productId);
   },[trades,products,liveTimestamps]);
   const marginPct=(!balance||balance<=0||usedMargin<=0)?0:usedMargin/balance*100;
+  // Broker-style margin level estimate = equity / usedMargin. equity = balance + open unrealized.
+  // Omitted (null) if any open trade's live price is missing or stale — never show a precise
+  // level estimate built on unreliable prices.
+  let imUnreal=0,imPriceComplete=true;
+  (trades||[]).filter(t=>t.status==="open"&&t.entryPrice).forEach(t=>{
+    const p=resolveProduct(products||[],t.productId);
+    const lp=getLivePrice(livePrices,t,p);
+    if(lp==null){imPriceComplete=false;return;}
+    imUnreal+=calcPL(p,t.contracts,t.entryPrice,lp,t.direction);
+  });
+  const marginLevelPct=(imPriceComplete&&staleProducts.length===0&&usedMargin>0&&balance>0)
+    ?((balance+imUnreal)/usedMargin*100):null;
   if(marginPct<100&&staleProducts.length===0)return null;
   return(
     <div className="space-y-2 mb-3">
@@ -1324,8 +1336,8 @@ function IMAlertBanner({trades,products,balance,livePrices,liveTimestamps}){
           <span className="text-xl">⚠️</span>
           <div>
             <span className="font-semibold text-red">Margin Alert</span>
-            <span className="text-muted ml-2">Initial Margin ใช้ {fmtTHB(usedMargin,0)} ฿ ({marginPct.toFixed(0)}% ของ balance) — ดู Margin Level จาก MT5</span>
-            <div className="text-muted/50 text-[10px] mt-0.5">* คำนวณจาก usedIM/balance ไม่ใช่ MT5 Margin Level</div>
+            <span className="text-muted ml-2">Initial Margin ใช้ {fmtTHB(usedMargin,0)} ฿ · Usage {marginPct.toFixed(0)}% ของ balance{marginLevelPct!=null?` · Margin level ≈ ${marginLevelPct.toFixed(0)}%`:""}</span>
+            <div className="text-muted/50 text-[10px] mt-0.5">{marginLevelPct!=null?"* ประมาณการจาก IM ใน Journal — ยืนยัน Margin Level จริงใน MT5":"* คำนวณจาก usedIM/balance — ยืนยัน Margin Level จริงใน MT5"}</div>
           </div>
         </div>
       )}
@@ -7618,10 +7630,23 @@ function App({session,onSignOut}){
     },0);
     if(bal2>0&&usedM/bal2>=0.8){
       const bucket=Math.floor(usedM/bal2*10)*10;
+      const usagePct=usedM/bal2*100;
+      // Broker-style margin level estimate = equity / usedM. Omitted if any open trade's
+      // live price is missing — keep usage-only detail rather than a number built on gaps.
+      let imUnreal=0,imPriceComplete=true;
+      trades.filter(t=>t.status==="open"&&t.entryPrice).forEach(t=>{
+        const p=resolveProduct(products,t.productId);
+        const lp=getLivePrice(livePrices,t,p);
+        if(lp==null){imPriceComplete=false;return;}
+        imUnreal+=calcPL(p,t.contracts,t.entryPrice,lp,t.direction);
+      });
+      const imLevelPct=(imPriceComplete&&usedM>0)?((bal2+imUnreal)/usedM*100):null;
       candidates.push({id:`im_${today}_${bucket}`,type:"danger",icon:"⚠️",
-        title:"Margin Alert",
-        detail:`ใช้ margin ${(usedM/bal2*100).toFixed(0)}% ของ balance`,
-        msg:"IM เหลือน้อย — ระวัง margin call",time:now});
+        title:"Margin Usage Alert",
+        detail:imLevelPct!=null
+          ?`Usage ${usagePct.toFixed(0)}% ของ balance · Margin level ≈ ${imLevelPct.toFixed(0)}%`
+          :`Usage ${usagePct.toFixed(0)}% ของ balance`,
+        msg:"Margin usage สูง — ตรวจสอบ Margin Level จริงใน MT5",time:now});
     }
 
     // Circuit Breaker — step-threshold based
