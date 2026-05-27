@@ -362,6 +362,91 @@ Specifically do not:
 - import Capture Bot `checkin_events` into Notes automatically. Notes is for
   curated knowledge; check-ins are time-series behavioral captures.
 
+### 2026-05-27 — Post-GUGU-audit clarification + bulk-import gate
+
+After the first Phase 2 GUGU shadow cycle produced a `notify_candidate` driven
+by remembered XAUUSD zone arithmetic (not market cognition), the GUGU
+cognition layer is now frozen and the Notes-first dependency is more concrete.
+This subsection clarifies how the existing "Trigger to revisit" rule should be
+read going forward. It does **not** change the deferred-design rule above — it
+sharpens it.
+
+#### GUGU cognition freeze (separate from Capture Bot)
+
+- No second `shadow_cycle` run.
+- No `cycle_agent` progression.
+- No `/gugu_run` registration in Telegram.
+- No `CAPTURE_ONLY_MODE=false`.
+- Capture Bot check-ins continue normally:
+  `/status`, `/checkin`, `/checkin_trade`, `/review_today`, scheduled
+  daily + during-trade prompts. None of that is affected by the freeze.
+
+#### Notes-first trigger — clarified
+
+The "≥ 20–30 real notes" trigger above is about **content density**, not
+about Junior typing every note by hand through PageNotes UI. If real
+hand-written notes already exist outside THUS (e.g. paper, chat exports,
+external markdown), a reviewed bulk import that lands in PageNotes is an
+acceptable way to satisfy the spirit of the trigger.
+
+The trigger is satisfied when both hold:
+1. ≥ 20–30 real notes are visible in PageNotes (typed or imported).
+2. The imported content was reviewed and shaped per the rules below — not
+   dumped wholesale.
+
+#### Bulk-import principle
+
+If notes are imported in bulk:
+
+- Do NOT paste raw notes straight into `public.notes.freeform` or the
+  `tj_notes` localStorage key. The previous `gugu_memory` import (78 rows
+  from archived `bot_knowledge`) showed what unfiltered bulk does: it floods
+  retrieval with framework arithmetic and biases the LLM toward stale zones.
+- Prepare a reviewable `import_preview.json` first. Junior reviews and
+  filters before any write touches localStorage or Supabase.
+- Map each imported note to the existing PageNotes schema only:
+  `{id, type, content, source, tags[], createdAt, reviewCount, lastReviewed}`.
+- Use the existing 4-type taxonomy (`quote`, `rule`, `lesson`, `idea`)
+  per `docs/notes_taxonomy.md`. No new types.
+- Use tags for lightweight lifecycle hints **for now**, not new columns:
+  `#active`, `#stale`, `#historical`, `#needs_review`, `#hypothesis`,
+  `#mentor`, market tags (`#gold`, `#s50`, `#silver`, `#usdjpy`), regime
+  tags (`#trend`, `#range`, `#breakout`, `#sideway`).
+- Do NOT add new lifecycle columns, schema, or RLS policies until real
+  imported usage reveals an actual unfilled need. That session is gated by
+  the "Future revisit" below.
+
+#### Import safety gates
+
+Before any bulk import:
+
+1. Backup current `tj_notes` localStorage and a copy of
+   `public.notes.freeform` (export to a local file). The current row is one
+   JSON blob per user; without a backup, recovery is manual.
+2. Preferred path is local browser-console import that flows through the
+   normal app save path (localStorage → `db.saveNotes` → cloud), so
+   `dbReady`, `savingRef`, optimistic concurrency, and the reconcile-delete
+   guarantee from commit `f03ed03` all apply.
+3. No direct `UPDATE public.notes SET freeform = …` as the first import
+   path. SQL updates bypass the app save path and lose those guarantees.
+4. No GUGU unfreeze automatically follows from a successful import. The
+   freeze is a policy decision, not an infrastructure state.
+5. After import, observe real PageNotes usage (search, filter, "จำแล้ว"
+   review, edits) for some time before designing any lifecycle schema.
+
+#### Future revisit (Session B)
+
+When both hold:
+- Reviewed bulk import has landed, AND
+- Notes have been in real Junior use at scale for long enough to show what
+  lifecycle / filtering / structure the actual corpus needs,
+
+then a separate **Session B** designs the minimal schema change (likely tag
+conventions first, columns only if needed). Only after Session B ships and
+Junior approves does a separate GUGU prompt/eval patch session — followed by
+an explicit go-ahead — unfreeze the GUGU cognition layer for a second
+shadow cycle.
+
 ---
 
 ## Capture Bot Day 4 prep *(reminder only — do NOT patch in Journal)*
