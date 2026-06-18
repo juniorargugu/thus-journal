@@ -180,6 +180,36 @@ const ls={
 };
 const SUPA=window._supabaseClient;
 
+// ─── Save guards ──────────────────────────────────────────────────────────
+// Refuse to persist demo/mock trades to production. MOCK_TRADES uses ids m1..m21
+// (/^m\d+$/) — that id-shape is the canonical demo signature. Placed at the single
+// canonical writer (db.saveTrades) so EVERY caller — debounced autosave AND
+// close-save/commitClose — is covered. See P0 invalid-smoke diagnosis 2026-06-15.
+const detectUnsafeMockTrades=trades=>{
+  if(!Array.isArray(trades))return{unsafe:false,ids:[],reason:null};
+  const ids=trades.filter(t=>t&&/^m\d+$/.test(String(t.id))).map(t=>t.id);
+  return ids.length>0?{unsafe:true,ids,reason:"mock_demo_trade_ids"}:{unsafe:false,ids:[],reason:null};
+};
+// Map a failed close-save result to a user-facing message. Guard hits get a
+// specific reason; everything else falls back to the generic retry toast.
+const closeFailMessage=res=>
+  res&&res.guard==="mock_demo_trades"?"Local app loaded demo trades; refusing to save to production."
+  :res&&res.guard==="affected_trade_missing"?"Trade not found in local state; reload from production before closing."
+  :"บันทึกการปิดไม่สำเร็จ — ลองใหม่อีกครั้ง";
+// Shared trade→row mapper — SINGLE source of truth for the trades row shape, used by BOTH
+// the full-array writer db.saveTrades AND the single-row close writer db.saveTrade, so the
+// columnar+raw shape can never diverge. The two `||` falsy-zero fallbacks are load-bearing —
+// remaining_contracts:0 (fully-closed leg) and note:"" must map exactly as below.
+const toTradeRow=(uid,t)=>({
+  id:t.id, user_id:uid,
+  product_id:t.productId, direction:t.direction,
+  status:t.status, contracts:t.contracts,
+  remaining_contracts:t.remainingContracts||t.contracts,
+  entry_price:t.entryPrice, exit_price:t.exitPrice,
+  entry_date:t.entryDate, exit_date:t.exitDate,
+  note:t.note||null, raw:t,
+});
+
 // ─── Supabase DB helpers ──────────────────────────────────────────────────
 const db={
   async loadAll(uid){
@@ -232,22 +262,23 @@ const db={
       // bounded by knownIds (this tab's known set) — brand-new account
       // (knownIds empty) and divergent-tab cases stay safe. See audit P0-1.
       if(!trades){return{ok:true,ids:knownIds||new Set()};}
-      const rows=trades.map(t=>({
-        id:t.id, user_id:uid,
-        product_id:t.productId, direction:t.direction,
-        status:t.status, contracts:t.contracts,
-        remaining_contracts:t.remainingContracts||t.contracts,
-        entry_price:t.entryPrice, exit_price:t.exitPrice,
-        entry_date:t.entryDate, exit_date:t.exitDate,
-        note:t.note||null, raw:t,
-      }));
+      // Mock/demo guard — never write demo rows (ids m1..m21) to production.
+      // Covers every writer that reuses this canonical save path (autosave + close-save).
+      const mockCheck=detectUnsafeMockTrades(trades);
+      if(mockCheck.unsafe){
+        console.warn("[trades][guard] refusing to save mock/demo trades",{ids:mockCheck.ids,reason:mockCheck.reason});
+        return{ok:false,error:new Error("Refusing to save mock/demo trades"),guard:"mock_demo_trades",ids:mockCheck.ids};
+      }
+      const rows=trades.map(t=>toTradeRow(uid,t));   // shared mapper (no raw/columnar divergence with db.saveTrade)
       // Step 1: upsert by id (atomic per row, no destructive window).
-      // .select() forces PostgREST to return the affected rows so we can verify
-      // server-side success vs silent RLS / constraint denial.
+      // .select("id") returns one minimal {id} per affected row for RLS/constraint
+      // verification WITHOUT the ~11 MB RETURNING payload (raw carries base64 images).
+      // This is a mitigation only — the request body is still the full array, so a
+      // large autosave can still 57014; the close path uses db.saveTrade (single row).
       // Skip when rows is empty — nothing to write, but reconcile-delete below
       // still runs to propagate deletion of the last trade.
       if(rows.length>0){
-        const{data:upsertedRows,error:upErr}=await SUPA.from("trades").upsert(rows,{onConflict:"id"}).select();
+        const{data:upsertedRows,error:upErr}=await SUPA.from("trades").upsert(rows,{onConflict:"id"}).select("id");
         if(upErr){console.warn("[trades][write] upsert-error",upErr);return{ok:false,error:upErr};}
         // Permanent tripwire: report and fail-fast on 0 affected rows so silent RLS / constraint denials don't pass.
         const affected=upsertedRows?upsertedRows.length:0;
@@ -270,6 +301,34 @@ const db={
       // We deliberately do NOT include unknown server ids — otherwise next reconcile would delete them.
       return{ok:true,ids:localIds};
     }catch(e){console.warn("[db] saveTrades error",e);return{ok:false,error:e};}
+  },
+  // Single-row durable CLOSE writer (P0 timeout fix). Upserts ONLY the affected row
+  // (~≤1.5 MB vs the full ~11 MB array) so it stays inside the statement-timeout budget.
+  // No full-array, no reconcile-delete, no knownIds. .select("id") verifies the row landed
+  // (RLS/constraint tripwire) without RETURNING raw. Mock guard runs first. Never throws.
+  async saveTrade(uid,trade){
+    try{
+      if(!uid||!trade||trade.id==null){return{ok:false,error:new Error("saveTrade: missing uid/trade/id")};}
+      // Mock/demo guard — array-wrapped (a bare object returns {unsafe:false}). Skips Supabase.
+      const mockCheck=detectUnsafeMockTrades([trade]);
+      if(mockCheck.unsafe){
+        console.warn("[trades][guard] refusing to save mock/demo trades",{ids:mockCheck.ids,reason:mockCheck.reason});
+        return{ok:false,error:new Error("Refusing to save mock/demo trades"),guard:"mock_demo_trades",ids:mockCheck.ids};
+      }
+      const row=toTradeRow(uid,trade);
+      // Array-wrapped [row] so `data` is reliably an array of one across supabase-js versions.
+      const{data,error}=await SUPA.from("trades").upsert([row],{onConflict:"id"}).select("id");
+      if(error){console.warn("[trades][write1] upsert-error",error);return{ok:false,error};}
+      const ids=(data||[]).map(r=>r.id);
+      // String() BOTH sides: PostgREST returns the bigint id as a JSON string while
+      // trade.id from raw is a JS number — strict !== would ALWAYS misfire.
+      if(ids.length!==1||String(ids[0])!==String(trade.id)){
+        console.warn("[trades][write1] affected!=1 or id mismatch",{got:ids,gotType:typeof ids[0],want:trade.id});
+        return{ok:false,error:new Error("single-row upsert did not affect exactly the target row")};
+      }
+      console.log("[close-save] durable ok (single-row)",{id:String(trade.id)});
+      return{ok:true,id:String(trade.id),ids:new Set([String(trade.id)]),mode:"single"};
+    }catch(e){console.warn("[db] saveTrade error",e);return{ok:false,error:e};}
   },
   async savePortfolio(uid,data,expectedUpdatedAt){
     try{
@@ -948,13 +1007,13 @@ function InstaImageGrid({images,height1="h-44",heightN="h-36"}){
   );
 }
 
-const Modal=({title,onClose,children,width="max-w-lg"})=>(
+const Modal=({title,onClose,children,width="max-w-lg",busy=false})=>(
   <div className="fixed inset-0 bg-black/75 backdrop-blur-sm flex items-center justify-center z-50 p-4"
-    onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    onClick={e=>{if(!busy&&e.target===e.currentTarget)onClose();}}>
     <div className={`fade-in bg-card border border-border rounded-xl w-full ${width} shadow-2xl max-h-[92vh] flex flex-col`}>
       <div className="flex items-center justify-between px-5 py-4 border-b border-border flex-shrink-0">
         <h2 className="font-semibold text-txt">{title}</h2>
-        <button onClick={onClose} className="text-muted hover:text-txt transition w-7 h-7 flex items-center justify-center rounded hover:bg-input">✕</button>
+        <button onClick={busy?undefined:onClose} disabled={busy} className="text-muted hover:text-txt transition w-7 h-7 flex items-center justify-center rounded hover:bg-input disabled:opacity-30 disabled:cursor-not-allowed">✕</button>
       </div>
       <div className="overflow-y-auto flex-1">{children}</div>
     </div>
@@ -1866,18 +1925,23 @@ function CloseTradeForm({trade,product,onClose,onCancel,showToast}){
     exitDateTime:localNow(),exitReason:"Manual",feeling:"😊",
     tradeRating:3,winLossReason:"",postNote:"",postImages:[],
   });
+  const[saving,setSaving]=useState(false);
   const set=k=>e=>setF(p=>({...p,[k]:e.target.value}));
   const pl=(product&&f.exitPrice)?calcNetPL(product,trade.contracts,trade.entryPrice,+f.exitPrice,trade.direction):null;
   const tickDiff=(product&&f.exitPrice&&trade.entryPrice)?Math.abs((+f.exitPrice-trade.entryPrice)/product.tickSize):0;
   const showPriceWarning=tickDiff>500;
 
-  const handleSubmit=()=>{
+  const handleSubmit=async()=>{
     if(!f.exitPrice){showToast("กรุณากรอก Exit Price","error");return;}
-    onClose({...f,exitPrice:+f.exitPrice});
+    if(saving)return;
+    setSaving(true);
+    const res=await onClose({...f,exitPrice:+f.exitPrice});
+    // On durable success the parent unmounts this modal; re-enable only on failure.
+    if(!res||!res.ok){setSaving(false);showToast(closeFailMessage(res),"error");}
   };
 
   return(
-    <Modal title={`ปิด Order — ${product?.currentContract||"?"}`} onClose={onCancel} width="max-w-lg">
+    <Modal title={`ปิด Order — ${product?.currentContract||"?"}`} onClose={onCancel} width="max-w-lg" busy={saving}>
       <div className="p-5 space-y-4">
         <div className="bg-input/50 rounded-lg p-3 grid grid-cols-3 gap-3 text-sm">
           <div><span className="text-muted text-xs block">Entry</span><span className="font-semibold">{fmtNum(trade.entryPrice,product?.digits||1)}</span></div>
@@ -1922,8 +1986,8 @@ function CloseTradeForm({trade,product,onClose,onCancel,showToast}){
         <ImageUploader images={f.postImages} onChange={imgs=>setF(p=>({...p,postImages:imgs}))} label="📎 แนบรูป Post-trade"/>
       </div>
       <div className="flex gap-2 px-5 py-4 border-t border-border flex-shrink-0">
-        <button onClick={onCancel} className={clsBtn("default")}>ยกเลิก</button>
-        <button onClick={handleSubmit} className={`${clsBtn("red")} flex-1`}>✕ ยืนยันปิด Order</button>
+        <button onClick={onCancel} disabled={saving} className={clsBtn("default")+" disabled:opacity-30 disabled:cursor-not-allowed"}>ยกเลิก</button>
+        <button onClick={handleSubmit} disabled={saving} className={`${clsBtn("red")} flex-1 disabled:opacity-50 disabled:cursor-not-allowed`}>{saving?"กำลังบันทึก…":"✕ ยืนยันปิด Order"}</button>
       </div>
     </Modal>
   );
@@ -1943,14 +2007,24 @@ function MergedCloseForm({trade,product,onClose,onCancel,showToast}){
     subTradeId:st.id,contracts:st.contracts,entryPrice:st.entryPrice,selected:true,
     exitPrice:String(trade.currentPrice||st.entryPrice||""),exitDateTime:localNow(),exitReason:"Manual",
   })));
+  // Declared BEFORE the all-done early-return so hook order is identical on every render
+  // of this instance (Rules of Hooks). Shared by the partial path and the all-done branch.
+  const[saving,setSaving]=useState(false);
+  const handleConfirmClose=async(updated)=>{
+    if(saving)return {ok:false};
+    setSaving(true);
+    const res=await onClose(updated);
+    if(!res||!res.ok){setSaving(false);showToast(closeFailMessage(res),"error");}
+    return res;
+  };
   if(openSubs.length===0&&trade.isMerged)return(
-    <Modal title="ปิด Order" onClose={onCancel} width="max-w-xs">
+    <Modal title="ปิด Order" onClose={onCancel} width="max-w-xs" busy={saving}>
       <div className="p-5 space-y-4 text-center">
         <div className="text-2xl">✅</div>
         <p className="text-sm text-txt">ปิดครบทุก contracts แล้ว</p>
         <div className="flex gap-2 justify-center">
-          <button onClick={onCancel} className={clsBtn("default")}>ยกเลิก</button>
-          <button onClick={()=>onClose({...trade,status:"closed"})} className={clsBtn("yellow")}>ยืนยันปิด Order</button>
+          <button onClick={onCancel} disabled={saving} className={clsBtn("default")+" disabled:opacity-30 disabled:cursor-not-allowed"}>ยกเลิก</button>
+          <button onClick={()=>handleConfirmClose({...trade,status:"closed"})} disabled={saving} className={clsBtn("yellow")+" disabled:opacity-50 disabled:cursor-not-allowed"}>{saving?"กำลังบันทึก…":"ยืนยันปิด Order"}</button>
         </div>
       </div>
     </Modal>
@@ -1967,7 +2041,7 @@ function MergedCloseForm({trade,product,onClose,onCancel,showToast}){
     return s+calcNetPL(product,it.contracts,it.entryPrice,+it.exitPrice,trade.direction);
   },0);
   const contractOffset=(trade.partialCloses||[]).length;
-  const handleSubmit=()=>{
+  const handleSubmit=async()=>{
     if(!sel.length){showToast("กรุณาเลือกอย่างน้อย 1 contract","error");return;}
     if(sel.find(it=>!it.exitPrice||+it.exitPrice<=0)){showToast("กรุณากรอก Exit Price ให้ครบ","error");return;}
     const newPCs=sel.map(it=>({
@@ -1989,11 +2063,11 @@ function MergedCloseForm({trade,product,onClose,onCancel,showToast}){
         winLossReason:overall.winLossReason,postNote:overall.postNote,postImages:overall.postImages,
       }:{}),
     };
-    onClose(updated);
-    showToast(allDone?`ปิด order เรียบร้อย (${trade.contracts} สัญญา)`:`ปิด ${totalC} สัญญา · เหลือ ${remaining} สัญญา`,"success");
+    // Durable save via the parent; success toast + modal-close happen only after ok.
+    await handleConfirmClose(updated);
   };
   return(
-    <Modal title={`ปิด ${product?.currentContract||"?"} — ${trade.contracts} contracts total`} onClose={onCancel} width="max-w-xl">
+    <Modal title={`ปิด ${product?.currentContract||"?"} — ${trade.contracts} contracts total`} onClose={onCancel} width="max-w-xl" busy={saving}>
       <div className="p-5 space-y-5">
         {(trade.partialCloses||[]).length>0&&(
           <div className="bg-input/40 rounded-lg px-3 py-2.5 text-xs text-muted">
@@ -2058,10 +2132,10 @@ function MergedCloseForm({trade,product,onClose,onCancel,showToast}){
         </div>
       </div>
       <div className="flex gap-2 px-5 py-4 border-t border-border flex-shrink-0">
-        <button onClick={onCancel} className={clsBtn("default")}>ยกเลิก</button>
-        <button onClick={handleSubmit} disabled={!sel.length}
+        <button onClick={onCancel} disabled={saving} className={clsBtn("default")+" disabled:opacity-30 disabled:cursor-not-allowed"}>ยกเลิก</button>
+        <button onClick={handleSubmit} disabled={saving||!sel.length}
           className={`${clsBtn("red")} flex-1 disabled:opacity-30 disabled:cursor-not-allowed`}>
-          ✕ ปิด {totalC} contracts ที่เลือก
+          {saving?"กำลังบันทึก…":`✕ ปิด ${totalC} contracts ที่เลือก`}
         </button>
       </div>
     </Modal>
@@ -3204,7 +3278,7 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authU
     </div>
   );
 }
-function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTrade,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
+function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTrade,onCommitClose,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
   const[showForm,setShowForm]=useState(false);
   const[editTrade,setEditTrade]=useState(null);
   const[closingTrade,setClosingTrade]=useState(null);
@@ -3484,11 +3558,11 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
       {closingTrade&&closingProduct&&(
         useMergedClose?(
           <MergedCloseForm trade={closingTrade} product={closingProduct}
-            onClose={updated=>{onUpdateTrade(updated);setClosingTrade(null);}}
+            onClose={async updated=>{const res=await onCommitClose(updated); if(res&&res.ok){setClosingTrade(null); showToast(updated.status==="closed"?"ปิด order เรียบร้อย":`ปิด ${updated.contracts-(updated.remainingContracts||0)} สัญญา · เหลือ ${updated.remainingContracts} สัญญา`,"success");} return res;}}
             onCancel={()=>setClosingTrade(null)} showToast={showToast}/>
         ):(
           <CloseTradeForm trade={closingTrade} product={closingProduct}
-            onClose={d=>{onUpdateTrade({...closingTrade,...d,status:"closed"});setClosingTrade(null);showToast("ปิด order เรียบร้อย","success");}}
+            onClose={async d=>{const res=await onCommitClose({...closingTrade,...d,status:"closed"}); if(res&&res.ok){setClosingTrade(null); showToast("ปิด order เรียบร้อย","success");} return res;}}
             onCancel={()=>setClosingTrade(null)} showToast={showToast}/>
         )
       )}
@@ -7797,6 +7871,62 @@ function App({session,onSignOut}){
   // so a second save for the same resource never starts before the previous one returns.
   // Unrelated resources are independent (separate flags).
   const savingRef=useRef({trades:false,portfolio:false,products:false,notes:false,notif:false,patterns:false});
+  // ── Close-save durability (C+A+D) — serialize ALL trades writes (debounced autosave
+  // + immediate close save) on ONE promise chain so they never overlap or clobber
+  // lastSeenRef. Autosave → db.saveTrades (full array); close → db.saveTrade (single row).
+  // Never rejects.
+  const tradesSavePromiseRef=useRef(null);
+  // (D) Post-hydration autosave-echo suppressor — rising-edge detector on dbReady. Stays
+  // false until the dbReady false→true edge (the render where `trades` first holds the
+  // hydrated array); that one redundant full-array write-back is skipped. The first real
+  // user edit (a later render, dbReady already true) autosaves normally. Batching-robust.
+  const prevDbReadyRef=useRef(false);
+  const saveTradesSerialized=useCallback((payload,meta)=>{
+    const info=meta||{};
+    const isClose=info.source==="close";   // close → payload is a single trade OBJECT; else an ARRAY
+    try{
+      const prev=(tradesSavePromiseRef.current||Promise.resolve()).catch(()=>{});
+      const p=prev.then(async()=>{
+        savingRef.current.trades=true;
+        try{
+          if(isClose){
+            // CLOSE path FIRST — passing the OBJECT into db.saveTrades would TypeError on trades.map(...).
+            // Object-shaped affected-trade guard (the array form below no-ops on an object).
+            if(info.affectedTradeId!=null&&(!payload||payload.id!==info.affectedTradeId)){
+              console.warn("[close-save][guard] affected trade missing from close payload",{affectedTradeId:info.affectedTradeId});
+              return {ok:false,error:new Error("Affected trade missing from close payload"),guard:"affected_trade_missing"};
+            }
+            const res=await db.saveTrade(authUid,payload);   // single row — no knownIds, no reconcile
+            // Do NOT touch lastSeenRef.tradeIds on close: the id is already known and db.saveTrade
+            // returns no full id-set; an assignment here would wipe it and silently disable reconcile-delete.
+            if(!(res&&res.ok))console.warn("[close-save] saveTrade not ok",{res});
+            return res||{ok:false,error:new Error("saveTrade returned no result")};
+          }
+          // AUTOSAVE / full-array path — payload is the trades ARRAY.
+          if(info.affectedTradeId!=null&&Array.isArray(payload)&&!payload.some(t=>t&&t.id===info.affectedTradeId)){
+            console.warn("[close-save][guard] affected trade missing from save snapshot",{affectedTradeId:info.affectedTradeId});
+            return {ok:false,error:new Error("Affected trade missing from save snapshot"),guard:"affected_trade_missing"};
+          }
+          const res=await db.saveTrades(authUid,payload,lastSeenRef.current.tradeIds);
+          if(res&&res.ok){
+            lastSeenRef.current.tradeIds=res.ids;   // only on non-close full-array success (!isClose)
+          }else{
+            console.warn("[close-save] saveTrades not ok",{source:info.source,res});
+          }
+          return res||{ok:false,error:new Error("saveTrades returned no result")};
+        }catch(e){
+          console.warn("[close-save] save threw",{source:info.source,error:e});
+          return {ok:false,error:e};
+        }finally{
+          savingRef.current.trades=false;
+        }
+      });
+      tradesSavePromiseRef.current=p;
+      return p;
+    }catch(e){
+      return Promise.resolve({ok:false,error:e});
+    }
+  },[authUid]);
   // portfolio_summary persistence:
   //   livePricesRef    — non-reactive snapshot of livePrices, read inside the persistence
   //                      path so livePrices ticks alone do NOT trigger writes.
@@ -7896,30 +8026,21 @@ function App({session,onSignOut}){
     });
     return()=>{if(retryTimer)clearTimeout(retryTimer);};
   },[authUid,loadAttempt]);
-  // Save to Supabase on changes (1.5 s debounce, serialized per resource)
+  // Save to Supabase on changes (1.5 s debounce). Routes through saveTradesSerialized so
+  // the debounced autosave shares ONE promise chain with the immediate close save — no
+  // overlap, no TOCTOU busy-poll, no lastSeenRef clobber. (Sheets-sync auto-fire stays
+  // disabled, hidden in Settings since 2026-05-12.)
   useEffect(()=>{
     if(!authUid)return;
     if(!dbReady){console.warn("[persist] skipped trades save — hydration not ready");return;}
+    // (D) Suppress the post-hydration echo: fire once on the dbReady false→true edge (also the
+    // render where `trades` first holds the hydrated array). Robust to React batching — does NOT
+    // depend on a pre-set flag consumed in the same render as setTrades. First real user edit schedules.
+    if(!prevDbReadyRef.current){prevDbReadyRef.current=true;return;}
     clearTimeout(dbTimers.current.trades);
-    const tryFire=()=>{
-      if(savingRef.current.trades){
-        // Another trades save is in flight. Defer until it completes; the latest
-        // closure (with the freshest trades) will fire once savingRef clears.
-        dbTimers.current.trades=setTimeout(tryFire,200);
-        return;
-      }
-      savingRef.current.trades=true;
-      db.saveTrades(authUid,trades,lastSeenRef.current.tradeIds).then(res=>{
-        if(res&&res.ok){lastSeenRef.current.tradeIds=res.ids;}
-        else{console.warn("[persist] trades save failed — keeping local knownIds",res);}
-        // Sheets-sync auto-fire on trade save disabled 2026-05-12: feature
-        // hidden in Settings. Re-enabling requires un-hiding the Settings UI
-        // and restoring this block; keep sheetsSync object intact for now.
-      }).finally(()=>{savingRef.current.trades=false;});
-    };
-    dbTimers.current.trades=setTimeout(tryFire,1500);
+    dbTimers.current.trades=setTimeout(()=>{saveTradesSerialized(trades,{source:"autosave"});},1500);
     return()=>clearTimeout(dbTimers.current.trades);
-  },[trades,authUid]);
+  },[trades,authUid,dbReady]);
   useEffect(()=>{
     if(!authUid)return;
     if(!dbReady){console.warn("[persist] skipped portfolio save — hydration not ready");return;}
@@ -8269,6 +8390,24 @@ function App({session,onSignOut}){
       return next;
     });
   },[]);
+  // ── Close-save durability (C+A+D) — narrow exception to the frozen persistence
+  // architecture, scoped to the close path ONLY. SAVE-FIRST: AWAIT a durable single-row
+  // write (db.saveTrade via saveTradesSerialized) on the EXPLICIT updatedTrade object,
+  // and mutate local state (updateTrade → CB-disarm) ONLY on res.ok — so no React state
+  // shows the trade closed and no circuit-breaker disarm fires before the server confirms.
+  // No flushSync, no snapshot capture, no schema, no loadAll/hydration change. Caller owns success UX.
+  const commitClose=useCallback(async(updatedTrade)=>{
+    try{
+      clearTimeout(dbTimers.current.trades);   // cancel any pending debounced autosave so it can't race the close save
+      const res=await saveTradesSerialized(updatedTrade,{source:"close",affectedTradeId:updatedTrade.id});
+      if(res&&res.ok){
+        updateTrade(updatedTrade);   // ONLY now: apply close to state + CB-disarm (never before res.ok)
+        return {ok:true};
+      }
+      // Failure: state untouched (trade stays open, CB armed); caller keeps modal open + retry.
+      return {ok:false,error:(res&&res.error)||new Error("close save failed"),guard:res&&res.guard};
+    }catch(e){console.warn("[close-save] commitClose error",e);return {ok:false,error:e};}
+  },[updateTrade,saveTradesSerialized]);
   const deleteTrade=useCallback(id=>{
     setTrades(p=>{
       const deleted=p.find(x=>x.id===id);
@@ -8304,6 +8443,13 @@ function App({session,onSignOut}){
 
   return(
     <div className="min-h-screen bg-primary text-txt">
+      {/* Smoke-gate hydration signal — permanent, hidden, view-independent. Carries one
+          [data-trade-id] per loaded trade so the pre-smoke gate can count all trades, find a
+          target id, and scan for demo ids, WITHOUT relying on the localStorage mirror or a
+          tab-specific list. Renders only post-dbReady. No visual/logic/secret impact. */}
+      <div hidden aria-hidden="true" data-tj-trade-index>
+        {trades.map(t=><span key={t.id} data-trade-id={t.id}/>)}
+      </div>
             <NotificationCenter
         history={notifHistory}
         show={showNotif}
@@ -8412,7 +8558,7 @@ function App({session,onSignOut}){
       )}
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
-        {page==="positions"&&<PagePositions trades={trades} products={products} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onUpdateTrade={updateTrade} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
+        {page==="positions"&&<PagePositions trades={trades} products={products} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onUpdateTrade={updateTrade} onCommitClose={commitClose} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
         {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onDeleteTrade={deleteTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid} equityHWM={equityHWM} dailyPoints={dailyPoints} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio} equityHWM={equityHWM} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
