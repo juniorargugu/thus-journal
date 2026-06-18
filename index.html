@@ -77,10 +77,15 @@ const DEFAULT_PRODUCTS=[
   {id:"silver",name:"Silver Futures", baseSymbol:"SVF",   currentContract:"SVFM26",   nextContract:getNextSeries("SVFM26"),   series:"M26",category:"TXM",contractSize:3000,tickSize:0.01,tickValue:30,currency:"THB",digits:2,tvSymbol:"OANDA:XAGUSD", yahooSymbol:"SI=F", initialMargin:58065, commissionPerLeg:100,vatEnabled:true,vatRate:0.07},
   {id:"usdjpy",name:"USD/JPY Futures",baseSymbol:"USDJPY",currentContract:"USDJPYM26",nextContract:getNextSeries("USDJPYM26"),series:"M26",category:"TXC",contractSize:300, tickSize:0.01,tickValue:3, currency:"THB",digits:2,tvSymbol:"OANDA:USDJPY", yahooSymbol:"JPY=X",initialMargin:1505,  commissionPerLeg:100,vatEnabled:true,vatRate:0.07},
 ];
-const expandProducts=(prods)=>prods.flatMap(p=>[
-  {...p,_displayId:p.id,_seriesLabel:"Active"},
-  {...p,id:p.id+"_next",_displayId:p.id+"_next",currentContract:p.nextContract,_seriesLabel:"Next",_baseId:p.id},
-]);
+const expandProducts=(prods)=>prods.flatMap(p=>{
+  const active={...p,_displayId:p.id,_seriesLabel:"Active"};
+  // The synthetic `_next` series is a FUTURES concept (roll contracts). Non-futures products
+  // (stock/crypto/manual) have no series, so they expand to the base product alone. `kind` is
+  // derived at read time via productKind() — never persisted. Every current product is a future,
+  // so futures still emit active + next exactly as before — zero behavior change today.
+  if(productKind(p)!=="tfex_futures")return [active];
+  return [active,{...p,id:p.id+"_next",_displayId:p.id+"_next",currentContract:p.nextContract,_seriesLabel:"Next",_baseId:p.id}];
+});
 const resolveProduct=(products,pid)=>{
   if(!pid)return undefined;
   if(pid.endsWith("_next")){const base=pid.replace("_next","");return products.find(p=>p.id===base);}
