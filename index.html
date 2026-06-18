@@ -4136,7 +4136,15 @@ function resolveProductCode(v,products){
 // written back into a product, Supabase, or localStorage.
 function productKind(product){
   if(!product)return "unknown";
-  // Today every product is a TFEX future; classification stays runtime-only (not persisted).
+  // Runtime-only inference (Phase 3B). NEVER mutates the product and is NEVER persisted — it is
+  // derived on read, exactly like the Phase-2A price source. Explicit non-futures markers win;
+  // otherwise the product is treated as a TFEX future (the only real kind today), so the four
+  // existing DEFAULT_PRODUCTS — and any current product — classify exactly as before.
+  // NOTE: no stock/crypto/manual products exist yet; the markers below are forward placeholders.
+  if(product.manualPriceOnly===true)return "manual";
+  if(product.assetKind==="stock"||product.assetKind==="crypto"||product.assetKind==="manual")return product.assetKind;
+  // Futures markers: a series contract, a roll contract, a fixed initial margin, or a TFEX (TXx)
+  // category. All four defaults carry these; absence still defaults to futures to preserve behavior.
   return "tfex_futures";
 }
 // Phase-2A read-only price-source classifier. `live` is the ALREADY-RESOLVED getLivePrice()
@@ -4182,18 +4190,29 @@ function createProductRegistry(products){
     },
     kind:function(product){return productKind(product);},
     // Dev-only diagnostics — console warnings ONLY. Never alters math, price selection,
-    // persistence, or product objects. Silent for valid data.
+    // persistence, or product objects. Kind-aware (Phase 3B) but stays SILENT for the four valid
+    // futures; new warnings only fire for malformed or (future) non-futures product shapes.
     warnInvariants:function(){
       list.forEach(function(p){
         if(!p||!p.id)return;
-        if(p.tickSize&&p.tickValue&&p.contractSize){
+        var kind=productKind(p);
+        // Economic triple — required by calcPL / calcPositionValue for every tradable kind.
+        if(!(p.tickSize>0)||!(p.tickValue>0)||!(p.contractSize>0)){
+          console.warn("[product-registry] missing/invalid economic triple (tickSize/tickValue/contractSize)",{id:p.id,kind:kind,tickSize:p.tickSize,tickValue:p.tickValue,contractSize:p.contractSize});
+        }else{
           var implied=p.tickValue/p.tickSize;
           if(Math.abs(implied-p.contractSize)>Math.max(1e-6,p.contractSize*1e-6)){
             console.warn("[product-registry] contractSize != tickValue/tickSize",{id:p.id,contractSize:p.contractSize,impliedFromTicks:implied});
           }
         }
         if(!p.baseSymbol)console.warn("[product-registry] product missing baseSymbol",{id:p.id});
-        if(!p.currentContract)console.warn("[product-registry] product missing currentContract",{id:p.id});
+        // Futures need a current contract; non-futures legitimately don't — but a non-futures
+        // product carrying futures-only fields is likely a mis-tagged shape worth flagging.
+        if(kind==="tfex_futures"){
+          if(!p.currentContract)console.warn("[product-registry] futures product missing currentContract",{id:p.id});
+        }else if(p.currentContract||p.nextContract||p.series||p.initialMargin){
+          console.warn("[product-registry] non-futures product unexpectedly has futures-only fields",{id:p.id,kind:kind});
+        }
       });
     },
   };
