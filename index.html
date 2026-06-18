@@ -4106,6 +4106,57 @@ function resolveProductCode(v,products){
   return{productId:null,contractCode:s};
 }
 
+// ─── ProductRegistry (Phase 1 facade) ────────────────────────────────────────
+// Pure, runtime-only facade over the EXISTING product array + helpers. It centralizes
+// product / symbol / live-price ACCESS behind one object and adds a runtime `kind` seam
+// for future asset-class work. It changes NO existing behavior: every method delegates to
+// the canonical top-level helpers (resolveProduct / expandProducts / contractToLiveKey /
+// getLivePrice / getLivePriceForProduct / resolveProductCode), which stay the single source
+// of truth, so the existing 40+ call sites are untouched. `kind` is RUNTIME-ONLY — never
+// written back into a product, Supabase, or localStorage.
+function productKind(product){
+  if(!product)return "unknown";
+  // Today every product is a TFEX future; classification stays runtime-only (not persisted).
+  return "tfex_futures";
+}
+function createProductRegistry(products){
+  var list=Array.isArray(products)?products:[];
+  return {
+    raw:list,
+    resolve:function(pid){return resolveProduct(list,pid);},
+    expand:function(){return expandProducts(list);},
+    resolveCode:function(code){return resolveProductCode(code,list);},
+    // Mirrors getLivePrice's key derivation exactly (see getLivePrice above).
+    priceKeyForTrade:function(trade,product){
+      var p=product||resolveProduct(list,trade&&trade.productId);
+      if(!p)return (trade&&trade.productId)||null;
+      return contractToLiveKey(p._baseId||p.id,(trade&&trade.contractCode)||p.currentContract,p.baseSymbol);
+    },
+    resolveLivePrice:function(trade,livePrices,product){
+      return getLivePrice(livePrices,trade,product||resolveProduct(list,trade&&trade.productId));
+    },
+    resolveLivePriceForProduct:function(product,livePrices){
+      return getLivePriceForProduct(livePrices,product);
+    },
+    kind:function(product){return productKind(product);},
+    // Dev-only diagnostics — console warnings ONLY. Never alters math, price selection,
+    // persistence, or product objects. Silent for valid data.
+    warnInvariants:function(){
+      list.forEach(function(p){
+        if(!p||!p.id)return;
+        if(p.tickSize&&p.tickValue&&p.contractSize){
+          var implied=p.tickValue/p.tickSize;
+          if(Math.abs(implied-p.contractSize)>Math.max(1e-6,p.contractSize*1e-6)){
+            console.warn("[product-registry] contractSize != tickValue/tickSize",{id:p.id,contractSize:p.contractSize,impliedFromTicks:implied});
+          }
+        }
+        if(!p.baseSymbol)console.warn("[product-registry] product missing baseSymbol",{id:p.id});
+        if(!p.currentContract)console.warn("[product-registry] product missing currentContract",{id:p.id});
+      });
+    },
+  };
+}
+
 const COLUMN_MAP={
   "Product":      function(v,products){
     var r=resolveProductCode(v,products);
@@ -7712,6 +7763,11 @@ function App({session,onSignOut}){
   const[trades,   setTrades]   =useState([]);
   const[portfolio,setPortfolio]=useState({transactions:[],stepBaseMode:"first_deposit"});
   const[products, setProducts] =useState(DEFAULT_PRODUCTS);
+  // Phase 1 ProductRegistry facade (runtime-only; no behavior or persistence change).
+  // Consumed here only for dev invariant diagnostics; future phases route product/price
+  // access through it. `kind` is never written back to products/Supabase/localStorage.
+  const productRegistry=useMemo(()=>createProductRegistry(products),[products]);
+  useEffect(()=>{try{productRegistry.warnInvariants();}catch{}},[productRegistry]);
   const[page,     setPage]     =useState("positions");
   const[mobileMenu,setMobileMenu]=useState(false);
   const[showNotif, setShowNotif] =useState(false);
