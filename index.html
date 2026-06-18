@@ -1587,7 +1587,12 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
     // SAVE-FIRST: the parent awaits a durable single-row write and unmounts this form on res.ok.
     // On failure the form stays mounted — re-enable and surface the error, never claim success.
     const res=await onSubmit(buildTrade(status));
-    if(!res||!res.ok){savingGuard.current=false;setSaving(false);showToast(openFailMessage(res),"error");}
+    if(!res||!res.ok){
+      savingGuard.current=false;setSaving(false);
+      // Edit mode (initialData present) gets edit-specific wording; guard messages stay mode-agnostic.
+      const failMsg=(res&&res.guard)?openFailMessage(res):(initialData?"บันทึกการแก้ไขไม่สำเร็จ — ลองใหม่อีกครั้ง":openFailMessage(res));
+      showToast(failMsg,"error");
+    }
   };
 
   // Cooldown banner: check if today had a big win trade
@@ -2172,9 +2177,19 @@ function TemplateButtons({kind,onInsert}){
 function NoteField({label,value,onSave,editable=true,templateKind}){
   const[editing,setEditing]=useState(false);
   const[draft,setDraft]=useState(value||"");
+  const[saving,setSaving]=useState(false);
   const start=()=>{setDraft(value||"");setEditing(true);};
   const cancel=()=>setEditing(false);
-  const save=()=>{onSave(draft);setEditing(false);};
+  // Await onSave so a durable-save failure keeps the editor open instead of falsely claiming saved.
+  // Legacy sync callers return undefined → treated as success (close), preserving existing behavior.
+  const save=async()=>{
+    if(saving)return;
+    setSaving(true);
+    const res=await onSave(draft);
+    setSaving(false);
+    if(res&&res.ok===false)return;   // explicit failure (incl. busy) → keep editing open
+    setEditing(false);
+  };
   if(editing){
     return(
       <div>
@@ -2183,8 +2198,8 @@ function NoteField({label,value,onSave,editable=true,templateKind}){
           className={(templateKind?clsNoteArea:(clsInput+" resize-none"))+" text-sm"}/>
         {templateKind&&<TemplateButtons kind={templateKind} onInsert={tpl=>setDraft(d=>appendTemplate(d,tpl))}/>}
         <div className="flex gap-2 mt-2">
-          <button onClick={cancel} className={clsBtn("default","sm")}>ยกเลิก</button>
-          <button onClick={save} className={clsBtn("yellow","sm")}>💾 บันทึก</button>
+          <button onClick={cancel} disabled={saving} className={clsBtn("default","sm")}>ยกเลิก</button>
+          <button onClick={save} disabled={saving} className={clsBtn("yellow","sm")}>{saving?"กำลังบันทึก...":"💾 บันทึก"}</button>
         </div>
       </div>
     );
@@ -2212,17 +2227,34 @@ function NoteField({label,value,onSave,editable=true,templateKind}){
   );
 }
 
-function TradeDetailModal({trade,product,onClose,onUpdateTrade,onDelete,showConfirm}){
+function TradeDetailModal({trade,product,onClose,onCommitUpdate,onDelete,showConfirm,showToast}){
   const[lightbox,setLightbox]=useState(null);
-  const isEditable=!!onUpdateTrade;
+  const isEditable=!!onCommitUpdate;
   const grossPL=trade.exitPrice!=null?calcPL(product,trade.contracts,trade.entryPrice,trade.exitPrice,trade.direction):null;
   const netPL=trade.exitPrice!=null?calcNetPL(product,trade.contracts,trade.entryPrice,trade.exitPrice,trade.direction):null;
   const preImages=trade.preImages||[];
   const postImages=trade.postImages||[];
 
-  const saveNote=(field)=>(val)=>{
-    if(onUpdateTrade)onUpdateTrade({...trade,[field]:val});
+  // Durable single-row meta save. CRITICAL in-flight guard: each call builds a WHOLE-row payload
+  // from the current `trade` prop, and db.saveTrade upserts that whole row. If a second save ran
+  // before the parent refreshed props, it would rebuild from the STALE prop and overwrite the
+  // first edit (data loss). So while a save is in flight we BLOCK (not enqueue) the second attempt.
+  const metaSavingRef=React.useRef(false);
+  const[metaSaving,setMetaSaving]=React.useState(false);
+  const commitMeta=async(updated)=>{
+    if(!onCommitUpdate)return {ok:false};
+    if(metaSavingRef.current){   // in-flight: do NOT build a second whole-row payload from stale props
+      showToast&&showToast("กำลังบันทึก...","info");
+      return {ok:false,busy:true};
+    }
+    metaSavingRef.current=true;setMetaSaving(true);
+    try{
+      const res=await onCommitUpdate(updated);
+      if(!res||!res.ok)showToast&&showToast("บันทึกไม่สำเร็จ ลองอีกครั้ง","error");
+      return res;
+    }finally{metaSavingRef.current=false;setMetaSaving(false);}
   };
+  const saveNote=(field)=>(val)=>commitMeta({...trade,[field]:val});
 
   const ImageSection=({images,note,label})=>{
     if(!images.length&&!note)return null;
@@ -2251,7 +2283,7 @@ function TradeDetailModal({trade,product,onClose,onUpdateTrade,onDelete,showConf
 
   const[editMode,setEditMode]=React.useState(false);
   const[editFields,setEditFields]=React.useState({setupType:trade.setupType||"",exitReason:trade.exitReason||"",tradeRating:trade.tradeRating||0,feeling:trade.feeling||""});
-  function saveEdits(){if(onUpdateTrade)onUpdateTrade({...trade,...editFields});setEditMode(false);}
+  function saveEdits(){commitMeta({...trade,...editFields}).then(res=>{if(res&&res.ok)setEditMode(false);});}
   return(
     <>
       <Modal title={`รายละเอียด — ${trade.contractCode||product?.currentContract||"—"}`} onClose={onClose} width="max-w-lg">
@@ -2287,12 +2319,12 @@ function TradeDetailModal({trade,product,onClose,onUpdateTrade,onDelete,showConf
             <>
               <ImageUploader
                 images={preImages}
-                onChange={imgs=>{if(onUpdateTrade)onUpdateTrade({...trade,preImages:imgs});}}
+                onChange={imgs=>{commitMeta({...trade,preImages:imgs});}}
                 label="📸 Pre-trade รูป"/>
               <NoteField label="📸 Pre-trade Note" value={trade.preNote} onSave={saveNote("preNote")} editable={true} templateKind="pre"/>
               <ImageUploader
                 images={postImages}
-                onChange={imgs=>{if(onUpdateTrade)onUpdateTrade({...trade,postImages:imgs});}}
+                onChange={imgs=>{commitMeta({...trade,postImages:imgs});}}
                 label="📝 Post-trade รูป"/>
               <NoteField label="📝 Post-trade Note" value={trade.postNote} onSave={saveNote("postNote")} editable={true} templateKind="post"/>
             </>
@@ -2374,7 +2406,7 @@ function TradeDetailModal({trade,product,onClose,onUpdateTrade,onDelete,showConf
           <div className="flex gap-2">
             {!editMode
               ?<button onClick={()=>setEditMode(true)} className={clsBtn("ghost")+" flex-1"}>✏️ Enable Edit</button>
-              :<><button onClick={saveEdits} className={clsBtn("yellow")+" flex-1"}>💾 บันทึก</button>
+              :<><button onClick={saveEdits} disabled={metaSaving} className={clsBtn("yellow")+" flex-1"}>{metaSaving?"กำลังบันทึก...":"💾 บันทึก"}</button>
                 <button onClick={()=>setEditMode(false)} className={clsBtn("ghost")}>ยกเลิก</button></>
             }
             <button onClick={onClose} className={clsBtn("default")+" flex-1"}>ปิด</button>
@@ -2461,7 +2493,14 @@ function PortfolioTxModal({type,onSubmit,onCancel,currentBalance}){
 
 function UpdatePriceModal({trade,product,onSubmit,onCancel}){
   const[price,setPrice]=useState(String(trade.currentPrice||trade.entryPrice||""));
+  const[busy,setBusy]=useState(false);
   const pl=price?calcPL(product,trade.contracts,trade.entryPrice,+price,trade.direction):null;
+  const submit=async()=>{
+    if(!price||busy)return;   // minimal busy guard: blocks double-submit
+    setBusy(true);
+    const res=await onSubmit(+price);   // parent awaits durable update; clears modal only on ok
+    if(!res||!res.ok)setBusy(false);    // success unmounts the modal; re-enable only on failure
+  };
   return(
     <Modal title={`บันทึกราคา — ${product?.currentContract||"?"}`} onClose={onCancel} width="max-w-xs">
       <div className="p-5 space-y-3">
@@ -2470,8 +2509,8 @@ function UpdatePriceModal({trade,product,onSubmit,onCancel}){
         {pl!==null&&<div className="bg-input/50 rounded-lg px-3 py-2"><span className="text-muted text-xs block">Unrealized P/L</span><PLDisplay value={pl}/></div>}
       </div>
       <div className="flex gap-2 px-5 py-4 border-t border-border flex-shrink-0">
-        <button onClick={onCancel} className={clsBtn("default")}>ยกเลิก</button>
-        <button onClick={()=>{if(!price)return;onSubmit(+price);}} className={`${clsBtn("yellow")} flex-1`}>💾 บันทึกราคา</button>
+        <button onClick={onCancel} disabled={busy} className={clsBtn("default")}>ยกเลิก</button>
+        <button onClick={submit} disabled={busy} className={`${clsBtn("yellow")} flex-1`}>{busy?"กำลังบันทึก…":"💾 บันทึกราคา"}</button>
       </div>
     </Modal>
   );
@@ -3292,7 +3331,7 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authU
     </div>
   );
 }
-function PagePositions({trades,products,balance,portfolio,onAddTrade,onCommitOpen,onCommitExecuteDraft,onUpdateTrade,onCommitClose,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
+function PagePositions({trades,products,balance,portfolio,onAddTrade,onCommitOpen,onCommitExecuteDraft,onUpdateTrade,onCommitClose,onCommitUpdate,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
   const[showForm,setShowForm]=useState(false);
   const[editTrade,setEditTrade]=useState(null);
   const[closingTrade,setClosingTrade]=useState(null);
@@ -3567,7 +3606,11 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onCommitOpe
       {showForm&&(
         <OpenTradeForm products={products} initialData={editTrade} balance={balance} openTrades={openTrades}
           onSubmit={async t=>{
-            if(editTrade){onUpdateTrade(t);setShowForm(false);setEditTrade(null);showToast("แก้ไข order แล้ว","success");return {ok:true};}
+            if(editTrade){
+              const res=await onCommitUpdate(t);   // SAVE-FIRST durable single-row before success
+              if(res&&res.ok){setShowForm(false);setEditTrade(null);showToast("แก้ไข order แล้ว","success");}
+              return res;   // failure: form stays open; OpenTradeForm shows the single edit-mode failure toast
+            }
             const res=await onCommitOpen(t);   // SAVE-FIRST: durable single-row write before success
             if(res&&res.ok){setShowForm(false);setEditTrade(null);showToast("เพิ่ม order แล้ว","success");}
             return res;
@@ -3589,13 +3632,18 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onCommitOpe
       )}
       {updatingPrice&&(
         <UpdatePriceModal trade={updatingPrice} product={resolveProduct(products,updatingPrice.productId)}
-          onSubmit={price=>{onUpdateTrade({...updatingPrice,currentPrice:price});setUpdatingPrice(null);}}
+          onSubmit={async price=>{
+            const res=await onCommitUpdate({...updatingPrice,currentPrice:price});
+            if(res&&res.ok){setUpdatingPrice(null);}else{showToast("บันทึกราคาไม่สำเร็จ","error");}
+            return res;
+          }}
           onCancel={()=>setUpdatingPrice(null)}/>
       )}
       {detailTrade&&(
         <TradeDetailModal trade={detailTrade} product={resolveProduct(products,detailTrade.productId)}
           onClose={()=>setDetailTrade(null)}
-          onUpdateTrade={t=>{onUpdateTrade(t);setDetailTrade(t);}}/>
+          showToast={showToast}
+          onCommitUpdate={async t=>{const res=await onCommitUpdate(t); if(res&&res.ok)setDetailTrade(t); return res;}}/>
       )}
       {executingDraft&&(
         <MindsetChecklistModal
@@ -3632,7 +3680,7 @@ function TdTicks({t,p,onClick}){
   return<td onClick={onClick} className={"px-3 py-2.5 tabular-nums text-xs font-medium cursor-pointer whitespace-nowrap hidden md:table-cell text-right "+(tks>=0?"text-green":"text-red")}>{tks>=0?"+":""}{tks.toFixed(1)}</td>;
 }
 
-function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onDeleteTrade,onImportTrades,onProductsChange,onBalanceSet,onTransactions,showConfirm}){
+function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onCommitUpdate,onDeleteTrade,onImportTrades,onProductsChange,onBalanceSet,onTransactions,showConfirm,showToast}){
   const[detail,setDetail]=useState(null);
   const[showImport,setShowImport]=useState(false);
   const initFilters={product:"",direction:"",setup:"",rating:"",dateFrom:"",dateTo:""};
@@ -3934,7 +3982,8 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onDeleteTr
           trade={detail}
           product={resolveProduct(products,detail.productId)}
           onClose={()=>setDetail(null)}
-          onUpdateTrade={t=>{onUpdateTrade(t);setDetail(t);}}
+          showToast={showToast}
+          onCommitUpdate={async t=>{const res=await onCommitUpdate(t); if(res&&res.ok)setDetail(t); return res;}}
           onDelete={onDeleteTrade}
           showConfirm={showConfirm}
         />
@@ -7910,7 +7959,7 @@ function App({session,onSignOut}){
   const prevDbReadyRef=useRef(false);
   const saveTradesSerialized=useCallback((payload,meta)=>{
     const info=meta||{};
-    const isSingleRow=info.source==="close"||info.source==="open";   // close/open → payload is a single trade OBJECT; else an ARRAY
+    const isSingleRow=info.source==="close"||info.source==="open"||info.source==="update";   // close/open/update → payload is a single trade OBJECT; else an ARRAY
     try{
       const prev=(tradesSavePromiseRef.current||Promise.resolve()).catch(()=>{});
       const p=prev.then(async()=>{
@@ -8459,6 +8508,28 @@ function App({session,onSignOut}){
   },[saveTradesSerialized]);
   const commitOpen=useCallback(t=>commitTradeWrite(t,addTrade),[commitTradeWrite,addTrade]);
   const commitExecuteDraft=useCallback(t=>commitTradeWrite(t,updateTrade),[commitTradeWrite,updateTrade]);
+  // ── Pure local row replacement — used ONLY by the durable update path. No CB logic,
+  // no tradeEvents insert, no close/open side effects, no toast, no Supabase write,
+  // no reconcile/delete. Deliberately separate from updateTrade (which is NOT pure).
+  const replaceTradeLocal=useCallback((updatedTrade)=>{
+    setTrades(prev=>prev.map(x=>x.id===updatedTrade.id?updatedTrade:x));
+  },[]);
+  // ── Update-save durability — SAVE-FIRST durable single-row write for update-like edits
+  // (edit existing order, update current price, TradeDetailModal note/image/meta). Mirrors the
+  // close/open pattern but applies a PURE replaceTradeLocal on success — NOT updateTrade — so a
+  // metadata edit never triggers CB-disarm or a tradeEvents("closed") insert. Full-array autosave
+  // stays background-only. Caller owns success/failure UX (toast, modal close).
+  const commitUpdateTrade=useCallback(async(updatedTrade)=>{
+    try{
+      clearTimeout(dbTimers.current.trades);   // cancel any pending debounced full-array autosave so it can't race this save
+      const res=await saveTradesSerialized(updatedTrade,{source:"update",affectedTradeId:updatedTrade.id});
+      if(res&&res.ok){
+        replaceTradeLocal(updatedTrade);   // ONLY now: pure local row replace (no side effects)
+        return {ok:true};
+      }
+      return {ok:false,error:(res&&res.error)||new Error("update save failed"),guard:res&&res.guard};
+    }catch(e){console.warn("[update-save] commitUpdateTrade error",e);return {ok:false,error:e};}
+  },[replaceTradeLocal,saveTradesSerialized]);
   const deleteTrade=useCallback(id=>{
     setTrades(p=>{
       const deleted=p.find(x=>x.id===id);
@@ -8609,8 +8680,8 @@ function App({session,onSignOut}){
       )}
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
-        {page==="positions"&&<PagePositions trades={trades} products={products} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onUpdateTrade={updateTrade} onCommitClose={commitClose} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
-        {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onDeleteTrade={deleteTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm}/>}
+        {page==="positions"&&<PagePositions trades={trades} products={products} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onUpdateTrade={updateTrade} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
+        {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid} equityHWM={equityHWM} dailyPoints={dailyPoints} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio} equityHWM={equityHWM} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="calendar" &&<PageCalendar  trades={trades} products={products} uid={authUid} syncNotesToCloud={syncNotesToCloud}/>}
