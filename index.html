@@ -942,6 +942,18 @@ const StatusBadge=({status})=>{
   const s=m[status]||m.draft;
   return<span className={`px-2 py-0.5 rounded text-xs font-semibold border ${s.cls}`}>{s.l}</span>;
 };
+// Read-only Phase-2A badge: shows where a position's displayed current price comes from
+// (live feed / manual entry / entry fallback / none). Display-only — never changes price math.
+const PriceSourceBadge=({source})=>{
+  const m={
+    live:{cls:"bg-green/10 text-green border-green/20",l:"Live",t:"ราคาปัจจุบันมาจาก live feed"},
+    manual:{cls:"bg-yellow/10 text-yellow border-yellow/20",l:"Manual",t:"ไม่มี live — ใช้ราคาที่กรอกเอง (currentPrice)"},
+    entry:{cls:"bg-muted/10 text-muted border-muted/20",l:"Entry",t:"ไม่มี live/manual — ใช้ราคา entry แทน"},
+    missing:{cls:"bg-red/10 text-red border-red/20",l:"No price",t:"ไม่มีราคาที่ใช้ได้"},
+  };
+  const s=m[source]||m.entry;
+  return<span title={s.t} className={`px-1.5 py-0.5 rounded text-[10px] font-semibold border ${s.cls}`}>{s.l}</span>;
+};
 const PLDisplay=({value,className="",breakeven=false})=>{
   if(value===null||value===undefined||isNaN(value))return<span className={`text-muted ${className}`}>—</span>;
   if(breakeven)return<span className={`font-semibold tabular-nums text-muted ${className}`}>{value>=0?"+":""}{fmtTHB(value,0)} ฿ <span className="text-xs bg-muted/10 border border-muted/20 rounded px-1">BE</span></span>;
@@ -2799,6 +2811,9 @@ function PositionCard({trade,product,isDraft,balance,mergeMode,mergeSym,isChecke
   const gx=calcGearingX(pv,balance);
   const displayPrice=livePrice!=null?livePrice:(trade.currentPrice||trade.entryPrice);
   const isLive=livePrice!=null;
+  // Read-only source of the displayed current price. Built from the SAME livePrice prop used
+  // for displayPrice above, so the badge can never disagree with the number shown. No math change.
+  const priceSrc=classifyPriceSource(livePrice,trade.currentPrice,trade.entryPrice);
   const hasYahoo=!!product?.yahooSymbol;
   const unreal=product&&!isDraft?calcPL(product,activeContracts,trade.entryPrice,displayPrice,trade.direction):null;
   const held=duration(trade.openDateTime,new Date().toISOString());
@@ -2835,7 +2850,10 @@ function PositionCard({trade,product,isDraft,balance,mergeMode,mergeSym,isChecke
 
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 mb-2.5">
           <div>
-            <span className="text-muted text-[10px] block">Entry / Current</span>
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <span className="text-muted text-[10px]">Entry / Current</span>
+              {!isDraft&&<PriceSourceBadge source={priceSrc.source}/>}
+            </div>
             <div className="flex items-baseline gap-1.5">
               <span className="font-semibold text-sm">{fmtNum(trade.entryPrice,product?.digits)}</span>
               {!isDraft&&(
@@ -4119,6 +4137,16 @@ function productKind(product){
   // Today every product is a TFEX future; classification stays runtime-only (not persisted).
   return "tfex_futures";
 }
+// Phase-2A read-only price-source classifier. `live` is the ALREADY-RESOLVED getLivePrice()
+// value (number) or null/undefined. Mirrors PositionCard's displayPrice fallback EXACTLY:
+// live → manual(currentPrice) → entry(entryPrice) → missing. Returns metadata only; it does
+// NOT change which number the UI shows (the card keeps computing displayPrice itself).
+function classifyPriceSource(live,currentPrice,entryPrice){
+  if(live!=null)return{source:"live",price:live};
+  if(currentPrice)return{source:"manual",price:currentPrice};
+  if(entryPrice)return{source:"entry",price:entryPrice};
+  return{source:"missing",price:null};
+}
 function createProductRegistry(products){
   var list=Array.isArray(products)?products:[];
   return {
@@ -4137,6 +4165,18 @@ function createProductRegistry(products){
     },
     resolveLivePriceForProduct:function(product,livePrices){
       return getLivePriceForProduct(livePrices,product);
+    },
+    // Phase-2A seam (read-only): classify the SOURCE of a trade's displayed price. Resolves
+    // live via the SAME getLivePrice() the UI uses, then classifies (live/manual/entry/missing).
+    // isStale is always false in 2A — distinguishing real staleness from normal market-closed
+    // needs market-hours logic and is deferred. Pure; no writes, no product mutation.
+    priceStatus:function(trade,livePrices,liveTimestamps,liveErrors,product){
+      var p=product||resolveProduct(list,trade&&trade.productId);
+      var live=getLivePrice(livePrices,trade,p);
+      var base=classifyPriceSource(live,trade&&trade.currentPrice,trade&&trade.entryPrice);
+      var liveKey=p?contractToLiveKey(p._baseId||p.id,(trade&&trade.contractCode)||p.currentContract,p.baseSymbol):(trade&&trade.productId)||null;
+      var updatedAt=liveTimestamps?(liveTimestamps[liveKey]??liveTimestamps[trade&&trade.productId]??null):null;
+      return{source:base.source,price:base.price,liveKey:liveKey,updatedAt:updatedAt,isStale:false,hasError:!!(liveErrors&&trade&&liveErrors[trade.productId])};
     },
     kind:function(product){return productKind(product);},
     // Dev-only diagnostics — console warnings ONLY. Never alters math, price selection,
