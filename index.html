@@ -197,6 +197,11 @@ const closeFailMessage=res=>
   res&&res.guard==="mock_demo_trades"?"Local app loaded demo trades; refusing to save to production."
   :res&&res.guard==="affected_trade_missing"?"Trade not found in local state; reload from production before closing."
   :"บันทึกการปิดไม่สำเร็จ — ลองใหม่อีกครั้ง";
+// Map a failed open/add-save result to a user-facing message — mirrors closeFailMessage.
+const openFailMessage=res=>
+  res&&res.guard==="mock_demo_trades"?"Local app loaded demo trades; refusing to save to production."
+  :res&&res.guard==="affected_trade_missing"?"Trade mismatch in local state; reload from production before saving."
+  :"บันทึกการเปิดออเดอร์ไม่สำเร็จ — ลองใหม่อีกครั้ง";
 // Shared trade→row mapper — SINGLE source of truth for the trades row shape, used by BOTH
 // the full-array writer db.saveTrades AND the single-row close writer db.saveTrade, so the
 // columnar+raw shape can never diverge. The two `||` falsy-zero fallbacks are load-bearing —
@@ -1414,7 +1419,7 @@ function IMAlertBanner({trades,products,balance,livePrices,liveTimestamps}){
   );
 }
 
-function MindsetChecklistModal({onConfirm,onSaveDraft,onCancel}){
+function MindsetChecklistModal({onConfirm,onSaveDraft,onCancel,busy=false}){
   const[checked,setChecked]=useState({});
   const[triedOpen,setTriedOpen]=useState(false);
   const toggle=id=>setChecked(p=>({...p,[id]:!p[id]}));
@@ -1455,9 +1460,9 @@ function MindsetChecklistModal({onConfirm,onSaveDraft,onCancel}){
         </div>
         <div className="px-4 pb-4 space-y-2 border-t border-border pt-3">
           {allDone?(
-            <button onClick={()=>onConfirm([])}
-              className="w-full py-2.5 rounded-xl font-semibold text-sm bg-green hover:bg-green/90 text-black transition cursor-pointer">
-              ✅ พร้อมเข้าไม้!
+            <button onClick={()=>onConfirm([])} disabled={busy}
+              className="w-full py-2.5 rounded-xl font-semibold text-sm bg-green hover:bg-green/90 text-black transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed">
+              {busy?"กำลังบันทึก…":"✅ พร้อมเข้าไม้!"}
             </button>
           ):(
             <>
@@ -1475,9 +1480,9 @@ function MindsetChecklistModal({onConfirm,onSaveDraft,onCancel}){
                 <div className="flex gap-2">
                   <button onClick={onSaveDraft}
                     className={`${clsBtn("default")} flex-1 text-xs`}>💾 Save Draft แทน</button>
-                  <button onClick={()=>onConfirm(CHECKLIST_ITEMS.filter(item=>!checked[item.id]).map(item=>item.text))}
-                    className="flex-1 py-2 rounded-lg text-xs font-semibold bg-orange/10 hover:bg-orange/20 text-orange border border-orange/30 transition">
-                    ยืนยัน เปิดต่อ →
+                  <button onClick={()=>onConfirm(CHECKLIST_ITEMS.filter(item=>!checked[item.id]).map(item=>item.text))} disabled={busy}
+                    className="flex-1 py-2 rounded-lg text-xs font-semibold bg-orange/10 hover:bg-orange/20 text-orange border border-orange/30 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                    {busy?"กำลังบันทึก…":"ยืนยัน เปิดต่อ →"}
                   </button>
                 </div>
               )}
@@ -1502,6 +1507,8 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
 
   const[step,setStep]=useState(0);
   const[showChecklist,setShowChecklist]=useState(false);
+  const[saving,setSaving]=useState(false);
+  const savingGuard=useRef(false);   // ref guard: blocks same-tick double-submit before `saving` state commits (a new open generates a fresh id each call → a double-fire would duplicate the row)
   const[f,setF]=useState({
     productId:products[0]?.id||"",direction:"Long",contracts:"1",
     entryPrice:"",currentPrice:"",stopLoss:"",takeProfit:"",
@@ -1559,7 +1566,7 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
     contractCode:initialData?.contractCode||(selectedSeries?.currentContract||product?.currentContract||null),
   });
 
-  const submit=(status)=>{
+  const submit=async(status)=>{
     if(!f.productId||!f.entryPrice||!f.contracts){
       showToast("กรุณากรอก Product, Entry Price และ Contracts","error");return;
     }
@@ -1575,7 +1582,12 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
         );return;
       }
     }
-    onSubmit(buildTrade(status));
+    if(savingGuard.current)return;   // already saving — ignore re-fire (prevents duplicate new-open rows)
+    savingGuard.current=true;setSaving(true);
+    // SAVE-FIRST: the parent awaits a durable single-row write and unmounts this form on res.ok.
+    // On failure the form stays mounted — re-enable and surface the error, never claim success.
+    const res=await onSubmit(buildTrade(status));
+    if(!res||!res.ok){savingGuard.current=false;setSaving(false);showToast(openFailMessage(res),"error");}
   };
 
   // Cooldown banner: check if today had a big win trade
@@ -1698,7 +1710,7 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
         <div className="px-5 pt-5 pb-3 border-b border-border flex-shrink-0">
           <div className="flex items-center justify-between mb-3">
             <span className="text-muted text-xs font-medium">Step {step+1} / {TOTAL_STEPS}</span>
-            <button onClick={onCancel} className="text-muted hover:text-txt transition text-xl w-8 h-8 flex items-center justify-center rounded-lg hover:bg-input">✕</button>
+            <button onClick={onCancel} disabled={saving} className="text-muted hover:text-txt transition text-xl w-8 h-8 flex items-center justify-center rounded-lg hover:bg-input disabled:opacity-30 disabled:cursor-not-allowed">✕</button>
           </div>
           <div className="flex gap-1">
             {Array.from({length:TOTAL_STEPS},(_,i)=>(
@@ -1895,9 +1907,10 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
               className={`${clsBtn("yellow")} flex-1 disabled:opacity-30 disabled:cursor-not-allowed`}>ถัดไป →</button>
           ):(
             <>
-              <button onClick={()=>submit("draft")} className={clsBtn("default")}>💾 Draft</button>
-              <button onClick={()=>{if(!f.entryPrice||!f.contracts){showToast("กรุณากรอกข้อมูลให้ครบ","error");return;}setShowChecklist(true);}}
-                className={`${clsBtn("yellow")} flex-1`}>✅ Open Trade</button>
+              <button onClick={()=>submit("draft")} disabled={saving} className={clsBtn("default")+" disabled:opacity-40 disabled:cursor-not-allowed"}>{saving?"กำลังบันทึก…":"💾 Draft"}</button>
+              <button onClick={()=>{if(saving)return;if(!f.entryPrice||!f.contracts){showToast("กรุณากรอกข้อมูลให้ครบ","error");return;}setShowChecklist(true);}}
+                disabled={saving}
+                className={`${clsBtn("yellow")} flex-1 disabled:opacity-40 disabled:cursor-not-allowed`}>✅ Open Trade</button>
             </>
           )}
         </div>
@@ -3279,13 +3292,15 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authU
     </div>
   );
 }
-function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTrade,onCommitClose,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
+function PagePositions({trades,products,balance,portfolio,onAddTrade,onCommitOpen,onCommitExecuteDraft,onUpdateTrade,onCommitClose,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
   const[showForm,setShowForm]=useState(false);
   const[editTrade,setEditTrade]=useState(null);
   const[closingTrade,setClosingTrade]=useState(null);
   const[updatingPrice,setUpdatingPrice]=useState(null);
   const[detailTrade,setDetailTrade]=useState(null);
   const[executingDraft,setExecutingDraft]=useState(null);
+  const[executingSaving,setExecutingSaving]=useState(false);
+  const executingGuard=useRef(false);   // ref guard: blocks same-tick double-confirm before executingSaving state commits (parity with OpenTradeForm.savingGuard)
   const[mergeMode,setMergeMode]=useState(false);
   const[mergeSym,setMergeSym]=useState(null);
   const[mergeIds,setMergeIds]=useState([]);
@@ -3551,7 +3566,12 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
       
       {showForm&&(
         <OpenTradeForm products={products} initialData={editTrade} balance={balance} openTrades={openTrades}
-          onSubmit={t=>{editTrade?onUpdateTrade(t):onAddTrade(t);setShowForm(false);setEditTrade(null);showToast(editTrade?"แก้ไข order แล้ว":"เพิ่ม order แล้ว","success");}} trades={trades} portfolio={portfolio}
+          onSubmit={async t=>{
+            if(editTrade){onUpdateTrade(t);setShowForm(false);setEditTrade(null);showToast("แก้ไข order แล้ว","success");return {ok:true};}
+            const res=await onCommitOpen(t);   // SAVE-FIRST: durable single-row write before success
+            if(res&&res.ok){setShowForm(false);setEditTrade(null);showToast("เพิ่ม order แล้ว","success");}
+            return res;
+          }} trades={trades} portfolio={portfolio}
           onCancel={()=>{setShowForm(false);setEditTrade(null);}}
           showToast={showToast}
         />
@@ -3579,21 +3599,27 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onUpdateTra
       )}
       {executingDraft&&(
         <MindsetChecklistModal
-          onConfirm={(missedItems)=>{
+          busy={executingSaving}
+          onConfirm={async(missedItems)=>{
+            if(executingGuard.current)return;   // ref guard: blocks same-tick double-confirm (state disable only applies after re-render)
+            executingGuard.current=true;
             const updated={...executingDraft,status:"open"};
             if(missedItems&&missedItems.length>0){
               const riskNote="⚠️ เข้าไม้โดยไม่ผ่าน checklist:\n"+missedItems.map(t=>"• "+t).join("\n")+"\n---\n";
               updated.preNote=riskNote+(executingDraft.preNote||"");
             }
-            onUpdateTrade(updated);
-            setExecutingDraft(null);
-            showToast("Execute trade แล้ว ✅","success");
+            setExecutingSaving(true);
+            const res=await onCommitExecuteDraft(updated);   // SAVE-FIRST: durable single-row write before success
+            executingGuard.current=false;   // reset on both outcomes (PagePositions-scoped ref survives modal close → must clear for the next execute)
+            if(res&&res.ok){setExecutingDraft(null);setExecutingSaving(false);showToast("Execute trade แล้ว ✅","success");}
+            else{setExecutingSaving(false);showToast(openFailMessage(res),"error");}
           }}
           onSaveDraft={()=>{
+            if(executingSaving)return;
             setExecutingDraft(null);
             showToast("ยังคงเป็น Draft อยู่","info");
           }}
-          onCancel={()=>setExecutingDraft(null)}
+          onCancel={()=>{if(!executingSaving)setExecutingDraft(null);}}
         />
       )}
     </div>
@@ -7884,23 +7910,29 @@ function App({session,onSignOut}){
   const prevDbReadyRef=useRef(false);
   const saveTradesSerialized=useCallback((payload,meta)=>{
     const info=meta||{};
-    const isClose=info.source==="close";   // close → payload is a single trade OBJECT; else an ARRAY
+    const isSingleRow=info.source==="close"||info.source==="open";   // close/open → payload is a single trade OBJECT; else an ARRAY
     try{
       const prev=(tradesSavePromiseRef.current||Promise.resolve()).catch(()=>{});
       const p=prev.then(async()=>{
         savingRef.current.trades=true;
         try{
-          if(isClose){
-            // CLOSE path FIRST — passing the OBJECT into db.saveTrades would TypeError on trades.map(...).
+          if(isSingleRow){
+            // CLOSE / OPEN single-row path FIRST — passing the OBJECT into db.saveTrades would TypeError on trades.map(...).
             // Object-shaped affected-trade guard (the array form below no-ops on an object).
             if(info.affectedTradeId!=null&&(!payload||payload.id!==info.affectedTradeId)){
-              console.warn("[close-save][guard] affected trade missing from close payload",{affectedTradeId:info.affectedTradeId});
-              return {ok:false,error:new Error("Affected trade missing from close payload"),guard:"affected_trade_missing"};
+              console.warn("[trade-save][guard] affected trade missing from single-row payload",{source:info.source,affectedTradeId:info.affectedTradeId});
+              return {ok:false,error:new Error("Affected trade missing from single-row payload"),guard:"affected_trade_missing"};
             }
             const res=await db.saveTrade(authUid,payload);   // single row — no knownIds, no reconcile
-            // Do NOT touch lastSeenRef.tradeIds on close: the id is already known and db.saveTrade
-            // returns no full id-set; an assignment here would wipe it and silently disable reconcile-delete.
-            if(!(res&&res.ok))console.warn("[close-save] saveTrade not ok",{res});
+            // OPEN only: register the brand-new id in this tab's known-set so a LATER user delete
+            // reconciles (delete propagates to the server). String() matches the full-array path's id
+            // type — a type-mismatched id would make localIds.has() miss and wrongly delete the row.
+            // CLOSE leaves the set alone: that id is already known, and re-assigning would wipe the
+            // set and silently disable reconcile-delete.
+            if(info.source==="open"&&res&&res.ok){
+              lastSeenRef.current.tradeIds=new Set([...lastSeenRef.current.tradeIds,String(payload.id)]);
+            }
+            if(!(res&&res.ok))console.warn("[trade-save] saveTrade not ok",{source:info.source,res});
             return res||{ok:false,error:new Error("saveTrade returned no result")};
           }
           // AUTOSAVE / full-array path — payload is the trades ARRAY.
@@ -7910,7 +7942,7 @@ function App({session,onSignOut}){
           }
           const res=await db.saveTrades(authUid,payload,lastSeenRef.current.tradeIds);
           if(res&&res.ok){
-            lastSeenRef.current.tradeIds=res.ids;   // only on non-close full-array success (!isClose)
+            lastSeenRef.current.tradeIds=res.ids;   // only on full-array (autosave) success; single-row close/open handled above
           }else{
             console.warn("[close-save] saveTrades not ok",{source:info.source,res});
           }
@@ -8409,6 +8441,24 @@ function App({session,onSignOut}){
       return {ok:false,error:(res&&res.error)||new Error("close save failed"),guard:res&&res.guard};
     }catch(e){console.warn("[close-save] commitClose error",e);return {ok:false,error:e};}
   },[updateTrade,saveTradesSerialized]);
+  // ── Open-save durability — same SAVE-FIRST single-row pattern as the close path, applied to
+  // NEW opens (addTrade) and draft→open execute (updateTrade). AWAIT a durable single-row
+  // db.saveTrade (via saveTradesSerialized source:"open"); apply local state + report success
+  // ONLY on res.ok, so the UI never shows an open trade that didn't reach Supabase. The
+  // full-array autosave stays background-only; it is no longer the primary persistence for opens.
+  const commitTradeWrite=useCallback(async(trade,apply)=>{
+    try{
+      clearTimeout(dbTimers.current.trades);   // cancel any pending debounced full-array autosave so it can't race this save
+      const res=await saveTradesSerialized(trade,{source:"open",affectedTradeId:trade.id});
+      if(res&&res.ok){
+        apply(trade);   // ONLY now: new open → addTrade (append); draft execute → updateTrade (replace)
+        return {ok:true};
+      }
+      return {ok:false,error:(res&&res.error)||new Error("open save failed"),guard:res&&res.guard};
+    }catch(e){console.warn("[open-save] commitTradeWrite error",e);return {ok:false,error:e};}
+  },[saveTradesSerialized]);
+  const commitOpen=useCallback(t=>commitTradeWrite(t,addTrade),[commitTradeWrite,addTrade]);
+  const commitExecuteDraft=useCallback(t=>commitTradeWrite(t,updateTrade),[commitTradeWrite,updateTrade]);
   const deleteTrade=useCallback(id=>{
     setTrades(p=>{
       const deleted=p.find(x=>x.id===id);
@@ -8559,7 +8609,7 @@ function App({session,onSignOut}){
       )}
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
-        {page==="positions"&&<PagePositions trades={trades} products={products} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onUpdateTrade={updateTrade} onCommitClose={commitClose} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
+        {page==="positions"&&<PagePositions trades={trades} products={products} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onUpdateTrade={updateTrade} onCommitClose={commitClose} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
         {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onDeleteTrade={deleteTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid} equityHWM={equityHWM} dailyPoints={dailyPoints} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio} equityHWM={equityHWM} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
