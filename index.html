@@ -1817,7 +1817,7 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
                 <span>{getIcon(f.productId)}</span>
                 <span>{selectedSeries?.currentContract} · Entry {fmtNum(+f.entryPrice||0,product?.digits)}</span>
               </div>
-              <p className="text-txt font-semibold text-lg">Contracts (สัญญา)</p>
+              <p className="text-txt font-semibold text-lg">Contracts ({productQuantityLabel(product)})</p>
               <div className="flex items-center gap-3">
                 <button type="button" onClick={()=>setF(p=>({...p,contracts:String(Math.max(1,(+p.contracts||1)-1))}))}
                   className="w-14 h-14 rounded-2xl bg-input border border-border text-2xl font-bold flex items-center justify-center hover:bg-[#363c45] transition">−</button>
@@ -2873,7 +2873,7 @@ function PositionCard({trade,product,isDraft,balance,mergeMode,mergeSym,isChecke
           <div>
             <span className="text-muted text-[10px] block">{isDraft?"Contracts":"Unreal. P/L"}</span>
             {isDraft
-              ?<span className="font-semibold text-sm">{contracts} สัญญา</span>
+              ?<span className="font-semibold text-sm">{contracts} {productQuantityLabel(product)}</span>
               :<PLDisplay value={unreal} className="text-sm"/>
             }
           </div>
@@ -2882,7 +2882,7 @@ function PositionCard({trade,product,isDraft,balance,mergeMode,mergeSym,isChecke
             <span className="font-semibold text-sm">{contracts}{hasPartial&&<span className="text-orange text-[10px] ml-1">({activeContracts} open)</span>}</span>
           </div>
           <div>
-            <span className="text-muted text-[10px] block">Gearing</span>
+            <span className="text-muted text-[10px] block">{productExposureLabel(product)}</span>
             <span className={`font-semibold text-sm ${gearingColor(gx)}`}>{fmtGearing(gx)}</span>
           </div>
         </div>
@@ -4151,6 +4151,19 @@ function productKind(product){
   // Futures markers: a series contract, a roll contract, a fixed initial margin, or a TFEX (TXx)
   // category. All four defaults carry these; absence still defaults to futures to preserve behavior.
   return "tfex_futures";
+}
+// Phase-3E kind-aware UI vocabulary (DISPLAY-ONLY — no math, no thresholds, no persistence).
+// Futures keep today's exact labels so current UI is byte-identical; only EXPLICIT non-futures
+// kinds get new labels, so unknown/unresolved products also keep the futures label (no regression).
+function productQuantityLabel(product){
+  var k=productKind(product);
+  if(k==="stock")return "หุ้น";
+  if(k==="crypto"||k==="manual")return "หน่วย";
+  return "สัญญา";   // tfex_futures + unknown/undefined — unchanged
+}
+function productExposureLabel(product){
+  var k=productKind(product);
+  return (k==="stock"||k==="crypto"||k==="manual")?"Exposure":"Gearing";   // futures + unknown → "Gearing"
 }
 // Phase-2A read-only price-source classifier. `live` is the ALREADY-RESOLVED getLivePrice()
 // value (number) or null/undefined. Mirrors PositionCard's displayPrice fallback EXACTLY:
