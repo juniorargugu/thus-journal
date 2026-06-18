@@ -2804,16 +2804,17 @@ function AssetAllocationBar({allocs,cash,total}){
 }
 
 function PositionCard({trade,product,isDraft,balance,mergeMode,mergeSym,isChecked,onCheck,
-  onClose,onEdit,onDelete,onExecute,onUpdatePrice,onMergeStart,onDuplicate,livePrice,liveTimestamp,liveError,onShowDetail}){
+  onClose,onEdit,onDelete,onExecute,onUpdatePrice,onMergeStart,onDuplicate,livePrice,liveTimestamp,liveError,priceStatus,onShowDetail}){
   const contracts=trade.contracts||0;
   const activeContracts=trade.remainingContracts??contracts;
   const pv=calcPositionValue(product,activeContracts,trade.entryPrice);
   const gx=calcGearingX(pv,balance);
   const displayPrice=livePrice!=null?livePrice:(trade.currentPrice||trade.entryPrice);
   const isLive=livePrice!=null;
-  // Read-only source of the displayed current price. Built from the SAME livePrice prop used
-  // for displayPrice above, so the badge can never disagree with the number shown. No math change.
-  const priceSrc=classifyPriceSource(livePrice,trade.currentPrice,trade.entryPrice);
+  // Phase 2B: the displayed price's SOURCE now comes from the ProductRegistry seam
+  // (priceStatus), computed by PagePositions from the same livePrices/products. The card no
+  // longer calls classifyPriceSource directly; the registry method delegates to it, so the
+  // badge still mirrors displayPrice exactly. No price math / fallback selection change.
   const hasYahoo=!!product?.yahooSymbol;
   const unreal=product&&!isDraft?calcPL(product,activeContracts,trade.entryPrice,displayPrice,trade.direction):null;
   const held=duration(trade.openDateTime,new Date().toISOString());
@@ -2852,7 +2853,7 @@ function PositionCard({trade,product,isDraft,balance,mergeMode,mergeSym,isChecke
           <div>
             <div className="flex items-center gap-1.5 mb-0.5">
               <span className="text-muted text-[10px]">Entry / Current</span>
-              {!isDraft&&<PriceSourceBadge source={priceSrc.source}/>}
+              {!isDraft&&priceStatus&&<PriceSourceBadge source={priceStatus.source}/>}
             </div>
             <div className="flex items-baseline gap-1.5">
               <span className="font-semibold text-sm">{fmtNum(trade.entryPrice,product?.digits)}</span>
@@ -3349,7 +3350,7 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authU
     </div>
   );
 }
-function PagePositions({trades,products,balance,portfolio,onAddTrade,onCommitOpen,onCommitExecuteDraft,onUpdateTrade,onCommitClose,onCommitUpdate,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
+function PagePositions({trades,products,productRegistry,balance,portfolio,onAddTrade,onCommitOpen,onCommitExecuteDraft,onUpdateTrade,onCommitClose,onCommitUpdate,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
   const[showForm,setShowForm]=useState(false);
   const[editTrade,setEditTrade]=useState(null);
   const[closingTrade,setClosingTrade]=useState(null);
@@ -3584,6 +3585,7 @@ function PagePositions({trades,products,balance,portfolio,onAddTrade,onCommitOpe
                     livePrice={(()=>{const p=resolveProduct(products,t.productId);return getLivePrice(livePrices,t,p);})()}
                     liveTimestamp={(()=>{const p=resolveProduct(products,t.productId);const key=p?contractToLiveKey(p._baseId||p.id,t.contractCode||p.currentContract,p.baseSymbol):t.productId;return liveTimestamps[key]??liveTimestamps[t.productId]??null;})()}
                     liveError={!!liveErrors[t.productId]}
+                    priceStatus={productRegistry.priceStatus(t,livePrices,liveTimestamps,liveErrors,p)}
                     onShowDetail={setDetailTrade}
                   />
                 );
@@ -8776,7 +8778,7 @@ function App({session,onSignOut}){
       )}
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
-        {page==="positions"&&<PagePositions trades={trades} products={products} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onUpdateTrade={updateTrade} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
+        {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onUpdateTrade={updateTrade} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
         {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid} equityHWM={equityHWM} dailyPoints={dailyPoints} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio} equityHWM={equityHWM} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
