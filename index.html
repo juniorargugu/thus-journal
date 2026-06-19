@@ -4141,13 +4141,14 @@ function resolveProductCode(v,products){
 // written back into a product, Supabase, or localStorage.
 function productKind(product){
   if(!product)return "unknown";
-  // Runtime-only inference (Phase 3B). NEVER mutates the product and is NEVER persisted — it is
-  // derived on read, exactly like the Phase-2A price source. Explicit non-futures markers win;
-  // otherwise the product is treated as a TFEX future (the only real kind today), so the four
-  // existing DEFAULT_PRODUCTS — and any current product — classify exactly as before.
-  // NOTE: no stock/crypto/manual products exist yet; the markers below are forward placeholders.
-  if(product.manualPriceOnly===true)return "manual";
+  // Runtime-only inference (Phase 3B; precedence corrected Phase 3G). NEVER mutates the product and
+  // is NEVER persisted — derived on read, like the Phase-2A price source. The EXPLICIT identity
+  // marker `assetKind` wins FIRST; `manualPriceOnly` is only a price-source/feed flag, so a
+  // manually-priced stock is still a stock. With neither marker the product is a TFEX future
+  // (today's only real kind), so the four DEFAULT_PRODUCTS — and any current product — classify
+  // exactly as before.
   if(product.assetKind==="stock"||product.assetKind==="crypto"||product.assetKind==="manual")return product.assetKind;
+  if(product.manualPriceOnly===true)return "manual";
   // Futures markers: a series contract, a roll contract, a fixed initial margin, or a TFEX (TXx)
   // category. All four defaults carry these; absence still defaults to futures to preserve behavior.
   return "tfex_futures";
@@ -6029,6 +6030,16 @@ function ProfitWithdrawModal({currentBalance,onSubmit,onCancel}){
   );
 }
 
+// Phase-3G curated first-stock preset (Thai THB equity). Added ONLY via the explicit Settings
+// action below — never auto-merged, never in DEFAULT_PRODUCTS. assetKind:"stock" is the explicit
+// kind marker (Phase 3B); contractSize=1 with tickSize=tickValue=0.01 makes quantity = shares and
+// P/L = (exit-entry) × shares. manualPriceOnly:true → manual price first (no live feed). Commission
+// 0 / gross P&L for v1. No currentContract/nextContract/series/category/kind fields.
+const DELTA_STOCK_PRESET={
+  id:"delta",name:"DELTA",baseSymbol:"DELTA",assetKind:"stock",currency:"THB",digits:2,
+  contractSize:1,tickSize:0.01,tickValue:0.01,manualPriceOnly:true,
+  initialMargin:0,commissionPerLeg:0,vatEnabled:false,
+};
 function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsChange,showToast,showConfirm}){
   const[txModal,setTxModal]=useState(null);
   // Journal AI-key feature deprecated 2026-05-12: old mentor-note AI route
@@ -6235,8 +6246,14 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
             <h2 className="font-semibold text-txt">Products</h2>
             <p className="text-muted text-xs mt-0.5">แต่ละ product มี 2 series: Active และ Next</p>
           </div>
-          <button onClick={()=>{setEditProduct(null);setEditField({name:"",baseSymbol:"",currentContract:"",nextContract:"",contractSize:"",tickSize:"",tickValue:"",digits:1,initialMargin:"",commissionPerLeg:100,vatEnabled:true,vatRate:0.07,currency:"THB",category:"TXI",tvSymbol:"",yahooSymbol:""});setAddMode(true);}}
-            className={clsBtn("yellow","sm")}>+ เพิ่ม Product</button>
+          <div className="flex gap-2">
+            {!products.some(p=>p.id==="delta")&&(
+              <button onClick={()=>{onProductsChange([...products,DELTA_STOCK_PRESET]);showToast("เพิ่มหุ้น DELTA แล้ว","success");}}
+                className={clsBtn("default","sm")}>+ เพิ่มหุ้น DELTA</button>
+            )}
+            <button onClick={()=>{setEditProduct(null);setEditField({name:"",baseSymbol:"",currentContract:"",nextContract:"",contractSize:"",tickSize:"",tickValue:"",digits:1,initialMargin:"",commissionPerLeg:100,vatEnabled:true,vatRate:0.07,currency:"THB",category:"TXI",tvSymbol:"",yahooSymbol:""});setAddMode(true);}}
+              className={clsBtn("yellow","sm")}>+ เพิ่ม Product</button>
+          </div>
         </div>
         <div className="space-y-3">
           {products.map(p=>{
@@ -6259,12 +6276,20 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green/10 text-green border border-green/20">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green inline-block"/>Active: {p.currentContract}
-                  </span>
-                  <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-input text-muted border border-border">
-                    &#8594; Next: {p.nextContract||"—"}
-                  </span>
+                  {productKind(p)==="tfex_futures"?(
+                    <>
+                      <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-green/10 text-green border border-green/20">
+                        <span className="w-1.5 h-1.5 rounded-full bg-green inline-block"/>Active: {p.currentContract}
+                      </span>
+                      <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-input text-muted border border-border">
+                        &#8594; Next: {p.nextContract||"—"}
+                      </span>
+                    </>
+                  ):(
+                    <span className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-input text-muted border border-border">
+                      {productKind(p)==="stock"?"หุ้น":productKind(p)==="crypto"?"Crypto":"Manual"}
+                    </span>
+                  )}
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-xs">
                   <div>
