@@ -3371,7 +3371,7 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authU
     </div>
   );
 }
-function PagePositions({trades,products,productRegistry,balance,portfolio,onAddTrade,onCommitOpen,onCommitExecuteDraft,onUpdateTrade,onCommitClose,onCommitUpdate,onCommitMerge,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
+function PagePositions({trades,products,productRegistry,balance,portfolio,onCommitOpen,onCommitExecuteDraft,onCommitClose,onCommitUpdate,onCommitMerge,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
   const[showForm,setShowForm]=useState(false);
   const[editTrade,setEditTrade]=useState(null);
   const[closingTrade,setClosingTrade]=useState(null);
@@ -3731,7 +3731,7 @@ function TdTicks({t,p,onClick}){
   return<td onClick={onClick} className={"px-3 py-2.5 tabular-nums text-xs font-medium cursor-pointer whitespace-nowrap hidden md:table-cell text-right "+(tks>=0?"text-green":"text-red")}>{tks>=0?"+":""}{tks.toFixed(1)}</td>;
 }
 
-function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onCommitUpdate,onDeleteTrade,onImportTrades,onCommitImport,onProductsChange,onBalanceSet,onTransactions,showConfirm,showToast}){
+function PageJournal({trades,products,balance,portfolio,onCommitUpdate,onDeleteTrade,onCommitImport,onProductsChange,onBalanceSet,onTransactions,showConfirm,showToast}){
   const[detail,setDetail]=useState(null);
   const[showImport,setShowImport]=useState(false);
   const initFilters={product:"",direction:"",setup:"",rating:"",dateFrom:"",dateTo:""};
@@ -3785,39 +3785,11 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onCommitUp
   const filteredWins=filtered.filter(t=>{const p=resolveProduct(products,t.productId);return t.exitPrice!=null&&tradeNetPL(t,p)>0;}).length;
   const closedFiltered=filtered.filter(t=>t.exitPrice!=null);
 
-  const[mergeActive,setMergeActive]=useState(false);
-  const[selMerge,setSelMerge]=useState(new Set());
-  const toggleSelMerge=(id)=>setSelMerge(prev=>{const s=new Set(prev);s.has(id)?s.delete(id):s.add(id);return s;});
-  const exitMergeMode=()=>{setMergeActive(false);setSelMerge(new Set());};
-  const mergeSelected=()=>{
-    const sel=filtered.filter(t=>selMerge.has(t.id));
-    if(sel.length<2)return;
-    const p=products.find(px=>px.id===sel[0].productId);
-    if(!p)return;
-    const totalC=sel.reduce((s,t)=>s+(t.contracts||0),0);
-    const avgEntry=sel.reduce((s,t)=>s+(t.entryPrice*(t.contracts||0)),0)/totalC;
-    const avgExit=sel.filter(t=>t.exitPrice!=null).reduce((s,t,_,a)=>s+(t.exitPrice*(t.contracts||0)/a.reduce((ss,tt)=>ss+(tt.contracts||0),0)),0);
-    const earliest=sel.map(t=>t.openDateTime).filter(Boolean).sort()[0];
-    const latest=sel.map(t=>t.exitDateTime).filter(Boolean).sort().slice(-1)[0];
-    const merged={
-      id:"mrg_"+Date.now(),productId:sel[0].productId,contractCode:sel[0].contractCode,
-      direction:sel[0].direction,contracts:totalC,
-      entryPrice:+avgEntry.toFixed(p.digits||2),exitPrice:avgExit?+avgExit.toFixed(p.digits||2):null,
-      openDateTime:earliest,exitDateTime:latest,
-      setupType:sel[0].setupType,tradeRating:Math.round(sel.reduce((s,t)=>s+(t.tradeRating||0),0)/sel.length),
-      isMerged:true,mergedFromIds:sel.map(t=>t.id),
-      preNote:"[Merged "+sel.length+" trades] | "+sel.map(t=>fmtDate(t.openDateTime)+" "+fmtNum(t.entryPrice,p.digits)+"→"+(t.exitPrice?fmtNum(t.exitPrice,p.digits):"?")).join(" / "),
-      postNote:"",preImages:[],postImages:[],partialCloses:[],subTrades:[],
-      status:sel.every(t=>t.status==="closed")?"closed":"open",
-    };
-    onUpdateTrade&&sel.forEach(t=>onUpdateTrade({...t,_hiddenByMerge:true}));
-    onImportTrades&&onImportTrades([merged]);
-    setSelMerge(new Set());
-  };
-  const canMerge=selMerge.size>=2&&(()=>{
-    const sel=filtered.filter(t=>selMerge.has(t.id));
-    return sel.every(t=>t.productId===sel[0].productId&&t.direction===sel[0].direction);
-  })();
+  // Legacy row-collapsing Merge removed (P2-4A): the mergeActive/selMerge/mergeSelected/canMerge
+  // block was dead (mergeActive never set true → no trigger ever rendered the checkboxes) and held
+  // the codebase's ONLY autosave-only mutation (`_hiddenByMerge` written via onUpdateTrade, never read).
+  // Future replacement = trade grouping / thesis grouping (raw executions stay canonical), NOT
+  // row-collapsing. See the "Merge removed" note below + ROADMAP.md. Live merge = durable commitMerge.
 
   const wlbeCounts=useMemo(()=>{
     const bePct4=portfolio?.breakevenPct??1.0;
@@ -3896,11 +3868,12 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onCommitUp
               window.XLSX.writeFile(wb,"THUS_Journal_Export.xlsx");
             });
           }} className={`${clsBtn("green","sm")} self-end mb-0.5`}>📤 Export Excel</button>
-          {/* Merge temporarily disabled: old implementation double-counted realized P/L
+          {/* Merge removed (P2-4A): the old row-collapsing implementation double-counted realized P/L
               because `_hiddenByMerge` was written to sub-trades but never read by any
-              calculation. Future replacement should use trade grouping / thesis
-              grouping (raw executions stay canonical; a group is a review/analytics
-              layer), NOT row-collapsing. Do not re-enable the old Merge. See ROADMAP.md. */}
+              calculation. Its dead UI/state was deleted (it was unreachable AND the last
+              autosave-only persistence path). Future replacement should use trade grouping /
+              thesis grouping (raw executions stay canonical; a group is a review/analytics
+              layer), NOT row-collapsing. Do not re-add the old Merge. See ROADMAP.md. */}
         </div>
       </div>
 
@@ -3929,11 +3902,6 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onCommitUp
           <table className="w-full text-sm" style={{minWidth:"800px"}}>
             <thead className="bg-input/40 border-b border-border">
               <tr>
-                <th className="px-3 py-2.5 w-8">
-                {mergeActive&&<input type="checkbox" className="accent-yellow cursor-pointer"
-                  checked={selMerge.size===filtered.length&&filtered.length>0}
-                  onChange={()=>setSelMerge(selMerge.size===filtered.length?new Set():new Set(filtered.map(t=>t.id)))}/>}
-              </th>
               <th className="px-2 py-2.5 text-muted font-medium text-xs text-center w-6">#</th>
               <TH k="openDateTime">Open</TH>
               <TH k="exitDateTime">Close</TH>
@@ -3970,12 +3938,7 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onCommitUp
                 const isBreakeven=pct!=null&&Math.abs(pct)<bePct;
                 return(
                   <tr key={t.id}
-                    className={`border-b border-border/40 hover:bg-input/30 transition ${i%2!==0?"bg-input/10":""} ${mergeActive&&selMerge.has(t.id)?"bg-yellow/5":""}`}>
-                    <td className="px-3 py-2.5 w-8" onClick={e=>e.stopPropagation()}>
-                      {mergeActive&&<input type="checkbox" className="accent-yellow cursor-pointer"
-                        checked={selMerge.has(t.id)}
-                        onChange={()=>toggleSelMerge(t.id)}/>}
-                    </td>
+                    className={`border-b border-border/40 hover:bg-input/30 transition ${i%2!==0?"bg-input/10":""}`}>
                     <td className="px-2 py-2.5 text-center text-muted/40 text-[10px] tabular-nums w-6 select-none">{i+1}</td>
                     {/* Open Date */}
                     <td onClick={()=>setDetail(t)} className="px-3 py-2.5 text-muted text-xs cursor-pointer whitespace-nowrap">{t.openDateTime?.slice(0,10)||"—"}</td>
@@ -8359,7 +8322,19 @@ function App({session,onSignOut}){
     // depend on a pre-set flag consumed in the same render as setTrades. First real user edit schedules.
     if(!prevDbReadyRef.current){prevDbReadyRef.current=true;return;}
     clearTimeout(dbTimers.current.trades);
-    dbTimers.current.trades=setTimeout(()=>{saveTradesSerialized(trades,{source:"autosave"});},1500);
+    dbTimers.current.trades=setTimeout(()=>{
+      // P2-4A instrumentation (NO behavior change): after P2-1B…P2-3 every durable writer persists its
+      // own mutation single-row, so this full-array autosave is now a redundant BACKSTOP (+ reconcile-delete).
+      // Log cheap derived counts ONLY — never trade content, notes, or base64 image data; no full-array stringify.
+      // The row/image counts flag the ~11 MB base64 payload (P2-4B/P2-5 target). Cadence = the 1.5 s debounce.
+      let imgRows=0,imgItems=0;
+      for(const t of trades){
+        const n=((t&&t.preImages&&t.preImages.length)||0)+((t&&t.postImages&&t.postImages.length)||0);
+        if(n>0){imgRows++;imgItems+=n;}
+      }
+      console.warn("[autosave][backstop] full-array fire",{rows:trades.length,imgRows,imgItems});
+      saveTradesSerialized(trades,{source:"autosave"});
+    },1500);
     return()=>clearTimeout(dbTimers.current.trades);
   },[trades,authUid,dbReady]);
   // ── Durable-merge repair-on-load (P2-1B) — marker-GATED, idempotent. Finalizes any merged row
@@ -9127,8 +9102,8 @@ function App({session,onSignOut}){
       )}
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
-        {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onUpdateTrade={updateTrade} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onCommitMerge={commitMerge} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
-        {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onImportTrades={addTrades} onCommitImport={commitImportTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
+        {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onCommitMerge={commitMerge} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
+        {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onCommitImport={commitImportTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid} equityHWM={equityHWM} dailyPoints={dailyPoints} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio} equityHWM={equityHWM} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="calendar" &&<PageCalendar  trades={trades} products={products} uid={authUid} syncNotesToCloud={syncNotesToCloud}/>}
