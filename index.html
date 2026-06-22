@@ -974,6 +974,49 @@ function ResolvedImage(props){
   return <img src={resolved||_IMG_PENDING_PX} {...rest}/>;
 }
 
+// ── Image externalization (P2-5-C, upload-on-commit). Replaces base64 `data:` refs in the trade being
+// saved with stable `trade-images` Storage PATH strings (never signed/public URLs). preImages/postImages
+// stay PLAIN STRING ARRAYS; mixed path/base64/http is allowed and renders via the P2-5-B resolver. Acts ONLY
+// on the trade passed in (no bulk migration). Never mutates the input; never drops an image; on upload
+// failure the original base64 is kept (mixed save). Uses the authenticated client only (no service_role),
+// bucket trade-images, upsert:false (no overwrite — matches the no-UPDATE-policy RLS). Counts-only logging.
+const _IMG_MIME_EXT={"image/png":"png","image/jpeg":"jpg","image/jpg":"jpg","image/webp":"webp","image/gif":"gif"};
+const _imgSeg=(s)=>String(s==null?"":s).replace(/[^A-Za-z0-9_-]/g,"");   // sanitize path segment: no "/", no "..", no user text
+const _dataUriMime=(ref)=>{const m=/^data:([^;,]+)[;,]/.exec(ref||"");return m?m[1].toLowerCase():null;};
+async function _dataUriToBlob(ref){const r=await fetch(ref);return await r.blob();}   // browser-safe data: → Blob
+async function _uploadTradeImage(authUid,tradeId,side,ref){
+  const mime=_dataUriMime(ref);
+  const ext=mime&&_IMG_MIME_EXT[mime];
+  if(!ext)return{ok:false,reason:"unsupported_mime"};   // unknown/disallowed type → keep base64
+  const path=`${_imgSeg(authUid)}/${_imgSeg(tradeId)}/${side}/${_imgSeg(uid())}.${ext}`;   // {uid}/{tradeId}/{pre|post}/{imageId}.{ext}
+  try{
+    const blob=await _dataUriToBlob(ref);
+    const{error}=await SUPA.storage.from(TRADE_IMG_BUCKET).upload(path,blob,{contentType:mime,upsert:false});
+    if(error)return{ok:false,reason:"upload_error"};
+    return{ok:true,path};
+  }catch(e){return{ok:false,reason:"upload_threw"};}
+}
+async function externalizeTradeImages(authUid,trade){
+  let uploaded=0,failed=0,skipped=0;
+  if(!authUid||!trade)return{trade,uploaded,failed,skipped};
+  const out={...trade};   // shallow clone; the two image arrays are rebuilt below, input is never mutated
+  for(const[field,side] of [["preImages","pre"],["postImages","post"]]){
+    const arr=trade[field];
+    if(!Array.isArray(arr)){continue;}
+    const next=[];
+    for(const ref of arr){
+      if(isDataImageRef(ref)){
+        const res=await _uploadTradeImage(authUid,trade.id,side,ref);
+        if(res.ok){next.push(res.path);uploaded++;}       // success → store PATH
+        else{next.push(ref);failed++;}                    // failure → keep base64 (never drop)
+      }else{next.push(ref);skipped++;}                     // path / http / unknown → keep as-is
+    }
+    out[field]=next;
+  }
+  if(uploaded||failed)console.warn("[img-externalize]",{uploaded,failed,skipped});   // counts only — never refs/base64
+  return{trade:out,uploaded,failed,skipped};
+}
+
 const clsInput="w-full bg-input border border-border rounded-lg px-3 py-2 text-txt text-sm focus:outline-none focus:border-yellow/60 focus:ring-1 focus:ring-yellow/20 transition placeholder-muted";
 // Sizing for long-form pre/post note textareas — comfortable for full templates,
 // capped to 50vh so Save/Cancel stays reachable inside modals. Mobile-safe.
@@ -3771,7 +3814,7 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onComm
         <TradeDetailModal trade={detailTrade} product={resolveProduct(products,detailTrade.productId)}
           onClose={()=>setDetailTrade(null)}
           showToast={showToast}
-          onCommitUpdate={async t=>{const res=await onCommitUpdate(t); if(res&&res.ok)setDetailTrade(t); return res;}}/>
+          onCommitUpdate={async t=>{const res=await onCommitUpdate(t); if(res&&res.ok)setDetailTrade(res.trade||t); return res;}}/>
       )}
       {executingDraft&&(
         <MindsetChecklistModal
@@ -4074,7 +4117,7 @@ function PageJournal({trades,products,balance,portfolio,onCommitUpdate,onDeleteT
           product={resolveProduct(products,detail.productId)}
           onClose={()=>setDetail(null)}
           showToast={showToast}
-          onCommitUpdate={async t=>{const res=await onCommitUpdate(t); if(res&&res.ok)setDetail(t); return res;}}
+          onCommitUpdate={async t=>{const res=await onCommitUpdate(t); if(res&&res.ok)setDetail(res.trade||t); return res;}}
           onDelete={onDeleteTrade}
           showConfirm={showConfirm}
         />
@@ -8865,15 +8908,16 @@ function App({session,onSignOut}){
   const commitClose=useCallback(async(updatedTrade)=>{
     try{
       clearTimeout(dbTimers.current.trades);   // cancel any pending debounced autosave so it can't race the close save
-      const res=await saveTradesSerialized(updatedTrade,{source:"close",affectedTradeId:updatedTrade.id});
+      const ext=(await externalizeTradeImages(authUid,updatedTrade)).trade;   // P2-5-C: base64 → Storage path before save
+      const res=await saveTradesSerialized(ext,{source:"close",affectedTradeId:ext.id});
       if(res&&res.ok){
-        updateTrade(updatedTrade);   // ONLY now: apply close to state + CB-disarm (never before res.ok)
-        return {ok:true};
+        updateTrade(ext);   // ONLY now: apply the EXTERNALIZED close to state + CB-disarm (local converges to path refs)
+        return {ok:true,trade:ext};
       }
-      // Failure: state untouched (trade stays open, CB armed); caller keeps modal open + retry.
+      // Failure: state untouched (trade stays open, CB armed); caller keeps modal open + retry. Any uploaded objects orphan (v1).
       return {ok:false,error:(res&&res.error)||new Error("close save failed"),guard:res&&res.guard};
     }catch(e){console.warn("[close-save] commitClose error",e);return {ok:false,error:e};}
-  },[updateTrade,saveTradesSerialized]);
+  },[updateTrade,saveTradesSerialized,authUid]);
   // ── Open-save durability — same SAVE-FIRST single-row pattern as the close path, applied to
   // NEW opens (addTrade) and draft→open execute (updateTrade). AWAIT a durable single-row
   // db.saveTrade (via saveTradesSerialized source:"open"); apply local state + report success
@@ -8882,14 +8926,15 @@ function App({session,onSignOut}){
   const commitTradeWrite=useCallback(async(trade,apply)=>{
     try{
       clearTimeout(dbTimers.current.trades);   // cancel any pending debounced full-array autosave so it can't race this save
-      const res=await saveTradesSerialized(trade,{source:"open",affectedTradeId:trade.id});
+      const ext=(await externalizeTradeImages(authUid,trade)).trade;   // P2-5-C: base64 → Storage path before save
+      const res=await saveTradesSerialized(ext,{source:"open",affectedTradeId:ext.id});
       if(res&&res.ok){
-        apply(trade);   // ONLY now: new open → addTrade (append); draft execute → updateTrade (replace)
-        return {ok:true};
+        apply(ext);   // ONLY now: new open → addTrade (append); draft execute → updateTrade (replace) — local gets path refs
+        return {ok:true,trade:ext};
       }
       return {ok:false,error:(res&&res.error)||new Error("open save failed"),guard:res&&res.guard};
     }catch(e){console.warn("[open-save] commitTradeWrite error",e);return {ok:false,error:e};}
-  },[saveTradesSerialized]);
+  },[saveTradesSerialized,authUid]);
   const commitOpen=useCallback(t=>commitTradeWrite(t,addTrade),[commitTradeWrite,addTrade]);
   const commitExecuteDraft=useCallback(t=>commitTradeWrite(t,updateTrade),[commitTradeWrite,updateTrade]);
   // ── Pure local row replacement — used ONLY by the durable update path. No CB logic,
@@ -8906,14 +8951,15 @@ function App({session,onSignOut}){
   const commitUpdateTrade=useCallback(async(updatedTrade)=>{
     try{
       clearTimeout(dbTimers.current.trades);   // cancel any pending debounced full-array autosave so it can't race this save
-      const res=await saveTradesSerialized(updatedTrade,{source:"update",affectedTradeId:updatedTrade.id});
+      const ext=(await externalizeTradeImages(authUid,updatedTrade)).trade;   // P2-5-C: base64 → Storage path before save
+      const res=await saveTradesSerialized(ext,{source:"update",affectedTradeId:ext.id});
       if(res&&res.ok){
-        replaceTradeLocal(updatedTrade);   // ONLY now: pure local row replace (no side effects)
-        return {ok:true};
+        replaceTradeLocal(ext);   // ONLY now: pure local row replace with the EXTERNALIZED trade (local converges to path refs)
+        return {ok:true,trade:ext};   // caller (detail modal) re-applies res.trade so its view shows path-backed images, not stale base64
       }
       return {ok:false,error:(res&&res.error)||new Error("update save failed"),guard:res&&res.guard};
     }catch(e){console.warn("[update-save] commitUpdateTrade error",e);return {ok:false,error:e};}
-  },[replaceTradeLocal,saveTradesSerialized]);
+  },[replaceTradeLocal,saveTradesSerialized,authUid]);
   // ── Import durability (P2-3) — SAVE-FIRST per-row durable writes for Excel / MT5 file import.
   // Replaces the old "addTrades → full-array debounced autosave" persistence: each confirmed
   // imported row is written via the single-row path (saveTradesSerialized source:"open") BEFORE it
