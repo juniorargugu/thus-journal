@@ -341,6 +341,22 @@ const db={
       return{ok:true,id:String(trade.id),ids:new Set([String(trade.id)]),mode:"single"};
     }catch(e){console.warn("[db] saveTrade error",e);return{ok:false,error:e};}
   },
+  // Batch durable DELETE writer (P2-1B). Deletes ONLY the given ids for this user in ONE
+  // statement (.in("id",ids)) and reports which landed via .select("id"). Returns
+  // {ok,deletedIds,requestedIds,error}; does NOT hard-fail when deletedIds<requestedIds —
+  // already-absent rows are a valid repair state, so the CALLER decides. No full-array, no
+  // reconcile-delete, no knownIds. Never throws. (Standalone delete still uses the old path
+  // for now; this helper serves durable merge + repair only.)
+  async deleteTrades(uid,ids){
+    try{
+      if(!uid||!Array.isArray(ids)||ids.length===0){return{ok:false,error:new Error("deleteTrades: missing uid/ids"),deletedIds:[],requestedIds:Array.isArray(ids)?ids.map(String):[]};}
+      const{data,error}=await SUPA.from("trades").delete().eq("user_id",uid).in("id",ids).select("id");
+      if(error){console.warn("[trades][delete-batch] error",error);return{ok:false,error,deletedIds:[],requestedIds:ids.map(String)};}
+      const deletedIds=(data||[]).map(r=>String(r.id));
+      console.log("[trades][delete-batch] ok",{requested:ids.length,deleted:deletedIds.length});
+      return{ok:true,deletedIds,requestedIds:ids.map(String)};
+    }catch(e){console.warn("[db] deleteTrades error",e);return{ok:false,error:e,deletedIds:[],requestedIds:(ids||[]).map(String)};}
+  },
   async savePortfolio(uid,data,expectedUpdatedAt){
     try{
       const newTs=new Date().toISOString();
@@ -3355,7 +3371,7 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authU
     </div>
   );
 }
-function PagePositions({trades,products,productRegistry,balance,portfolio,onAddTrade,onCommitOpen,onCommitExecuteDraft,onUpdateTrade,onCommitClose,onCommitUpdate,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
+function PagePositions({trades,products,productRegistry,balance,portfolio,onAddTrade,onCommitOpen,onCommitExecuteDraft,onUpdateTrade,onCommitClose,onCommitUpdate,onCommitMerge,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
   const[showForm,setShowForm]=useState(false);
   const[editTrade,setEditTrade]=useState(null);
   const[closingTrade,setClosingTrade]=useState(null);
@@ -3420,10 +3436,18 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onAddT
         +sel.map(t=>`• ${t.contracts} contracts @${t.entryPrice}`).join("\n"),
       subTrades:sel.map(t=>({id:t.id,contracts:t.contracts,entryPrice:t.entryPrice,exitPrice:null})),
     };
-    sel.forEach(t=>onDeleteTrade(t.id));
-    onAddTrade(merged);
-    setMergeMode(false);setMergeSym(null);setMergeIds([]);
-    showToast(`⊕ Merged ${sel.length} positions เรียบร้อย`,"success");
+    // P2-1B: durable merge (merged-first + marker repair) replaces the old local-only
+    // forEach(onDeleteTrade)+onAddTrade that relied on the full-array autosave for persistence.
+    const sourceIds=sel.map(t=>t.id);
+    onCommitMerge(merged,sourceIds).then(res=>{
+      if(res&&res.ok){
+        setMergeMode(false);setMergeSym(null);setMergeIds([]);
+        showToast(`⊕ Merged ${sel.length} positions เรียบร้อย`,"success");
+      }else{
+        // Failure is a CLEAN revert (merged rolled back, sources intact) — safe to retry; keep selection.
+        showToast("Merge ไม่สำเร็จ — sources ปลอดภัย ลองใหม่ได้","error");
+      }
+    });
   };
 
   const startMerge=(tradeKey)=>{
@@ -8117,6 +8141,9 @@ function App({session,onSignOut}){
   // hydrated array); that one redundant full-array write-back is skipped. The first real
   // user edit (a later render, dbReady already true) autosaves normally. Batching-robust.
   const prevDbReadyRef=useRef(false);
+  // P2-1B durable-merge repair guard — mergeCommitIds (or merged ids) being repaired this
+  // session, so the marker-gated repair effect never storms or re-enters the same pending merge.
+  const mergeRepairInFlight=useRef(new Set());
   const saveTradesSerialized=useCallback((payload,meta)=>{
     const info=meta||{};
     const isSingleRow=info.source==="close"||info.source==="open"||info.source==="update";   // close/open/update → payload is a single trade OBJECT; else an ARRAY
@@ -8283,6 +8310,80 @@ function App({session,onSignOut}){
     dbTimers.current.trades=setTimeout(()=>{saveTradesSerialized(trades,{source:"autosave"});},1500);
     return()=>clearTimeout(dbTimers.current.trades);
   },[trades,authUid,dbReady]);
+  // ── Durable-merge repair-on-load (P2-1B) — marker-GATED, idempotent. Finalizes any merged row
+  // that was durably saved (merged-first) but whose source-delete / finalize did not complete and
+  // was loaded from the server with mergeDeletePending:true. Deletes any still-present sources, then
+  // flips the marker to false. NEVER touches legacy/import merged trades (those lack durableMergeVersion).
+  // Guarded by a per-session (per-mount) in-flight set so it can't storm; a failed repair is retried on the
+  // next reload (the ref re-initialises on mount), not same-session — sources already dropped locally + the
+  // autosave reconcile backstop keep state correct meanwhile, so the stale pending marker is only cosmetic.
+  useEffect(()=>{
+    if(!authUid||!dbReady)return;
+    const pending=trades.filter(t=>t&&t.durableMergeVersion===1&&t.mergeDeletePending===true&&t.isMerged===true&&Array.isArray(t.mergedFromIds)&&t.mergedFromIds.length>0);
+    if(pending.length===0)return;
+    const liveIds=new Set(trades.map(t=>String(t.id)));
+    pending.forEach(async(m)=>{
+      const cid=m.mergeCommitId||m.id;
+      if(mergeRepairInFlight.current.has(cid))return;
+      mergeRepairInFlight.current.add(cid);
+      clearTimeout(dbTimers.current.trades);   // a queued autosave must not resurrect sources mid-repair
+      // ── Duplicate / orphan resolution. A source leg can appear in two durableMergeVersion===1 rows ONLY
+      // via a failed-then-retried merge (a successful merge deletes its sources server-side). Gather all
+      // durable-merge rows sharing any of this row's legs and elect ONE deterministic survivor:
+      //   1) a row whose sources are ALL already consumed (gone) — a REAL completed merge — outranks an
+      //      orphan whose sources are still alive (so we NEVER delete a real position to keep an orphan);
+      //   2) then a finalized row outranks a pending one;
+      //   3) then lowest id (stable). Every colliding row computes the SAME survivor from one trades
+      // snapshot → exactly one is kept; the rest are deleted (never finalized). Closes double-count + loss.
+      const liveSet=new Set(trades.map(t=>String(t.id)));
+      const consumed=t=>Array.isArray(t.mergedFromIds)&&t.mergedFromIds.every(id=>!liveSet.has(String(id)));
+      const mfi=new Set((m.mergedFromIds||[]).map(String));
+      const group=trades.filter(t=>t&&t.durableMergeVersion===1&&Array.isArray(t.mergedFromIds)&&t.mergedFromIds.some(id=>mfi.has(String(id))));
+      const survivor=group.slice().sort((a,b)=>{
+        const ac=consumed(a)?0:1,bc=consumed(b)?0:1;
+        if(ac!==bc)return ac-bc;                                                  // real (sources consumed) before orphan (sources alive)
+        const af=a.mergeDeletePending===true?1:0,bf=b.mergeDeletePending===true?1:0;
+        if(af!==bf)return af-bf;                                                  // finalized before pending
+        return String(a.id)<String(b.id)?-1:(String(a.id)>String(b.id)?1:0);     // stable tiebreak: lowest id
+      })[0];
+      if(survivor&&String(survivor.id)!==String(m.id)){
+        // m is a non-survivor duplicate → delete it (never finalize). Resurrection-safe: only the merged
+        // row is touched, dropped from local + lastSeenRef BEFORE the await; no source row involved.
+        setTrades(prev=>prev.filter(t=>t.id!==m.id));
+        lastSeenRef.current.tradeIds=new Set([...lastSeenRef.current.tradeIds].filter(id=>String(id)!==String(m.id)));
+        try{
+          const dd=await db.deleteTrades(authUid,[m.id]);
+          if(dd&&dd.ok)console.warn("[merge][repair] deleted duplicate merged (kept survivor)",{id:String(m.id),survivor:String(survivor.id)});
+          else console.warn("[merge][repair] duplicate delete failed — next reload's repair will remove it",{id:String(m.id)});
+        }catch(e){console.warn("[merge][repair] duplicate delete error",e);}
+        return;
+      }
+      // m is the survivor → COMPLETE its merge. Delete any still-present sources FIRST and flip the marker
+      // to finalized ONLY AFTER they are confirmed gone — so a finalized merged row can never persist beside
+      // live source legs (a permanent double-count). Local source-removal stays BEFORE the await (resurrection-safe).
+      try{
+        const remaining=m.mergedFromIds.filter(id=>liveIds.has(String(id)));
+        if(remaining.length>0){
+          setTrades(prev=>prev.filter(t=>!remaining.includes(t.id)));
+          const del=await db.deleteTrades(authUid,remaining);
+          if(!(del&&del.ok)){
+            // sources NOT confirmed gone → leave the marker PENDING (do not finalize). The autosave reconcile
+            // backstop (sources kept in lastSeenRef, absent from local) and/or the next reload's repair finish it.
+            console.warn("[merge][repair] source delete failed — left pending; backstop/next reload completes",{id:String(m.id)});
+            return;
+          }
+          const remStr=new Set(remaining.map(String));
+          lastSeenRef.current.tradeIds=new Set([...lastSeenRef.current.tradeIds].filter(id=>!remStr.has(String(id))));
+          console.log("[merge][repair] sources deleted",{id:String(m.id),count:remaining.length});
+        }
+        const finalized={...m,mergeDeletePending:false,mergeCompletedAt:m.mergeCompletedAt||new Date().toISOString()};
+        setTrades(prev=>prev.map(t=>t.id===m.id?finalized:t));
+        const sres=await db.saveTrade(authUid,finalized);
+        if(sres&&sres.ok)console.log("[merge][repair] finalized",{id:String(m.id)});
+        else console.warn("[merge][repair] finalize save failed — retry next load",{id:String(m.id)});
+      }catch(e){console.warn("[merge][repair] error",e);}
+    });
+  },[dbReady,authUid,trades]);
   useEffect(()=>{
     if(!authUid)return;
     if(!dbReady){console.warn("[persist] skipped portfolio save — hydration not ready");return;}
@@ -8703,6 +8804,63 @@ function App({session,onSignOut}){
       return next;
     });
   },[]);
+  // ── Durable merge (P2-1B) — browser-only, merged-FIRST with marker-based repair. Replaces the
+  // old local-only merge (forEach deleteTrade + addTrade) that relied on the full-array autosave.
+  // Sequence: (1) cancel any pending debounced autosave so it can't race/resurrect sources;
+  // (2) durably save the merged row FIRST (serialized → waits out any in-flight autosave) with
+  // mergeDeletePending:true; (3) batch-delete the sources; (4) ONLY on full delete success apply
+  // local state using TODAY'S deleteTrade+addTrade semantics (identical CB/portfolio behavior) +
+  // fix lastSeenRef; (5) best-effort finalize marker (pending:false). Sources are NEVER removed
+  // locally before they are durably deleted, so the autosave can never resurrect them. Final-marker
+  // failure is non-fatal — repair-on-load finalizes. No db.saveTrade/commit* semantic change; the
+  // full-array autosave is left intact. On source-delete failure the merged row is left pending for
+  // repair-on-load (it self-completes on next reload by deleting the sources + finalizing).
+  const commitMerge=useCallback(async(mergedBase,sourceIds)=>{
+    try{
+      clearTimeout(dbTimers.current.trades);   // cancel pending full-array autosave so it can't race/resurrect
+      const commitId=uid();
+      const mergedPending={...mergedBase,durableMergeVersion:1,mergeCommitId:commitId,mergeDeletePending:true};
+      // (2) merged-FIRST durable save (source:"open" → serialized chain + registers id in lastSeenRef)
+      const r1=await saveTradesSerialized(mergedPending,{source:"open",affectedTradeId:mergedPending.id});
+      if(!(r1&&r1.ok)){console.warn("[merge] merged save failed — aborting, no local change",r1&&r1.error);return{ok:false,stage:"merged_save",error:r1&&r1.error};}
+      console.log("[merge] durable saved",{id:String(mergedPending.id),commitId});
+      // (3) delete sources (direct batch; safe — autosave canceled, local state not yet changed)
+      const del=await db.deleteTrades(authUid,sourceIds);
+      // Success = the atomic .in() DELETE statement executed (del.ok). Postgres deletes ALL matching
+      // rows in ONE statement, so del.ok ⇒ every source that still existed is gone (a requested id
+      // absent from deletedIds was already gone — NOT a half-failure). A FAILED statement deletes
+      // nothing. We must NOT leave an orphan pending merged on failure: a retry would then mint a
+      // second merged row → permanent double-count after repair finalizes the orphan.
+      if(!(del&&del.ok)){
+        // Clean ABORT + rollback: delete the just-saved merged row and drop it from lastSeenRef so
+        // neither a retry nor the autosave reconcile can act on it. Nothing was deleted server-side,
+        // so the sources are intact → this reverts to the exact pre-merge state. Retry is then safe.
+        const rb=await db.deleteTrades(authUid,[mergedPending.id]);
+        lastSeenRef.current.tradeIds=new Set([...lastSeenRef.current.tradeIds].filter(id=>String(id)!==String(mergedPending.id)));
+        if(rb&&rb.ok)console.warn("[merge] source delete failed — rolled back merged (clean revert, retry-safe)",{id:String(mergedPending.id),error:del&&del.error});
+        // Rollback ALSO failed: the orphan merged persists on the server (sources still intact, since the
+        // source delete is what failed). It is NOT auto-reverted this session, but repair-on-load handles it
+        // on the next reload — completing it if its sources survived, or DELETING it as a duplicate if a retry
+        // already consumed them (sibling-dedup guard). No double-count, no source loss.
+        else console.warn("[merge] source delete AND rollback both failed — repair-on-load will reconcile the orphan on next reload; sources intact",{id:String(mergedPending.id)});
+        return{ok:false,stage:"source_delete",error:del&&del.error};
+      }
+      console.log("[merge] sources deleted",{count:((del&&del.deletedIds)||[]).length});
+      // (4) apply local state with TODAY'S semantics (deleteTrade removes + CB-disarm; addTrade appends + CB-arm)
+      const mergedFinal={...mergedPending,mergeDeletePending:false,mergeCompletedAt:new Date().toISOString()};
+      sourceIds.forEach(id=>deleteTrade(id));
+      addTrade(mergedFinal);
+      // lastSeenRef coherence: drop source ids (merged id already registered by source:"open" above)
+      const srcStr=new Set(sourceIds.map(String));
+      lastSeenRef.current.tradeIds=new Set([...lastSeenRef.current.tradeIds].filter(id=>!srcStr.has(String(id))));
+      lastSeenRef.current.tradeIds.add(String(mergedFinal.id));
+      // (5) best-effort finalize marker on server (non-fatal — repair-on-load finalizes if this fails)
+      const r2=await saveTradesSerialized(mergedFinal,{source:"update",affectedTradeId:mergedFinal.id});
+      if(r2&&r2.ok)console.log("[merge] finalized",{id:String(mergedFinal.id)});
+      else console.warn("[merge] finalize marker save failed — repair-on-load will finalize",r2&&r2.error);
+      return{ok:true,id:String(mergedFinal.id)};
+    }catch(e){console.warn("[merge] commitMerge error",e);return{ok:false,error:e};}
+  },[authUid,saveTradesSerialized,deleteTrade,addTrade]);
 
   const navItems=[
     {k:"positions",l:"Positions"},
@@ -8840,7 +8998,7 @@ function App({session,onSignOut}){
       )}
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
-        {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onUpdateTrade={updateTrade} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
+        {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onUpdateTrade={updateTrade} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onCommitMerge={commitMerge} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
         {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid} equityHWM={equityHWM} dailyPoints={dailyPoints} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio} equityHWM={equityHWM} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
