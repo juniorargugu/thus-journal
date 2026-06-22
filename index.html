@@ -8804,9 +8804,43 @@ function App({session,onSignOut}){
       return next;
     });
   },[]);
-  const deleteTrade=useCallback(id=>{
-    removeTradeLocal(id);
-  },[removeTradeLocal]);
+  const deleteTrade=useCallback(async(id)=>{
+    const requestedId=String(id);
+    clearTimeout(dbTimers.current.trades);   // cancel queued autosave; the promise chain below waits out any already-running one
+    const deleteAfterSaves=async()=>{
+      const knownIds=lastSeenRef.current.tradeIds||new Set();
+      const onServer=[...knownIds].some(x=>String(x)===requestedId);
+      if(!onServer)return{ok:true,localOnly:true,id:requestedId};
+      const del=await db.deleteTrades(authUid,[id]);
+      const deletedIds=((del&&del.deletedIds)||[]).map(String);
+      const deleted=deletedIds.includes(requestedId);
+      if(del&&del.ok&&deleted)return{ok:true,id:requestedId};
+      return{ok:false,error:(del&&del.error)||new Error("delete did not confirm target row"),result:del,id:requestedId};
+    };
+    try{
+      const prev=(tradesSavePromiseRef.current||Promise.resolve()).catch(()=>{});
+      const p=prev.then(async()=>{
+        savingRef.current.trades=true;
+        try{return await deleteAfterSaves();}
+        catch(e){console.warn("[delete] durable delete error",e);return{ok:false,error:e,id:requestedId};}
+        finally{savingRef.current.trades=false;}
+      });
+      tradesSavePromiseRef.current=p;
+      const res=await p;
+      if(res&&res.ok){
+        lastSeenRef.current.tradeIds=new Set([...lastSeenRef.current.tradeIds].filter(x=>String(x)!==requestedId));
+        removeTradeLocal(id);
+        return res;
+      }
+      console.warn("[delete] durable delete failed — local state kept",res);
+      showToast&&showToast("ลบ trade ไม่สำเร็จ ลองอีกครั้ง","error");
+      return res||{ok:false,error:new Error("delete failed"),id:requestedId};
+    }catch(e){
+      console.warn("[delete] deleteTrade error",e);
+      showToast&&showToast("ลบ trade ไม่สำเร็จ ลองอีกครั้ง","error");
+      return{ok:false,error:e,id:requestedId};
+    }
+  },[authUid,removeTradeLocal,showToast]);
   // ── Durable merge (P2-1B) — browser-only, merged-FIRST with marker-based repair. Replaces the
   // old local-only merge (forEach deleteTrade + addTrade) that relied on the full-array autosave.
   // Sequence: (1) cancel any pending debounced autosave so it can't race/resurrect sources;
