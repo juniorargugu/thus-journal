@@ -1,16 +1,16 @@
 # P2-5-A — Image Externalization: Supabase Storage Policy Pack
 
-**Status:** `P2_5A_STORAGE_POLICY_PACK — DRAFT / NOT APPLIED`
+**Status:** `P2_5A_STORAGE_POLICY_PACK — APPLIED 2026-06-22`
 
-Drafted 2026-06-22 BKK. **SQL drafted only. No SQL was executed. No bucket was created.**
-No Supabase write. No app code touched. No deploy. No push. No restart. No objects uploaded.
+Drafted 2026-06-22 BKK. **APPLIED 2026-06-22 BKK** by Junior in the Supabase SQL Editor (§5 run verbatim
+after a clean conflict pre-check). Verification output recorded in §6.1. No app code touched. No deploy.
+No push. No objects uploaded.
 
-> ⚠️ **DO NOT RUN ANY SQL IN THIS FILE WITHOUT AN EXPLICIT WRITTEN "GO" FROM JUNIOR.**
-> This pack only *prepares* the private `trade-images` Storage bucket + RLS. Creating the bucket and
-> policies does **not** make the app write anything — app reads/writes arrive later in P2-5-B / P2-5-C.
+> ✅ **APPLIED.** The private `trade-images` Storage bucket + 2 RLS policies (SELECT-own, INSERT-own) now
+> exist. Creating the bucket does **not** make the app write anything — upload-on-commit arrives in P2-5-C.
+> Render support (P2-5-B) already shipped (`92ba315`).
 
-This is the draft Junior reviews **before** opening the Supabase SQL Editor. Approve in writing
-(a follow-up "run P2-5-A" task) or send back revisions.
+This pack was reviewed before the SQL Editor run; the SQL in §5 is the exact applied source.
 
 ---
 
@@ -21,11 +21,11 @@ This is the draft Junior reviews **before** opening the Supabase SQL Editor. App
 | Supabase project | `wtfwynvvkiuottjnmozu` |
 | Bucket proposed | `trade-images` |
 | Bucket visibility | **private** (public rejected — see §3) |
-| SQL applied? | **No.** Draft only. |
+| SQL applied? | **Yes — 2026-06-22** (Supabase SQL Editor, §5 verbatim). |
 | App code changes? | **None.** |
-| Supabase changes? | **None.** |
+| Supabase changes? | **Bucket `trade-images` (private) + 2 `storage.objects` policies created.** |
 | Deploy / push / restart? | **None.** |
-| New policies proposed | **2** — `storage.objects` SELECT + INSERT (authenticated, own-folder) |
+| New policies applied | **2** — `storage.objects` SELECT + INSERT (authenticated, own-folder) |
 | UPDATE / DELETE policies | **None in v1** (drafted but commented out, see §5) |
 | Stored ref format | storage **path** string, `{user_id}/{trade_id}/{pre\|post}/{image_id}.{ext}` |
 | Idempotent? | Yes — bucket `on conflict do nothing`; policies `drop policy if exists` then `create`. Safe to re-run. |
@@ -169,6 +169,23 @@ with check (
 ---
 
 ## 6. Validation queries / checklist (run AFTER an approved apply)
+
+### 6.1 Apply verification record — 2026-06-22 (Junior, Supabase SQL Editor)
+
+- **Conflict pre-check** (`pg_policies … like 'trade-images %'` before apply): **no rows** → no pre-existing/conflicting policies.
+- **§5 apply:** `success` (idempotent bucket insert + 2 `create policy`).
+- **Query (b) — policies present:**
+  ```json
+  [ { "policyname": "trade-images insert own", "cmd": "INSERT" },
+    { "policyname": "trade-images select own", "cmd": "SELECT" } ]
+  ```
+  → exactly the 2 intended policies; **no UPDATE/DELETE policy**. ✅
+- **Query (c) — public bucket guard:** `{ "public_trade_images": 0 }` → **no public bucket**. ✅
+- **Query (a) — bucket detail row** (`public` / `file_size_limit` / `allowed_mime_types`): not captured at apply time;
+  the idempotent `insert … on conflict do nothing` ran on a fresh id, so the intended values
+  (`public=false`, `5242880`, image-only MIME list) are the applied values. Re-paste query (a) any time to append a full row confirmation.
+
+**Net:** bucket `trade-images` created **private**, with exactly the SELECT-own + INSERT-own policies. No UPDATE/DELETE, no public, no objects uploaded.
 
 **SELECT-only verification (safe, read-only):**
 
