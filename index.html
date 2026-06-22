@@ -8791,7 +8791,7 @@ function App({session,onSignOut}){
       return {ok:false,error:(res&&res.error)||new Error("update save failed"),guard:res&&res.guard};
     }catch(e){console.warn("[update-save] commitUpdateTrade error",e);return {ok:false,error:e};}
   },[replaceTradeLocal,saveTradesSerialized]);
-  const deleteTrade=useCallback(id=>{
+  const removeTradeLocal=useCallback(id=>{
     setTrades(p=>{
       const deleted=p.find(x=>x.id===id);
       const next=p.filter(x=>x.id!==id);
@@ -8804,12 +8804,15 @@ function App({session,onSignOut}){
       return next;
     });
   },[]);
+  const deleteTrade=useCallback(id=>{
+    removeTradeLocal(id);
+  },[removeTradeLocal]);
   // ── Durable merge (P2-1B) — browser-only, merged-FIRST with marker-based repair. Replaces the
   // old local-only merge (forEach deleteTrade + addTrade) that relied on the full-array autosave.
   // Sequence: (1) cancel any pending debounced autosave so it can't race/resurrect sources;
   // (2) durably save the merged row FIRST (serialized → waits out any in-flight autosave) with
   // mergeDeletePending:true; (3) batch-delete the sources; (4) ONLY on full delete success apply
-  // local state using TODAY'S deleteTrade+addTrade semantics (identical CB/portfolio behavior) +
+  // local state using TODAY'S removeTradeLocal+addTrade semantics (identical CB/portfolio behavior) +
   // fix lastSeenRef; (5) best-effort finalize marker (pending:false). Sources are NEVER removed
   // locally before they are durably deleted, so the autosave can never resurrect them. Final-marker
   // failure is non-fatal — repair-on-load finalizes. No db.saveTrade/commit* semantic change; the
@@ -8846,9 +8849,9 @@ function App({session,onSignOut}){
         return{ok:false,stage:"source_delete",error:del&&del.error};
       }
       console.log("[merge] sources deleted",{count:((del&&del.deletedIds)||[]).length});
-      // (4) apply local state with TODAY'S semantics (deleteTrade removes + CB-disarm; addTrade appends + CB-arm)
+      // (4) apply local state with TODAY'S semantics (removeTradeLocal removes + CB-disarm; addTrade appends + CB-arm)
       const mergedFinal={...mergedPending,mergeDeletePending:false,mergeCompletedAt:new Date().toISOString()};
-      sourceIds.forEach(id=>deleteTrade(id));
+      sourceIds.forEach(id=>removeTradeLocal(id));
       addTrade(mergedFinal);
       // lastSeenRef coherence: drop source ids (merged id already registered by source:"open" above)
       const srcStr=new Set(sourceIds.map(String));
@@ -8860,7 +8863,7 @@ function App({session,onSignOut}){
       else console.warn("[merge] finalize marker save failed — repair-on-load will finalize",r2&&r2.error);
       return{ok:true,id:String(mergedFinal.id)};
     }catch(e){console.warn("[merge] commitMerge error",e);return{ok:false,error:e};}
-  },[authUid,saveTradesSerialized,deleteTrade,addTrade]);
+  },[authUid,saveTradesSerialized,removeTradeLocal,addTrade]);
 
   const navItems=[
     {k:"positions",l:"Positions"},
