@@ -313,6 +313,27 @@ const db={
       return{ok:true,ids:localIds};
     }catch(e){console.warn("[db] saveTrades error",e);return{ok:false,error:e};}
   },
+  // Reconcile-only DELETE backstop (P2-4B). The trades autosave no longer upserts the full array
+  // (no toTradeRow, no ~11 MB base64 body, no 57014 risk); it ONLY propagates LOCAL DELETIONS this tab
+  // performed but that some path did not already push server-side. Bounded to knownIds: deletes ONLY
+  // ids this tab previously knew about and that are now absent locally (removedIds = knownIds − localIds).
+  // Rows on the server that this tab never knew about (other tab/device) are NEVER touched. Inputs are
+  // ID SETS ONLY — never trade objects. String()-normalised both sides. deletedIds < removedIds is OK
+  // (already-gone rows are a valid state); only a real Supabase error fails. Never throws.
+  async reconcileDeletedTrades(uid,localIds,knownIds){
+    try{
+      if(!uid)return{ok:false,error:new Error("reconcileDeletedTrades: missing uid")};
+      const local=new Set([...(localIds||[])].map(String));
+      const known=[...(knownIds||[])].map(String);
+      const removedIds=known.filter(id=>!local.has(id));
+      if(removedIds.length===0)return{ok:true,removedIds:[],deletedIds:[]};
+      const{data,error}=await SUPA.from("trades").delete().eq("user_id",uid).in("id",removedIds).select("id");
+      if(error){console.warn("[db] reconcileDeletedTrades delete error",error);return{ok:false,error,removedIds};}
+      const deletedIds=(data||[]).map(r=>String(r.id));
+      console.warn("[db] reconcileDeletedTrades ok removed="+removedIds.length+" deleted="+deletedIds.length);
+      return{ok:true,removedIds,deletedIds};
+    }catch(e){console.warn("[db] reconcileDeletedTrades error",e);return{ok:false,error:e};}
+  },
   // Single-row durable CLOSE writer (P0 timeout fix). Upserts ONLY the affected row
   // (~≤1.5 MB vs the full ~11 MB array) so it stays inside the statement-timeout budget.
   // No full-array, no reconcile-delete, no knownIds. .select("id") verifies the row landed
@@ -8162,11 +8183,26 @@ function App({session,onSignOut}){
   const saveTradesSerialized=useCallback((payload,meta)=>{
     const info=meta||{};
     const isSingleRow=info.source==="close"||info.source==="open"||info.source==="update";   // close/open/update → payload is a single trade OBJECT; else an ARRAY
+    const isReconcile=info.source==="autosave_reconcile";   // P2-4B: ids-only delete reconcile; NEVER upserts / NEVER full-array
     try{
       const prev=(tradesSavePromiseRef.current||Promise.resolve()).catch(()=>{});
       const p=prev.then(async()=>{
         savingRef.current.trades=true;
         try{
+          if(isReconcile){
+            // RECONCILE-ONLY autosave (P2-4B). Derive ID SETS locally; NEVER call db.saveTrades / toTradeRow,
+            // NEVER send trade objects or base64 to Supabase. Only deletes ids this tab knew about and that
+            // are now gone locally (bounded by knownIds). Still serialized on tradesSavePromiseRef like every
+            // other trade write, so it cannot interleave with an in-flight single-row durable save.
+            const localIds=new Set((Array.isArray(payload)?payload:[]).map(t=>String(t&&t.id)));
+            const res=await db.reconcileDeletedTrades(authUid,localIds,lastSeenRef.current.tradeIds||new Set());
+            if(res&&res.ok){
+              lastSeenRef.current.tradeIds=localIds;   // adopt local as authoritative ONLY on success / no-op delete
+            }else{
+              console.warn("[autosave][reconcile] not ok — keeping prior knownIds",{res});
+            }
+            return res||{ok:false,error:new Error("reconcile returned no result")};
+          }
           if(isSingleRow){
             // CLOSE / OPEN single-row path FIRST — passing the OBJECT into db.saveTrades would TypeError on trades.map(...).
             // Object-shaped affected-trade guard (the array form below no-ops on an object).
@@ -8323,17 +8359,21 @@ function App({session,onSignOut}){
     if(!prevDbReadyRef.current){prevDbReadyRef.current=true;return;}
     clearTimeout(dbTimers.current.trades);
     dbTimers.current.trades=setTimeout(()=>{
-      // P2-4A instrumentation (NO behavior change): after P2-1B…P2-3 every durable writer persists its
-      // own mutation single-row, so this full-array autosave is now a redundant BACKSTOP (+ reconcile-delete).
-      // Log cheap derived counts ONLY — never trade content, notes, or base64 image data; no full-array stringify.
-      // The row/image counts flag the ~11 MB base64 payload (P2-4B/P2-5 target). Cadence = the 1.5 s debounce.
+      // P2-4B reconcile-only autosave: every field mutation is already durable single-row (P2-1B…P2-3),
+      // so this path NO LONGER upserts the full array / toTradeRow / base64 — it ONLY propagates LOCAL
+      // DELETIONS (knownIds − localIds) as a bounded shrink backstop (eliminates the ~11 MB / 57014 risk).
+      // Count-only instrumentation — never trade content, notes, or base64; no full-array stringify. The
+      // imgRows/imgItems counts are retained as the P2-5 (image externalization) signal. Cadence = 1.5 s debounce.
       let imgRows=0,imgItems=0;
       for(const t of trades){
         const n=((t&&t.preImages&&t.preImages.length)||0)+((t&&t.postImages&&t.postImages.length)||0);
         if(n>0){imgRows++;imgItems+=n;}
       }
-      console.warn("[autosave][backstop] full-array fire",{rows:trades.length,imgRows,imgItems});
-      saveTradesSerialized(trades,{source:"autosave"});
+      const known=lastSeenRef.current.tradeIds||new Set();
+      const localIdSet=new Set(trades.map(t=>String(t&&t.id)));
+      const removedCount=[...known].map(String).filter(id=>!localIdSet.has(id)).length;
+      console.warn("[autosave][backstop] reconcile fire",{rows:trades.length,knownIds:known.size,removedIds:removedCount,imgRows,imgItems});
+      saveTradesSerialized(trades,{source:"autosave_reconcile"});
     },1500);
     return()=>clearTimeout(dbTimers.current.trades);
   },[trades,authUid,dbReady]);
