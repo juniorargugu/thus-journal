@@ -918,6 +918,62 @@ const fileToBase64=(file)=>new Promise((res,rej)=>{
   const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(file);
 });
 
+// ── Image reference resolver (P2-5-B, render-only). preImages/postImages stay PLAIN STRING ARRAYS.
+// A ref is one of: legacy base64 data URI, an http(s) URL, or a future `trade-images` Storage path
+// ({user_id}/{trade_id}/{pre|post}/{image_id}.{ext}). data:/http render as-is (unchanged); a STRICTLY
+// matched storage path is signed at render via the authenticated client (private bucket, no service_role,
+// in-memory cache). Anything else passes through untouched. No upload, no externalize, no data-shape change.
+const isDataImageRef=(ref)=>typeof ref==="string"&&ref.startsWith("data:");
+const isHttpImageRef=(ref)=>typeof ref==="string"&&/^https?:\/\//i.test(ref);
+// Strict path: exactly 4 segments, side=pre|post, image ext allow-list, segment charset excludes "/" and ":"
+// (so it can NEVER match a data: or http(s):// ref), and no "..".
+const TRADE_IMG_PATH_RE=/^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+\/(?:pre|post)\/[A-Za-z0-9_-]+\.(?:jpg|jpeg|png|webp|gif)$/i;
+const isTradeImageStoragePath=(ref)=>typeof ref==="string"&&!ref.includes("..")&&TRADE_IMG_PATH_RE.test(ref);
+const TRADE_IMG_BUCKET="trade-images";
+const TRADE_IMG_SIGN_TTL=3600;            // 1 h signed URL
+const _signedImgUrlCache=new Map();       // path → {url, exp(ms)} — in-memory only
+async function signTradeImagePath(ref){
+  try{
+    const now=Date.now();
+    const hit=_signedImgUrlCache.get(ref);
+    if(hit&&hit.exp>now+60000)return hit.url;   // reuse while >1 min from expiry
+    const{data,error}=await SUPA.storage.from(TRADE_IMG_BUCKET).createSignedUrl(ref,TRADE_IMG_SIGN_TTL);
+    if(error||!data||!data.signedUrl){
+      // Path-safe log only: segment count, NEVER the ref/content (could leak nothing sensitive here, but stay strict).
+      console.warn("[img-resolver] sign failed",{segments:String(ref).split("/").length});
+      return null;
+    }
+    _signedImgUrlCache.set(ref,{url:data.signedUrl,exp:now+TRADE_IMG_SIGN_TTL*1000});
+    return data.signedUrl;
+  }catch(e){console.warn("[img-resolver] sign threw");return null;}
+}
+// Returns a directly-usable <img src>: data:/http/unknown → the ref itself (synchronous, zero regression);
+// strict storage path → signed URL once resolved (null while pending / on failure).
+function useResolvedImageSrc(ref){
+  const passThrough=isDataImageRef(ref)||isHttpImageRef(ref)||!isTradeImageStoragePath(ref);
+  const[resolved,setResolved]=useState(passThrough?ref:null);
+  useEffect(()=>{
+    let alive=true;
+    if(isDataImageRef(ref)||isHttpImageRef(ref)||!isTradeImageStoragePath(ref)){
+      setResolved(ref);   // legacy base64 / http(s) / anything not a strict storage path → render as-is
+      return;
+    }
+    const hit=_signedImgUrlCache.get(ref);
+    if(hit&&hit.exp>Date.now()+60000){setResolved(hit.url);return;}
+    setResolved(null);
+    signTradeImagePath(ref).then(u=>{if(alive)setResolved(u);});
+    return()=>{alive=false;};
+  },[ref]);
+  return resolved;
+}
+// 1×1 transparent GIF — pending/failed signed-URL placeholder (no broken-image icon, no layout jump, no crash).
+const _IMG_PENDING_PX="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==";
+function ResolvedImage(props){
+  const{src,...rest}=props;
+  const resolved=useResolvedImageSrc(src);
+  return <img src={resolved||_IMG_PENDING_PX} {...rest}/>;
+}
+
 const clsInput="w-full bg-input border border-border rounded-lg px-3 py-2 text-txt text-sm focus:outline-none focus:border-yellow/60 focus:ring-1 focus:ring-yellow/20 transition placeholder-muted";
 // Sizing for long-form pre/post note textareas — comfortable for full templates,
 // capped to 50vh so Save/Cancel stays reachable inside modals. Mobile-safe.
@@ -1035,7 +1091,7 @@ function ImageUploader({images,onChange,maxImages=3,label="📎 แนบรู�
       <div className="flex flex-wrap gap-2">
         {(images||[]).map((src,i)=>(
           <div key={i} className="relative group">
-            <img src={src} className="w-20 h-20 object-cover rounded-lg border border-border"/>
+            <ResolvedImage src={src} className="w-20 h-20 object-cover rounded-lg border border-border"/>
             <button type="button" onClick={()=>remove(i)}
               className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
           </div>
@@ -2321,7 +2377,7 @@ function TradeDetailModal({trade,product,onClose,onCommitUpdate,onDelete,showCon
               <div key={i}
                 onClick={()=>setLightbox({src,caption:label+" "+(i+1)+"/"+images.length})}
                 className="cursor-zoom-in rounded-xl overflow-hidden bg-black/20 relative group">
-                <img src={src} className="w-full object-cover rounded-xl transition group-hover:opacity-90"
+                <ResolvedImage src={src} className="w-full object-cover rounded-xl transition group-hover:opacity-90"
                   style={{height:images.length===1?"auto":160,display:"block",minHeight:images.length===1?120:"auto"}}/>
                 <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
                   <span className="text-white/90 bg-black/50 rounded-full px-3 py-1 text-xs">🔍 ขยาย</span>
@@ -2474,7 +2530,7 @@ function TradeDetailModal({trade,product,onClose,onCommitUpdate,onDelete,showCon
           <button onClick={()=>setLightbox(null)}
             className="absolute top-4 right-4 text-white/70 hover:text-white text-2xl w-10 h-10 flex items-center justify-center rounded-full bg-white/10 hover:bg-white/20 transition z-10">✕</button>
           {/* Image */}
-          <img src={lightbox.src||lightbox} className="rounded-xl shadow-2xl select-none" onClick={e=>e.stopPropagation()}
+          <ResolvedImage src={lightbox.src||lightbox} className="rounded-xl shadow-2xl select-none" onClick={e=>e.stopPropagation()}
             style={{maxWidth:"92vw",maxHeight:"80vh",objectFit:"contain",display:"block"}}/>
           {/* Caption */}
           {lightbox.caption&&(
@@ -7627,7 +7683,7 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
                                 {(t.preImages||[]).length>0&&(
                                   <div className="flex gap-1 flex-wrap">
                                     {(t.preImages||[]).slice(0,3).map((src,idx)=>(
-                                      <img key={idx} src={src}
+                                      <ResolvedImage key={idx} src={src}
                                         onClick={e=>{e.stopPropagation();setCalLightbox(src);}}
                                         className="w-24 h-16 object-cover rounded-lg cursor-pointer hover:opacity-80 transition border border-green/20"
                                         title="Pre-trade — กดขยาย"/>
@@ -7638,7 +7694,7 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
                                 {(t.postImages||[]).length>0&&(
                                   <div className="flex gap-1 flex-wrap">
                                     {(t.postImages||[]).slice(0,3).map((src,idx)=>(
-                                      <img key={idx} src={src}
+                                      <ResolvedImage key={idx} src={src}
                                         onClick={e=>{e.stopPropagation();setCalLightbox(src);}}
                                         className="w-24 h-16 object-cover rounded-lg cursor-pointer hover:opacity-80 transition border border-blue-400/20"
                                         title="Post-trade — กดขยาย"/>
@@ -7913,7 +7969,7 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
         onClick={()=>setCalLightbox(null)}>
         <button onClick={()=>setCalLightbox(null)}
           className="absolute top-4 right-4 text-white/70 hover:text-white text-2xl w-10 h-10 flex items-center justify-center rounded-full bg-white/10 transition">✕</button>
-        <img src={calLightbox} style={{maxWidth:"92vw",maxHeight:"85vh",objectFit:"contain",display:"block",borderRadius:12}}/>
+        <ResolvedImage src={calLightbox} style={{maxWidth:"92vw",maxHeight:"85vh",objectFit:"contain",display:"block",borderRadius:12}}/>
       </div>
     )}
     </div>
