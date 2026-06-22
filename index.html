@@ -3731,7 +3731,7 @@ function TdTicks({t,p,onClick}){
   return<td onClick={onClick} className={"px-3 py-2.5 tabular-nums text-xs font-medium cursor-pointer whitespace-nowrap hidden md:table-cell text-right "+(tks>=0?"text-green":"text-red")}>{tks>=0?"+":""}{tks.toFixed(1)}</td>;
 }
 
-function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onCommitUpdate,onDeleteTrade,onImportTrades,onProductsChange,onBalanceSet,onTransactions,showConfirm,showToast}){
+function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onCommitUpdate,onDeleteTrade,onImportTrades,onCommitImport,onProductsChange,onBalanceSet,onTransactions,showConfirm,showToast}){
   const[detail,setDetail]=useState(null);
   const[showImport,setShowImport]=useState(false);
   const initFilters={product:"",direction:"",setup:"",rating:"",dateFrom:"",dateTo:""};
@@ -4044,7 +4044,7 @@ function PageJournal({trades,products,balance,portfolio,onUpdateTrade,onCommitUp
           products={products}
           existingTrades={trades}
           balance={balance}
-          onImport={ts=>{onImportTrades(ts);setShowImport(false);}}
+          onImport={onCommitImport}
           onCancel={()=>setShowImport(false)}
           onProductsChange={onProductsChange}
           onBalanceSet={onBalanceSet}
@@ -4730,6 +4730,9 @@ function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onP
   const[dealEvents,setDealEvents]=useState([]);
   const[dealSel,setDealSel]=useState(new Set());
   const[dealNotes,setDealNotes]=useState({});
+  const[importing,setImporting]=useState(false);
+  const[importProgress,setImportProgress]=useState({done:0,total:0});
+  const[importReport,setImportReport]=useState(null);
 
   function processFile(file,currentProducts){
     setCurrentFile(file);
@@ -4865,12 +4868,23 @@ function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onP
     setStep("preview");
   }
 
-  function confirmImport(){
+  async function confirmImport(){
     var newTrades=[...selected].map(function(i){
       var t=parsed[i];
       return{...t,id:uid(),_raw:undefined};
     });
-    onImport(newTrades);
+    setImporting(true);
+    setImportProgress({done:0,total:newTrades.length});
+    var report;
+    try{
+      // onImport === durable commitImportTrades(trades,onProgress) → returns {saved,failed,skipped}.
+      report=await onImport(newTrades,function(done,total){setImportProgress({done:done,total:total});});
+    }catch(e){
+      report={saved:[],failed:newTrades.map(function(t){return{id:t.id,mt5PositionId:t.mt5PositionId||null,error:(e&&e.message)||"import error"};}),skipped:[]};
+    }
+    setImporting(false);
+    setImportReport(report||{saved:[],failed:[],skipped:[]});
+    setStep("done");
   }
 
   function toggleAll(){
@@ -5126,11 +5140,47 @@ function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onP
               <div className="flex gap-2">
                 <button onClick={function(){setStep("upload");setParsed([]);setErrors([]);setSelected(new Set());}}
                   className={clsBtn("ghost","sm")}>← กลับ</button>
-                <button onClick={confirmImport} disabled={selected.size===0}
-                  className={clsBtn("yellow","sm")+(selected.size===0?" opacity-40 cursor-not-allowed":"")}>
-                  นำเข้า {selected.size} trades
+                <button onClick={confirmImport} disabled={selected.size===0||importing}
+                  className={clsBtn("yellow","sm")+((selected.size===0||importing)?" opacity-40 cursor-not-allowed":"")}>
+                  {importing?("กำลังนำเข้า "+importProgress.done+"/"+importProgress.total):("นำเข้า "+selected.size+" trades")}
                 </button>
               </div>
+            </div>
+          </>
+        )}
+
+        {step==="done"&&importReport&&(
+          <>
+            <div className="overflow-y-auto flex-1 p-4">
+              <div className="text-center py-4">
+                <div className="text-4xl mb-2">{importReport.failed.length>0?"⚠️":"✅"}</div>
+                <div className="text-txt font-semibold">นำเข้าสำเร็จ {importReport.saved.length} รายการ</div>
+                {importReport.failed.length>0&&(
+                  <div className="text-red text-sm mt-1">บันทึกไม่สำเร็จ {importReport.failed.length} รายการ</div>
+                )}
+                {importReport.skipped.length>0&&(
+                  <div className="text-yellow text-sm mt-1">ข้าม (ซ้ำในไฟล์) {importReport.skipped.length} รายการ</div>
+                )}
+              </div>
+              {importReport.failed.length>0&&(
+                <div className="mt-3 text-xs bg-red/10 border border-red/20 rounded-lg px-3 py-2 space-y-0.5">
+                  <div className="text-red/80 font-semibold mb-1">รายการที่บันทึกไม่สำเร็จ — เปิด Import อีกครั้งเพื่อลองใหม่ได้:</div>
+                  {importReport.failed.map(function(f,i){
+                    return <div key={i} className="text-muted break-all">• {String(f.id)}{f.mt5PositionId?(" (pos "+f.mt5PositionId+")"):""} — {String(f.error)}</div>;
+                  })}
+                </div>
+              )}
+              {importReport.skipped.length>0&&(
+                <div className="mt-2 text-xs bg-yellow/10 border border-yellow/20 rounded-lg px-3 py-2 space-y-0.5">
+                  <div className="text-yellow/80 font-semibold mb-1">ข้ามรายการซ้ำในไฟล์ (mt5PositionId เดียวกัน):</div>
+                  {importReport.skipped.map(function(s,i){
+                    return <div key={i} className="text-muted break-all">• {String(s.id)}{s.mt5PositionId?(" (pos "+s.mt5PositionId+")"):""}</div>;
+                  })}
+                </div>
+              )}
+            </div>
+            <div className="p-4 border-t border-border/40 flex-shrink-0 flex items-center justify-end gap-2">
+              <button onClick={onCancel} className={clsBtn("yellow","sm")}>เสร็จสิ้น</button>
             </div>
           </>
         )}
@@ -8793,6 +8843,46 @@ function App({session,onSignOut}){
       return {ok:false,error:(res&&res.error)||new Error("update save failed"),guard:res&&res.guard};
     }catch(e){console.warn("[update-save] commitUpdateTrade error",e);return {ok:false,error:e};}
   },[replaceTradeLocal,saveTradesSerialized]);
+  // ── Import durability (P2-3) — SAVE-FIRST per-row durable writes for Excel / MT5 file import.
+  // Replaces the old "addTrades → full-array debounced autosave" persistence: each confirmed
+  // imported row is written via the single-row path (saveTradesSerialized source:"open") BEFORE it
+  // is added to local state, so a failed row never appears locally and import no longer depends on
+  // the 57014-prone full-array autosave. Additive only — imported rows carry no base64 images, no
+  // merged/subTrades, no partialCloses; status (open/closed) is preserved verbatim by db.saveTrade.
+  // Continue-on-failure with a {saved,failed,skipped} report. Within-batch mt5PositionId dedup.
+  // clearTimeout first (like the other commit wrappers) so a stale autosave can't reconcile-delete a
+  // just-saved row while its id is in lastSeenRef but not yet in local trades. Succeeded rows are
+  // batch-added via addTrades ONCE at the end to preserve its CB-arm recompute semantics exactly.
+  const commitImportTrades=useCallback(async(ts,onProgress)=>{
+    const report={saved:[],failed:[],skipped:[]};
+    if(!ts||ts.length===0)return report;
+    clearTimeout(dbTimers.current.trades);   // cancel any pending debounced full-array autosave so it can't race / reconcile-delete the per-row saves
+    // Within-batch dedup by mt5PositionId (MT5 rows only; thus-format rows carry none and are never deduped here).
+    const seenPos=new Set();
+    const queue=[];
+    for(const t of ts){
+      const pid=t&&t.mt5PositionId;
+      if(pid!=null&&pid!==""){
+        if(seenPos.has(pid)){report.skipped.push({id:t&&t.id,mt5PositionId:pid,reason:"duplicate_mt5_position_in_batch"});continue;}
+        seenPos.add(pid);
+      }
+      queue.push(t);
+    }
+    const saved=[];
+    for(let i=0;i<queue.length;i++){
+      const t=queue[i];
+      if(onProgress)onProgress(i+1,queue.length);
+      let res;
+      try{res=await saveTradesSerialized(t,{source:"open",affectedTradeId:t.id});}
+      catch(e){res={ok:false,error:e};}
+      if(res&&res.ok){saved.push(t);report.saved.push(t);}
+      else{report.failed.push({id:t&&t.id,mt5PositionId:(t&&t.mt5PositionId)||null,error:((res&&res.error&&res.error.message)||"save failed")});}
+    }
+    // Local add of ONLY server-confirmed rows — ONE batch so addTrades' CB-arm recompute matches the
+    // pre-P2-3 behavior exactly. lastSeenRef.current.tradeIds already holds each saved id (source:"open").
+    if(saved.length>0)addTrades(saved);
+    return report;
+  },[saveTradesSerialized,addTrades]);
   const removeTradeLocal=useCallback(id=>{
     setTrades(p=>{
       const deleted=p.find(x=>x.id===id);
@@ -9038,7 +9128,7 @@ function App({session,onSignOut}){
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
         {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} onAddTrade={addTrade} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onUpdateTrade={updateTrade} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onCommitMerge={commitMerge} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
-        {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onImportTrades={addTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
+        {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onUpdateTrade={updateTrade} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onImportTrades={addTrades} onCommitImport={commitImportTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid} equityHWM={equityHWM} dailyPoints={dailyPoints} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio} equityHWM={equityHWM} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
         {page==="calendar" &&<PageCalendar  trades={trades} products={products} uid={authUid} syncNotesToCloud={syncNotesToCloud}/>}
