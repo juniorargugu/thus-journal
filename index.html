@@ -3411,11 +3411,13 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onAddT
     .reduce((s,t)=>{const p=resolveProduct(products,t.productId);return s+calcNetPL(p,t.contracts,t.entryPrice,t.exitPrice,t.direction);},0)
   ,[closedTrades,products,todayStr]);
 
-  const handleDuplicate=(trade)=>{
+  const handleDuplicate=async(trade)=>{
     const clone={...trade,id:uid(),openDateTime:localNow(),status:"draft",
       preNote:"[Copy] "+(trade.preNote||""),isMerged:false,mergedFromIds:[],subTrades:[],partialCloses:[],
       preImages:[...(trade.preImages||[])],};
-    onAddTrade(clone);showToast("Duplicate เป็น Draft แล้ว","success");
+    const res=await onCommitOpen(clone);
+    if(res&&res.ok)showToast("Duplicate เป็น Draft แล้ว","success");
+    else showToast(openFailMessage(res),"error");
   };
 
   const handleMerge=()=>{
