@@ -1,0 +1,29 @@
+{
+  "kind": "p2_5e_phase_a_orphan_inventory",
+  "readOnly": true,
+  "bucket": "trade-images",
+  "retentionDays": 7,
+  "tradesScanned": 141,
+  "distinctReferencedPaths": 1,
+  "totals": {
+    "objects": 3,
+    "referenced": 1,
+    "orphanCandidates": 2,
+    "orphanEligible_retentionPassed": 0,
+    "orphanWithinRetention_wouldBeSkipped": 2,
+    "malformed_reportOnly": 0
+  },
+  "bytes": {
+    "orphanEligible": 0,
+    "orphanWithinRetention": 672980,
+    "malformed": 0
+  },
+  "samples": {
+    "orphanEligible": [],
+    "orphanWithinRetention": [
+      "b77d0426-355d-4f31-b94a-1afbe8fd49fa/1782203176443/post/1782203358247.png",
+      "b77d0426-355d-4f31-b94a-1afbe8fd49fa/1782203176443/pre/1782203176444.png"
+    ],
+    "malformed": []
+  }
+}
