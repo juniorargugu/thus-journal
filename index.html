@@ -1150,13 +1150,33 @@ function ConfirmDialog({state,onCancel}){
           {state.message&&<p className="text-muted text-sm leading-relaxed">{state.message}</p>}
         </div>
         <div className="flex gap-2 px-5 pb-5">
-          <button onClick={onCancel} className={`${clsBtn("default")} flex-1`}>ยกเลิก</button>
+          <button onClick={onCancel} className={`${clsBtn("default")} flex-1`}>{state.cancelLabel||"ยกเลิก"}</button>
           <button onClick={async()=>{await state.onConfirm?.();onCancel();}}
-            className={`${clsBtn(state.variant==="danger"?"red":"yellow")} flex-1`}>ยืนยัน</button>
+            className={`${clsBtn(state.variant==="danger"?"red":"yellow")} flex-1`}>{state.confirmLabel||"ยืนยัน"}</button>
         </div>
       </div>
     </div>
   );
+}
+
+// V1 unsaved-changes guard for accumulating trade forms. Reuses ConfirmDialog. No persistence,
+// no autosave, no save-draft. guardedClose: busy → no-op (keep existing busy behavior); dirty → ask;
+// else close freely. confirmEl must be rendered by the caller (ConfirmDialog is fixed / z-[60]).
+function useUnsavedGuard({dirty,busy,onClose}){
+  const[ask,setAsk]=useState(false);
+  const guardedClose=useCallback(()=>{
+    if(busy)return;
+    if(dirty)setAsk(true);
+    else onClose();
+  },[busy,dirty,onClose]);
+  const confirmEl=(
+    <ConfirmDialog
+      state={ask?{open:true,variant:"danger",title:"ปิดโดยไม่บันทึก?",
+        message:"มีข้อมูลที่ยังไม่ได้บันทึก ต้องการปิดโดยไม่บันทึกหรือไม่?",
+        confirmLabel:"ปิดโดยไม่บันทึก",cancelLabel:"อยู่ต่อ",onConfirm:onClose}:null}
+      onCancel={()=>setAsk(false)}/>
+  );
+  return{guardedClose,confirmEl};
 }
 
 function ToastContainer({toasts,onDismiss}){
@@ -1637,6 +1657,8 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
     }:{})
   });
   const set=k=>e=>setF(p=>({...p,[k]:e.target.value}));
+  const[initialSnapshot]=useState(()=>JSON.stringify(f));
+  const{guardedClose,confirmEl}=useUnsavedGuard({dirty:JSON.stringify(f)!==initialSnapshot,busy:saving,onClose:onCancel});
 
   const product=useMemo(()=>{
     const pid=f.productId;
@@ -1776,8 +1798,8 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
   const getIcon=(id)=>PRODUCT_ICONS[id.replace("_next","")]||"📊";
 
   if(isEdit){
-    return(
-      <Modal title="แก้ไข Order" onClose={onCancel} width="max-w-xl">
+    return(<>
+      <Modal title="แก้ไข Order" onClose={guardedClose} width="max-w-xl">
         <div className="p-5 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div><Label>Setup Type</Label>
@@ -1815,11 +1837,12 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
           </div>
         </div>
         <div className="flex gap-2 px-5 py-4 border-t border-border flex-shrink-0">
-          <button onClick={onCancel} className={clsBtn("default")}>ยกเลิก</button>
+          <button onClick={guardedClose} className={clsBtn("default")}>ยกเลิก</button>
           <button onClick={()=>{if(!f.entryPrice||!f.contracts){showToast("กรุณากรอกข้อมูลให้ครบ","error");return;}onSubmit(buildTrade(initialData.status));}} className={`${clsBtn("yellow")} flex-1`}>✅ ยืนยันแก้ไข</button>
         </div>
       </Modal>
-    );
+      {confirmEl}
+    </>);
   }
 
   return(
@@ -1828,7 +1851,7 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
         <div className="px-5 pt-5 pb-3 border-b border-border flex-shrink-0">
           <div className="flex items-center justify-between mb-3">
             <span className="text-muted text-xs font-medium">Step {step+1} / {TOTAL_STEPS}</span>
-            <button onClick={onCancel} disabled={saving} className="text-muted hover:text-txt transition text-xl w-8 h-8 flex items-center justify-center rounded-lg hover:bg-input disabled:opacity-30 disabled:cursor-not-allowed">✕</button>
+            <button onClick={guardedClose} disabled={saving} className="text-muted hover:text-txt transition text-xl w-8 h-8 flex items-center justify-center rounded-lg hover:bg-input disabled:opacity-30 disabled:cursor-not-allowed">✕</button>
           </div>
           <div className="flex gap-1">
             {Array.from({length:TOTAL_STEPS},(_,i)=>(
@@ -2015,7 +2038,7 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
 
         <div className="flex gap-2 px-5 py-4 border-t border-border flex-shrink-0">
           {step===0?(
-            <button onClick={onCancel} className={clsBtn("default")}>ยกเลิก</button>
+            <button onClick={guardedClose} className={clsBtn("default")}>ยกเลิก</button>
           ):(
             <button onClick={prevStep} className={clsBtn("default")}>← ย้อนกลับ</button>
           )}
@@ -2047,6 +2070,7 @@ function OpenTradeForm({products,initialData,balance,openTrades,trades,portfolio
           onCancel={()=>setShowChecklist(false)}
         />
       )}
+      {confirmEl}
     </div>
   );
 }
@@ -2059,6 +2083,8 @@ function CloseTradeForm({trade,product,onClose,onCancel,showToast}){
   });
   const[saving,setSaving]=useState(false);
   const set=k=>e=>setF(p=>({...p,[k]:e.target.value}));
+  const[initialSnapshot]=useState(()=>JSON.stringify(f));
+  const{guardedClose,confirmEl}=useUnsavedGuard({dirty:JSON.stringify(f)!==initialSnapshot,busy:saving,onClose:onCancel});
   const pl=(product&&f.exitPrice)?calcNetPL(product,trade.contracts,trade.entryPrice,+f.exitPrice,trade.direction):null;
   const tickDiff=(product&&f.exitPrice&&trade.entryPrice)?Math.abs((+f.exitPrice-trade.entryPrice)/product.tickSize):0;
   const showPriceWarning=tickDiff>500;
@@ -2072,8 +2098,8 @@ function CloseTradeForm({trade,product,onClose,onCancel,showToast}){
     if(!res||!res.ok){setSaving(false);showToast(closeFailMessage(res),"error");}
   };
 
-  return(
-    <Modal title={`ปิด Order — ${product?.currentContract||"?"}`} onClose={onCancel} width="max-w-lg" busy={saving}>
+  return(<>
+    <Modal title={`ปิด Order — ${product?.currentContract||"?"}`} onClose={guardedClose} width="max-w-lg" busy={saving}>
       <div className="p-5 space-y-4">
         <div className="bg-input/50 rounded-lg p-3 grid grid-cols-3 gap-3 text-sm">
           <div><span className="text-muted text-xs block">Entry</span><span className="font-semibold">{fmtNum(trade.entryPrice,product?.digits||1)}</span></div>
@@ -2118,11 +2144,12 @@ function CloseTradeForm({trade,product,onClose,onCancel,showToast}){
         <ImageUploader images={f.postImages} onChange={imgs=>setF(p=>({...p,postImages:imgs}))} label="📎 แนบรูป Post-trade"/>
       </div>
       <div className="flex gap-2 px-5 py-4 border-t border-border flex-shrink-0">
-        <button onClick={onCancel} disabled={saving} className={clsBtn("default")+" disabled:opacity-30 disabled:cursor-not-allowed"}>ยกเลิก</button>
+        <button onClick={guardedClose} disabled={saving} className={clsBtn("default")+" disabled:opacity-30 disabled:cursor-not-allowed"}>ยกเลิก</button>
         <button onClick={handleSubmit} disabled={saving} className={`${clsBtn("red")} flex-1 disabled:opacity-50 disabled:cursor-not-allowed`}>{saving?"กำลังบันทึก…":"✕ ยืนยันปิด Order"}</button>
       </div>
     </Modal>
-  );
+    {confirmEl}
+  </>);
 }
 
 function MergedCloseForm({trade,product,onClose,onCancel,showToast}){
@@ -2166,6 +2193,8 @@ function MergedCloseForm({trade,product,onClose,onCancel,showToast}){
     winLossReason:trade.winLossReason||"",postNote:trade.postNote||"",postImages:trade.postImages||[],
   });
   const updateItem=(idx,field,value)=>setItems(prev=>prev.map((it,i)=>i===idx?{...it,[field]:value}:it));
+  const[initialSnapshot]=useState(()=>JSON.stringify({items,overall}));
+  const{guardedClose,confirmEl}=useUnsavedGuard({dirty:JSON.stringify({items,overall})!==initialSnapshot,busy:saving,onClose:onCancel});
   const sel=items.filter(it=>it.selected);
   const totalC=sel.reduce((s,it)=>s+it.contracts,0);
   const totalPL=sel.reduce((s,it)=>{
@@ -2198,8 +2227,8 @@ function MergedCloseForm({trade,product,onClose,onCancel,showToast}){
     // Durable save via the parent; success toast + modal-close happen only after ok.
     await handleConfirmClose(updated);
   };
-  return(
-    <Modal title={`ปิด ${product?.currentContract||"?"} — ${trade.contracts} contracts total`} onClose={onCancel} width="max-w-xl" busy={saving}>
+  return(<>
+    <Modal title={`ปิด ${product?.currentContract||"?"} — ${trade.contracts} contracts total`} onClose={guardedClose} width="max-w-xl" busy={saving}>
       <div className="p-5 space-y-5">
         {(trade.partialCloses||[]).length>0&&(
           <div className="bg-input/40 rounded-lg px-3 py-2.5 text-xs text-muted">
@@ -2264,14 +2293,15 @@ function MergedCloseForm({trade,product,onClose,onCancel,showToast}){
         </div>
       </div>
       <div className="flex gap-2 px-5 py-4 border-t border-border flex-shrink-0">
-        <button onClick={onCancel} disabled={saving} className={clsBtn("default")+" disabled:opacity-30 disabled:cursor-not-allowed"}>ยกเลิก</button>
+        <button onClick={guardedClose} disabled={saving} className={clsBtn("default")+" disabled:opacity-30 disabled:cursor-not-allowed"}>ยกเลิก</button>
         <button onClick={handleSubmit} disabled={saving||!sel.length}
           className={`${clsBtn("red")} flex-1 disabled:opacity-30 disabled:cursor-not-allowed`}>
           {saving?"กำลังบันทึก…":`✕ ปิด ${totalC} contracts ที่เลือก`}
         </button>
       </div>
     </Modal>
-  );
+    {confirmEl}
+  </>);
 }
 
 function TemplateButtons({kind,onInsert}){
