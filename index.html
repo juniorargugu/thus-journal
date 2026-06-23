@@ -1073,7 +1073,7 @@ const StatItem=({label,value,sub,color})=>(
   </div>
 );
 
-function ImageUploader({images,onChange,maxImages=3,label="📎 แนบรูป"}){
+function ImageUploader({images,onChange,maxImages=3,label="📎 แนบรูป",onPreview}){
   const inputRef=useRef();
   const handleFiles=async(e)=>{
     const files=Array.from(e.target.files||[]);
@@ -1091,7 +1091,10 @@ function ImageUploader({images,onChange,maxImages=3,label="📎 แนบรู�
       <div className="flex flex-wrap gap-2">
         {(images||[]).map((src,i)=>(
           <div key={i} className="relative group">
-            <ResolvedImage src={src} className="w-20 h-20 object-cover rounded-lg border border-border"/>
+            <ResolvedImage src={src}
+              className={"w-20 h-20 object-cover rounded-lg border border-border"+(onPreview?" cursor-zoom-in":"")}
+              title={onPreview?"เปิดรูปใหญ่":undefined}
+              onClick={onPreview?(e=>{e.stopPropagation();onPreview(src);}):undefined}/>
             <button type="button" onClick={()=>remove(i)}
               className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red text-white text-xs flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">✕</button>
           </div>
@@ -2339,6 +2342,13 @@ function NoteField({label,value,onSave,editable=true,templateKind}){
 
 function TradeDetailModal({trade,product,onClose,onCommitUpdate,onDelete,showConfirm,showToast}){
   const[lightbox,setLightbox]=useState(null);
+  // Esc closes the image lightbox (the Modal itself has no Esc handler, so this is conflict-free).
+  React.useEffect(()=>{
+    if(!lightbox)return;
+    const onKey=(e)=>{if(e.key==="Escape"){e.stopPropagation();setLightbox(null);}};
+    window.addEventListener("keydown",onKey);
+    return()=>window.removeEventListener("keydown",onKey);
+  },[lightbox]);
   const isEditable=!!onCommitUpdate;
   const grossPL=trade.exitPrice!=null?calcPL(product,trade.contracts,trade.entryPrice,trade.exitPrice,trade.direction):null;
   const netPL=trade.exitPrice!=null?calcNetPL(product,trade.contracts,trade.entryPrice,trade.exitPrice,trade.direction):null;
@@ -2430,11 +2440,13 @@ function TradeDetailModal({trade,product,onClose,onCommitUpdate,onDelete,showCon
               <ImageUploader
                 images={preImages}
                 onChange={imgs=>{commitMeta({...trade,preImages:imgs});}}
+                onPreview={src=>setLightbox({src,caption:"📸 Pre-trade"})}
                 label="📸 Pre-trade รูป"/>
               <NoteField label="📸 Pre-trade Note" value={trade.preNote} onSave={saveNote("preNote")} editable={true} templateKind="pre"/>
               <ImageUploader
                 images={postImages}
                 onChange={imgs=>{commitMeta({...trade,postImages:imgs});}}
+                onPreview={src=>setLightbox({src,caption:"📝 Post-trade"})}
                 label="📝 Post-trade รูป"/>
               <NoteField label="📝 Post-trade Note" value={trade.postNote} onSave={saveNote("postNote")} editable={true} templateKind="post"/>
             </>
