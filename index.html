@@ -2434,9 +2434,15 @@ function TradeDetailModal({trade,product,onClose,onCommitUpdate,onDelete,showCon
   const[editMode,setEditMode]=React.useState(false);
   const[editFields,setEditFields]=React.useState({setupType:trade.setupType||"",exitReason:trade.exitReason||"",tradeRating:trade.tradeRating||0,feeling:trade.feeling||""});
   function saveEdits(){commitMeta({...trade,...editFields}).then(res=>{if(res&&res.ok)setEditMode(false);});}
+  // V1.1 unsaved guard for editMode accumulated fields ONLY. editDirty compares editFields to the
+  // CURRENT trade prop (which updates after a successful save → not dirty on re-edit). Gated by editMode,
+  // so view mode and immediately-saved notes/images never trigger it. Lightbox close stays independent.
+  const editDirty=editMode&&JSON.stringify(editFields)!==JSON.stringify({setupType:trade.setupType||"",exitReason:trade.exitReason||"",tradeRating:trade.tradeRating||0,feeling:trade.feeling||""});
+  const{guardedClose,confirmEl}=useUnsavedGuard({dirty:editDirty,busy:metaSaving,onClose});
+  const{guardedClose:guardedCancelEdit,confirmEl:cancelEditConfirmEl}=useUnsavedGuard({dirty:editDirty,busy:metaSaving,onClose:()=>setEditMode(false)});
   return(
     <>
-      <Modal title={`รายละเอียด — ${trade.contractCode||product?.currentContract||"—"}`} onClose={onClose} width="max-w-lg">
+      <Modal title={`รายละเอียด — ${trade.contractCode||product?.currentContract||"—"}`} onClose={guardedClose} width="max-w-lg">
         <div className="p-5 space-y-4">
           <div className="flex items-center gap-2 flex-wrap">
             <DirBadge dir={trade.direction}/><StatusBadge status={trade.status}/>
@@ -2559,9 +2565,9 @@ function TradeDetailModal({trade,product,onClose,onCommitUpdate,onDelete,showCon
             {!editMode
               ?<button onClick={()=>setEditMode(true)} className={clsBtn("ghost")+" flex-1"}>✏️ Enable Edit</button>
               :<><button onClick={saveEdits} disabled={metaSaving} className={clsBtn("yellow")+" flex-1"}>{metaSaving?"กำลังบันทึก...":"💾 บันทึก"}</button>
-                <button onClick={()=>setEditMode(false)} className={clsBtn("ghost")}>ยกเลิก</button></>
+                <button onClick={guardedCancelEdit} className={clsBtn("ghost")}>ยกเลิก</button></>
             }
-            <button onClick={onClose} className={clsBtn("default")+" flex-1"}>ปิด</button>
+            <button onClick={guardedClose} className={clsBtn("default")+" flex-1"}>ปิด</button>
           </div>
         </div>
       </Modal>
@@ -2582,6 +2588,8 @@ function TradeDetailModal({trade,product,onClose,onCommitUpdate,onDelete,showCon
           )}
         </div>
       )}
+      {confirmEl}
+      {cancelEditConfirmEl}
     </>
   );
 }
