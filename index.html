@@ -188,9 +188,8 @@ const SUPA=window._supabaseClient;
 
 // ─── Save guards ──────────────────────────────────────────────────────────
 // Refuse to persist demo/mock trades to production. MOCK_TRADES uses ids m1..m21
-// (/^m\d+$/) — that id-shape is the canonical demo signature. Placed at the single
-// canonical writer (db.saveTrades) so EVERY caller — debounced autosave AND
-// close-save/commitClose — is covered. See P0 invalid-smoke diagnosis 2026-06-15.
+// (/^m\d+$/) — that id-shape is the canonical demo signature. Enforced at the single-row
+// durable writer db.saveTrade (the full-array db.saveTrades was retired in P2-4C). See P0 invalid-smoke diagnosis 2026-06-15.
 const detectUnsafeMockTrades=trades=>{
   if(!Array.isArray(trades))return{unsafe:false,ids:[],reason:null};
   const ids=trades.filter(t=>t&&/^m\d+$/.test(String(t.id))).map(t=>t.id);
@@ -207,9 +206,9 @@ const openFailMessage=res=>
   res&&res.guard==="mock_demo_trades"?"Local app loaded demo trades; refusing to save to production."
   :res&&res.guard==="affected_trade_missing"?"Trade mismatch in local state; reload from production before saving."
   :"บันทึกการเปิดออเดอร์ไม่สำเร็จ — ลองใหม่อีกครั้ง";
-// Shared trade→row mapper — SINGLE source of truth for the trades row shape, used by BOTH
-// the full-array writer db.saveTrades AND the single-row close writer db.saveTrade, so the
-// columnar+raw shape can never diverge. The two `||` falsy-zero fallbacks are load-bearing —
+// Shared trade→row mapper — SINGLE source of truth for the trades row shape, used by the single-row
+// durable writer db.saveTrade (the full-array db.saveTrades writer was retired in P2-4C). The
+// columnar+raw shape stays canonical. The two `||` falsy-zero fallbacks are load-bearing —
 // remaining_contracts:0 (fully-closed leg) and note:"" must map exactly as below.
 const toTradeRow=(uid,t)=>({
   id:t.id, user_id:uid,
@@ -266,53 +265,11 @@ const db={
       };
     }catch(e){console.warn("[db] loadAll fatal error",e);return{ok:false,fatal:true,error:e};}
   },
-  async saveTrades(uid,trades,knownIds){
-    try{
-      // Null guard only. Empty-array MUST fall through so reconcile-delete can
-      // propagate "user deleted their last trade" to the server. Reconcile is
-      // bounded by knownIds (this tab's known set) — brand-new account
-      // (knownIds empty) and divergent-tab cases stay safe. See audit P0-1.
-      if(!trades){return{ok:true,ids:knownIds||new Set()};}
-      // Mock/demo guard — never write demo rows (ids m1..m21) to production.
-      // Covers every writer that reuses this canonical save path (autosave + close-save).
-      const mockCheck=detectUnsafeMockTrades(trades);
-      if(mockCheck.unsafe){
-        console.warn("[trades][guard] refusing to save mock/demo trades",{ids:mockCheck.ids,reason:mockCheck.reason});
-        return{ok:false,error:new Error("Refusing to save mock/demo trades"),guard:"mock_demo_trades",ids:mockCheck.ids};
-      }
-      const rows=trades.map(t=>toTradeRow(uid,t));   // shared mapper (no raw/columnar divergence with db.saveTrade)
-      // Step 1: upsert by id (atomic per row, no destructive window).
-      // .select("id") returns one minimal {id} per affected row for RLS/constraint
-      // verification WITHOUT the ~11 MB RETURNING payload (raw carries base64 images).
-      // This is a mitigation only — the request body is still the full array, so a
-      // large autosave can still 57014; the close path uses db.saveTrade (single row).
-      // Skip when rows is empty — nothing to write, but reconcile-delete below
-      // still runs to propagate deletion of the last trade.
-      if(rows.length>0){
-        const{data:upsertedRows,error:upErr}=await SUPA.from("trades").upsert(rows,{onConflict:"id"}).select("id");
-        if(upErr){console.warn("[trades][write] upsert-error",upErr);return{ok:false,error:upErr};}
-        // Permanent tripwire: report and fail-fast on 0 affected rows so silent RLS / constraint denials don't pass.
-        const affected=upsertedRows?upsertedRows.length:0;
-        console.warn("[trades][write] upserted-affected="+affected+"/"+rows.length+" ids="+rows.map(r=>r.id).join(",")+(affected===0?" — POSSIBLE RLS / CONSTRAINT DENIAL":""));
-        if(affected===0){return{ok:false,error:new Error("upsert returned 0 rows — possible RLS or constraint issue")};}
-      }
-      // Step 2: safe reconcile — delete ONLY ids that this tab knew about and removed locally.
-      // Trades present on server but unknown to this tab (added by another tab/device) are preserved.
-      const localIds=new Set(rows.map(r=>r.id));
-      const removedIds=knownIds?[...knownIds].filter(id=>!localIds.has(id)):[];
-      if(removedIds.length>0){
-        const{error:delErr}=await SUPA.from("trades").delete().eq("user_id",uid).in("id",removedIds);
-        if(delErr)console.warn("[db] saveTrades reconcile delete error",delErr);
-      }
-      // Removed: post-save diagnostic SELECT(id) on trades. It was log-only — never
-      // acted on results — and added one extra read per save. Upsert above already
-      // confirmed server-side success via affected-rows count. If divergence
-      // troubleshooting is needed again, re-add temporarily with a clear TTL.
-      // knownIds for next save = the ids this tab now considers authoritative.
-      // We deliberately do NOT include unknown server ids — otherwise next reconcile would delete them.
-      return{ok:true,ids:localIds};
-    }catch(e){console.warn("[db] saveTrades error",e);return{ok:false,error:e};}
-  },
+  // db.saveTrades (full-array upsert + reconcile-delete) RETIRED in P2-4C. It became unreachable after
+  // P2-4B narrowed the autosave to an ids-only reconcile (db.reconcileDeletedTrades) and every durable
+  // trade write goes through the single-row db.saveTrade. Removing it eliminates the last full-array
+  // base64 upsert (the 57014 source). The now-impossible full-array branch in saveTradesSerialized is
+  // replaced by a fail-loud guard (guard:"fullarray_retired"). toTradeRow stays — db.saveTrade uses it.
   // Reconcile-only DELETE backstop (P2-4B). The trades autosave no longer upserts the full array
   // (no toTradeRow, no ~11 MB base64 body, no 57014 risk); it ONLY propagates LOCAL DELETIONS this tab
   // performed but that some path did not already push server-side. Bounded to knownIds: deletes ONLY
@@ -8268,8 +8225,8 @@ function App({session,onSignOut}){
   const savingRef=useRef({trades:false,portfolio:false,products:false,notes:false,notif:false,patterns:false});
   // ── Close-save durability (C+A+D) — serialize ALL trades writes (debounced autosave
   // + immediate close save) on ONE promise chain so they never overlap or clobber
-  // lastSeenRef. Autosave → db.saveTrades (full array); close → db.saveTrade (single row).
-  // Never rejects.
+  // lastSeenRef. Autosave → ids-only db.reconcileDeletedTrades; close/open/update → db.saveTrade
+  // (single row). The full-array db.saveTrades writer was retired in P2-4C. Never rejects.
   const tradesSavePromiseRef=useRef(null);
   // (D) Post-hydration autosave-echo suppressor — rising-edge detector on dbReady. Stays
   // false until the dbReady false→true edge (the render where `trades` first holds the
@@ -8289,7 +8246,7 @@ function App({session,onSignOut}){
         savingRef.current.trades=true;
         try{
           if(isReconcile){
-            // RECONCILE-ONLY autosave (P2-4B). Derive ID SETS locally; NEVER call db.saveTrades / toTradeRow,
+            // RECONCILE-ONLY autosave (P2-4B). Derive ID SETS locally; NEVER upsert / NEVER call toTradeRow,
             // NEVER send trade objects or base64 to Supabase. Only deletes ids this tab knew about and that
             // are now gone locally (bounded by knownIds). Still serialized on tradesSavePromiseRef like every
             // other trade write, so it cannot interleave with an in-flight single-row durable save.
@@ -8303,8 +8260,8 @@ function App({session,onSignOut}){
             return res||{ok:false,error:new Error("reconcile returned no result")};
           }
           if(isSingleRow){
-            // CLOSE / OPEN single-row path FIRST — passing the OBJECT into db.saveTrades would TypeError on trades.map(...).
-            // Object-shaped affected-trade guard (the array form below no-ops on an object).
+            // CLOSE / OPEN / UPDATE single-row path — payload is a single trade OBJECT, written via db.saveTrade.
+            // Object-shaped affected-trade guard (an array payload falls through to the retired-path guard below).
             if(info.affectedTradeId!=null&&(!payload||payload.id!==info.affectedTradeId)){
               console.warn("[trade-save][guard] affected trade missing from single-row payload",{source:info.source,affectedTradeId:info.affectedTradeId});
               return {ok:false,error:new Error("Affected trade missing from single-row payload"),guard:"affected_trade_missing"};
@@ -8321,18 +8278,12 @@ function App({session,onSignOut}){
             if(!(res&&res.ok))console.warn("[trade-save] saveTrade not ok",{source:info.source,res});
             return res||{ok:false,error:new Error("saveTrade returned no result")};
           }
-          // AUTOSAVE / full-array path — payload is the trades ARRAY.
-          if(info.affectedTradeId!=null&&Array.isArray(payload)&&!payload.some(t=>t&&t.id===info.affectedTradeId)){
-            console.warn("[close-save][guard] affected trade missing from save snapshot",{affectedTradeId:info.affectedTradeId});
-            return {ok:false,error:new Error("Affected trade missing from save snapshot"),guard:"affected_trade_missing"};
-          }
-          const res=await db.saveTrades(authUid,payload,lastSeenRef.current.tradeIds);
-          if(res&&res.ok){
-            lastSeenRef.current.tradeIds=res.ids;   // only on full-array (autosave) success; single-row close/open handled above
-          }else{
-            console.warn("[close-save] saveTrades not ok",{source:info.source,res});
-          }
-          return res||{ok:false,error:new Error("saveTrades returned no result")};
+          // FULL-ARRAY path RETIRED (P2-4C). After P2-4B every source is reconcile (autosave_reconcile) or
+          // single-row (close/open/update); the full-array db.saveTrades writer was removed. Reaching here
+          // means an unknown/missing source passed an array payload — an impossible path post-P2-4B. Fail
+          // LOUD (console.error) and do NOT mutate lastSeenRef (no known-id change for a payload we refuse to write).
+          console.error("[trade-save] unexpected full-array save path retired in P2-4C",{source:info.source||null,isArray:Array.isArray(payload)});
+          return {ok:false,guard:"fullarray_retired",error:new Error("Unexpected full-array save path retired in P2-4C"),source:info.source||null};
         }catch(e){
           console.warn("[close-save] save threw",{source:info.source,error:e});
           return {ok:false,error:e};
