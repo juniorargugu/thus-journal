@@ -1,0 +1,25 @@
+# Local Netlify folder
+.netlify
+
+# --- secrets / env (MT5 import Phase 0C-0 hygiene) ---
+.env
+.env.*
+!.env.example
+*.env
+ops/mt5_import/.env
+ops/mt5_import/.env.*
+!ops/mt5_import/.env.example
+
+# --- key material ---
+*.key
+*.pem
+*.p12
+*.pfx
+*_service_role*
+*service_role*
+
+# --- local / generated MT5 dumps that may contain account data ---
+ops/mt5_import/out/
+ops/mt5_import/*.json
+artifacts/mt5_auto_draft_import/0c_local_*.json
+artifacts/mt5_auto_draft_import/0c_dryrun_*.json
