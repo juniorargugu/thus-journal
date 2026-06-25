@@ -45,6 +45,17 @@ python ops/mt5_import/probe.py --from 2026-06-01 --to 2026-06-25
 python ops/mt5_import/probe.py --days 7 --out ops/mt5_import/out/probe_20260625.json
 ```
 
+### `--out` only accepts git-ignored / local paths
+The probe **refuses** to write to a trackable path. Before writing, it validates the path with
+`git check-ignore` (plus a strict `ops/mt5_import/out/` prefix fallback if git is unavailable):
+- ✅ `--out ops/mt5_import/out/probe_<date>.json` — recommended (the dir is git-ignored).
+- ✅ any path matching the 0C-0 ignore rules (e.g. `artifacts/mt5_auto_draft_import/0c_local_*.json`).
+- ❌ `--out probe.json` at the repo root, or any other **trackable** path → STOP, **no file created**:
+  `Refusing --out path because it is not git-ignored. Use ops/mt5_import/out/...`
+
+Generated output is **local and account-bearing** (positions, deals, P/L) even though the login is
+masked — **do not paste or share it** unless it has been reviewed/redacted.
+
 ## Expected output
 - **ACCOUNT:** login (masked by default; `--show-login` to reveal), server, currency, `margin_mode`
   (expects `2 = RETAIL_HEDGING`).
@@ -61,9 +72,13 @@ python ops/mt5_import/probe.py --days 7 --out ops/mt5_import/out/probe_20260625.
   missing `deal_id`.
 
 ## STOP conditions
+- `--out` path is **not git-ignored** (trackable) → STOP **before any MT5 connect**, no file created (exit 2).
+- invalid `--from` / `--to` (not `YYYY-MM-DD`) → STOP with a clear CLI message, **no traceback** (exit 2).
 - `MetaTrader5` import fails / not on Windows → STOP (exit 2).
 - `mt5.initialize()` fails (terminal not running/logged in) → STOP (exit 3).
 - `account_info()` returns `None` → STOP (exit 3).
+- `history_deals_get()` returns `None` **with** an MT5 error → STOP (exit 3); returns `None` with
+  `RES_S_OK` → WARN + treat as zero deals (never silently misreport an empty history).
 - `--days < 1` (unbounded "all history") → STOP (exit 2).
 - `from >= to` → STOP (exit 2).
 - `margin_mode != 2` (not hedging) → **WARN** and continue (read-only; the writer slice must re-check

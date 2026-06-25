@@ -26,13 +26,15 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
 
-# --- Self-guard: this slice must never carry a Supabase/service_role surface. -----------------
-#     (Kept as an explicit assertion so a future careless edit trips a clear error, not a leak.)
+# --- Self-audit marker (NOT consumed at runtime) ----------------------------------------------
+# This is a static grep/self-audit anchor: a CI/grep check (or a human) can confirm these names
+# appear ONLY here and never inside an os.getenv/os.environ call — i.e. the probe never *reads* a
+# Supabase/service_role secret. Intentionally inert; do not wire any Supabase env into this slice.
 _FORBIDDEN_ENV = ("SUPABASE_SERVICE_KEY", "SUPABASE_URL")
-# We intentionally do NOT read these. We only assert we never *require* them.
 
 MARGIN_MODE_NAMES = {0: "RETAIL_NETTING", 1: "EXCHANGE", 2: "RETAIL_HEDGING"}
 POSITION_TYPE_NAMES = {0: "BUY", 1: "SELL"}
@@ -56,6 +58,46 @@ def stop(msg: str, code: int = 2):
     """Fail safe: clear message, non-zero exit, no writes, no fabrication."""
     eprint("STOP:", msg)
     sys.exit(code)
+
+
+SAFE_OUT_PREFIX = "ops/mt5_import/out/"
+
+
+def _norm_path(p: str) -> str:
+    return os.path.normpath(p).replace("\\", "/")
+
+
+def _git_check_ignore_rc(path: str):
+    """git check-ignore exit code: 0 = ignored, 1 = not ignored, None = git unavailable / error."""
+    try:
+        r = subprocess.run(["git", "check-ignore", "--quiet", path], capture_output=True)
+        return r.returncode
+    except Exception:
+        return None
+
+
+def is_ignored_output_path(path: str):
+    """(allowed, reason). --out is allowed ONLY if the path is git-ignored OR under
+    ops/mt5_import/out/. If git is unavailable, fall back to a STRICT prefix-only allowlist so we
+    never write account-bearing JSON to a trackable path."""
+    norm = _norm_path(path)
+    under_prefix = norm == SAFE_OUT_PREFIX.rstrip("/") or norm.startswith(SAFE_OUT_PREFIX)
+    rc = _git_check_ignore_rc(path)
+    if rc == 0:
+        return True, "git-ignored"
+    if under_prefix:
+        return True, "under ops/mt5_import/out/"
+    if rc is None:
+        return False, "git unavailable and path is not under ops/mt5_import/out/"
+    return False, "path is not git-ignored"
+
+
+def _parse_date(s: str, flag: str) -> datetime:
+    """Parse YYYY-MM-DD or STOP cleanly (no traceback)."""
+    try:
+        return datetime.strptime(s, "%Y-%m-%d")
+    except (ValueError, TypeError):
+        stop(f"invalid {flag} {s!r}: use YYYY-MM-DD (e.g. 2026-06-25).")
 
 
 def mask_login(login, show: bool) -> str:
@@ -123,7 +165,8 @@ def parse_args(argv):
     ap.add_argument("--show-login", action="store_true",
                     help="Show the full account login (default: masked).")
     ap.add_argument("--out", default=None,
-                    help="Optional path to write a REDACTED JSON dump. Use an ignored path, "
+                    help="Optional path to write a REDACTED JSON dump. MUST be a git-ignored path "
+                         "(or under ops/mt5_import/out/); trackable paths are refused. "
                          "e.g. ops/mt5_import/out/probe_YYYYMMDD.json. Default: no file written.")
     return ap.parse_args(argv)
 
@@ -131,9 +174,9 @@ def parse_args(argv):
 def resolve_window(args):
     """Return (from_dt, to_dt) — always finite/bounded. Refuse unbounded 'all history'."""
     now = datetime.now()
-    to_dt = datetime.strptime(args.date_to, "%Y-%m-%d") if args.date_to else now
+    to_dt = _parse_date(args.date_to, "--to") if args.date_to else now
     if args.date_from:
-        from_dt = datetime.strptime(args.date_from, "%Y-%m-%d")
+        from_dt = _parse_date(args.date_from, "--from")
     else:
         if args.days < 1:
             stop("history window must be bounded: --days must be >= 1 (refusing unbounded 'all history').")
@@ -148,6 +191,14 @@ def resolve_window(args):
 
 def main(argv):
     args = parse_args(argv)
+
+    # Validate --out FIRST (fail fast; never create a file at a trackable/unsafe path, and never
+    # connect to MT5 for a doomed run).
+    if args.out:
+        ok, reason = is_ignored_output_path(args.out)
+        if not ok:
+            stop(f"Refusing --out path because it is not git-ignored. Use ops/mt5_import/out/... "
+                 f"(path={args.out!r}: {reason}).", code=2)
 
     # Import guard — fail safe if MetaTrader5 is unavailable. No fabrication.
     try:
@@ -222,7 +273,17 @@ def main(argv):
         report["open_positions"] = pos_rows
 
         # ---- deals (bounded) ----------------------------------------------------------
-        deals = mt5.history_deals_get(from_dt, to_dt) or ()
+        deals = mt5.history_deals_get(from_dt, to_dt)
+        if deals is None:
+            err = mt5.last_error()
+            # MT5 convention: last_error()[0] == 1 (RES_S_OK) means "no error".
+            if isinstance(err, (tuple, list)) and err and err[0] == 1:
+                eprint(f"WARN: history_deals_get returned None but MT5 reports no error ({err}); "
+                       f"treating as zero deals in window.")
+                deals = ()
+            else:
+                stop(f"history_deals_get returned None (MT5 error: {err}) - aborting to avoid "
+                     f"misreporting an empty history.", code=3)
         print(f"\nDEALS in window: {len(deals)}")
         deal_rows = []
         for dl in deals:
