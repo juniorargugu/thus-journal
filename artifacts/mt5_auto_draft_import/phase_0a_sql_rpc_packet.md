@@ -1,9 +1,13 @@
-# MT5 Auto Draft Import — Phase 0A SQL/RPC Implementation Packet (r3, post-SQL-review polish)
+# MT5 Auto Draft Import — Phase 0A SQL/RPC Implementation Packet (r3 — APPLIED & VERIFIED)
 
-> ## ⛔ `GATED — REVIEW ONLY — NOT APPLIED`
-> - **Target baseline:** `09842d7` (prod). **Nothing in this file has been run.** No Supabase write, no migration, no apply.
-> - **Review status:** Codex re-review = **PASS**; Supabase SQL review = **PASS / READY_FOR_CONFLICT_PRECHECK**. r3 folds in that review's optional (non-blocking) polish; the packet is **still NOT APPLIED**.
-> - **Apply still requires ALL of:** explicit user GO **+** a clean conflict pre-check (§3) **+** execution inside **one transaction** (§3.5). (Codex + Supabase SQL review are now satisfied.)
+> ## ✅ `APPLIED & VERIFIED IN PRODUCTION SUPABASE` — 🚫 `DO NOT RE-RUN`
+> - **Status:** the SQL in this packet was **applied by the user in the Supabase SQL editor on 2026-06-25** and **verified PASS** (full matrix → [`phase_0a_apply_closeout.md`](phase_0a_apply_closeout.md)). This file is now retained as the **historical/audit record** of exactly what was applied.
+> - **🚫 DO NOT RE-RUN the apply transaction (§3.5/§4–§7).** Everything already exists. Re-running the create-only SQL will raise `already exists` (e.g. `42723`) — that is the **fail-closed guard working as designed**; do NOT "fix forward", do NOT retry, do NOT `rollback`.
+> - **Any future change must be a NEW reviewed migration/patch** (its own conflict pre-check + review gate) — never a re-run of this packet.
+> - **Apply provenance:** applied packet version = **r3** at repo commit **`c490d6a`** · Supabase project = **`wtfwynvvkiuottjnmozu`** · production app commit at apply time = **`09842d7`** (this was a **DB-only** change — no Netlify/app deploy).
+> - **Prior review gates (now historical):** Codex re-review = PASS; Supabase SQL review = PASS / READY_FOR_CONFLICT_PRECHECK; r3 polish folded in; conflict pre-check ran clean before the apply.
+>
+> *Original gate (kept for history): this began as `GATED — REVIEW ONLY — NOT APPLIED`; that status was superseded by the verified apply on 2026-06-25.*
 > - This artifact translates the approved [`phase_0a_r3_design_plan.md`](phase_0a_r3_design_plan.md) into concrete, **fail-closed, create-only** SQL. No `ALTER`/`DROP` of any existing object.
 > - Project: `wtfwynvvkiuottjnmozu`. There is **no separate staging Supabase** — the "staging vs prod create-only" decision is user-ratified, not default (§11.2, §12).
 
@@ -41,9 +45,9 @@ The SQL stores UTC-intended `timestamptz` columns and does **no** timezone math.
 - `service_role` is **local/admin only** — never shipped to browser/client/Netlify.
 
 ## 1. Status
-- Lineage: 0A → 0B probe → 0A-r2 → Codex `PASS_WITH_CHANGES` → 0A-r3 → ChatGPT pass → **packet** → Codex `PASS_WITH_CHANGES` → packet r2 → Codex re-review `PASS` → Supabase SQL review `PASS / READY_FOR_CONFLICT_PRECHECK` → **this packet r3** (optional polish folded in).
-- Parking blocker (P2 full-array cleanup) is **cleared** (P2-4C, prod `09842d7`). Remaining design blockers (product-mapping foundation, DELTA-SSF decision) gate **materialization (Phase 1)**, not this schema gate.
-- **Not applied. Not a runnable migration in `migrations/`.** Lives under `artifacts/` for review.
+- Lineage: 0A → 0B probe → 0A-r2 → Codex `PASS_WITH_CHANGES` → 0A-r3 → ChatGPT pass → **packet** → Codex `PASS_WITH_CHANGES` → packet r2 → Codex re-review `PASS` → Supabase SQL review `PASS / READY_FOR_CONFLICT_PRECHECK` → packet r3 (optional polish) → clean §3 conflict pre-check → **APPLIED & VERIFIED in prod Supabase (2026-06-25)**.
+- Parking blocker (P2 full-array cleanup) is **cleared** (P2-4C, prod `09842d7`). Remaining design blockers (product-mapping foundation, DELTA-SSF decision) gate **materialization (Phase 1)**, not this schema gate (which is now applied).
+- **APPLIED — no longer a pending packet.** Retained under `artifacts/` as the historical/audit record of exactly what was run. It is **not** a runnable migration in `migrations/` and **must not be re-run** (see top banner + [`phase_0a_apply_closeout.md`](phase_0a_apply_closeout.md)).
 
 ## 2. Scope / non-scope
 **In scope (authors, does NOT run):** DDL for 3 new tables + indexes/partial-unique + `updated_at` triggers; RLS (browser SELECT-own only); minimal grants; 3 `SECURITY DEFINER` RPC bodies (`mt5_confirm_group`, `mt5_set_leg_state`, `mt5_mark_materialized`).
@@ -520,7 +524,7 @@ drop function if exists public.mt5_set_updated_at();
 
 ## 11. STOP conditions
 ### 11.1 Apply gating
-- No apply without **explicit user GO** + **fresh Codex pass** + **Supabase SQL review** + **clean §3 pre-check**. *(As of r3: Codex re-review = PASS and Supabase SQL review = PASS / READY_FOR_CONFLICT_PRECHECK are satisfied; the remaining gates are the explicit user GO and a clean §3 pre-check at apply time.)*
+- No apply without **explicit user GO** + **fresh Codex pass** + **Supabase SQL review** + **clean §3 pre-check**. *(HISTORICAL — all gates were satisfied and this packet was **applied & verified on 2026-06-25**. These bullets describe the gate that governed the original apply; they are kept for audit. **Do NOT re-run this packet** — any future change is a new reviewed migration.)*
 - Apply runs as **one transaction**; any error → `rollback;` → **STOP**. **No partial apply.**
 - **Create-only**, fail-closed: plain `CREATE` (no `or replace`/`if not exists`); no `ALTER`/`DROP` of existing objects.
 - **No browser write grants/policies** on `mt5_import_*`; **no `service_role`** in client/browser/Netlify.
@@ -550,5 +554,5 @@ drop function if exists public.mt5_set_updated_at();
 ## Next step routing
 
 Next step routing: SEND_TO_CHATGPT_REVIEW
-Reason: Phase 0A packet r3 folds in the Supabase SQL-review optional polish (Codex re-review = PASS; Supabase SQL review = PASS / READY_FOR_CONFLICT_PRECHECK). It is still NOT applied.
-Next action: Prepare a user-run §3 conflict pre-check prompt. Apply remains separate and hard-gated behind an explicit user GO after the pre-check returns clean, executed as a single transaction.
+Reason: Phase 0A schema/RLS/RPC was applied & verified in prod Supabase on 2026-06-25 (see `phase_0a_apply_closeout.md`). This packet is now the historical/audit record — DO NOT re-run.
+Next action: Plan Phase 0C (staging writer) under a separate gated design prompt. Any future schema change is a new reviewed migration, not a re-run of this packet.
