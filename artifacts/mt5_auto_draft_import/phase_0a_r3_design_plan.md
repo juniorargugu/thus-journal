@@ -13,6 +13,8 @@
 - ✋ **Implementation: GATED (HOLD)** — no reader, no staging writer, no Inbox UI, no materialization.
 - ⏸️ **Not priority-active yet** — parked behind higher-priority pipeline items (see §9).
 
+> **Update 2026-06-25:** production baseline is now `09842d7` (the line-5 `2c2c8d2` reference is from authoring time). §9 blocker (1) "P2 full-array `saveTrades` cleanup" is **CLEARED** (P2-4C shipped). The concrete SQL/RPC has been authored as a **GATED, NOT-APPLIED** packet → [`phase_0a_sql_rpc_packet.md`](phase_0a_sql_rpc_packet.md); it still requires a fresh Codex pass + Supabase SQL review before any apply. Blockers (2)/(3) gate **Phase-1 materialization**, not this schema gate.
+
 Lineage: `0A` → `0B` probe (read-only) → `0A-r2` → Codex review (`PASS_WITH_CHANGES`) → `0A-r3` → final ChatGPT pass → **this artifact**.
 
 ## 2. Approved architecture
