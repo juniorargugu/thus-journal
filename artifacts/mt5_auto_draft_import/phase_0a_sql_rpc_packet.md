@@ -1,161 +1,177 @@
-# MT5 Auto Draft Import — Phase 0A SQL/RPC Implementation Packet
+# MT5 Auto Draft Import — Phase 0A SQL/RPC Implementation Packet (r2, post-Codex)
 
 > ## ⛔ `GATED — REVIEW ONLY — NOT APPLIED`
 > - **Target baseline:** `09842d7` (prod). **Nothing in this file has been run.** No Supabase write, no migration, no apply.
-> - **Apply requires ALL of:** explicit user GO **+** a fresh **Codex** pass **+** a **Supabase SQL review** **+** a clean conflict pre-check (§3).
-> - This artifact translates the approved [`phase_0a_r3_design_plan.md`](phase_0a_r3_design_plan.md) (§4–6) into concrete, reviewable SQL. It is **docs-only**. It is **create-only** (no `ALTER`/`DROP` of any existing object).
-> - Project: `wtfwynvvkiuottjnmozu`. There is **no separate staging Supabase** — the "staging vs prod create-only" decision is deferred to review (§12).
+> - **Apply requires ALL of:** explicit user GO **+** a fresh **Codex** pass **+** a **Supabase SQL review** **+** a clean conflict pre-check (§3) **+** execution inside **one transaction** (§3.5).
+> - This artifact translates the approved [`phase_0a_r3_design_plan.md`](phase_0a_r3_design_plan.md) into concrete, **fail-closed, create-only** SQL. No `ALTER`/`DROP` of any existing object.
+> - Project: `wtfwynvvkiuottjnmozu`. There is **no separate staging Supabase** — the "staging vs prod create-only" decision is user-ratified, not default (§11.2, §12).
 
-**Artifact date:** 2026-06-25 · **Type:** SQL/RPC packet (docs-only, gated)
+**Artifact date:** 2026-06-25 · **Revision:** r2 (addresses Codex `PASS_WITH_CHANGES`) · **Type:** SQL/RPC packet (docs-only, gated)
+
+### r2 change log (Codex items addressed)
+1. **Fail-closed:** removed `create or replace` / `if not exists` / `drop … if exists`; plain `CREATE` only (fails if anything pre-exists).
+2. **Transaction wrapper:** apply runs as one `begin; … commit;`; any error → `rollback;` → STOP; no partial apply (§3.5).
+3. **DEFINER grant hardening:** each RPC `revoke execute … from public, anon, authenticated;` then `grant … to authenticated;` in-transaction (no transient PUBLIC window).
+4. **Table grant hardening:** `revoke all … from public, anon, authenticated;` then SELECT-only back to `authenticated`; post-apply checks for absence of write grants/policies.
+5. **`mt5_confirm_group` concurrency:** `FOR UPDATE` leg lock + guarded update with row-count assertion; group insert rolls back if the leg update count ≠ expected (no orphan group).
+6. **Grouped-leg dismissal:** `mt5_set_leg_state` may only dismiss **ungrouped/unconfirmed** legs; grouped/materialized legs are not dismissible here (ungroup deferred).
+7. **`mt5_mark_materialized` strengthened:** ownership of all legs, ≥1 owned leg, ALL legs `state='grouped'`, count coherence, locks; `p_product_id` retained as **audit** (`materialized_product_id`).
+8. **Tripwire strengthened:** NULL `contract_size` → reject (route to `needs_mapping`); known-specific leg class requires a matching known product class; exact contract_size match (rationale in §7.3 note).
+9. **`mt5_resolve_mapping` DEFERRED** — body removed; mapping authority stays in the materialize-time tripwire.
+10. **Idempotency gaps** documented + reader invariant + STOP (§11.3, §12).
+11. **Staging-vs-prod drift** reconciled (§11.2).
+12. **Writer timezone invariant** added (§0 Writer invariants).
 
 ---
+
+## 0. Writer invariants (reader/Python contract — NOT enforced by this SQL)
+The SQL stores UTC-intended `timestamptz` columns and does **no** timezone math. The reader/writer (later, 0C) owns conversion and must guarantee:
+- **MT5 time is Asia/Bangkok wall-clock** (probe finding) → convert to **true UTC** (`wall − 7h`) **before insert** into `open_time`/`close_time`/`mt5_time`/`last_seen_open_at`/`first_seen_open_at`.
+- **Preserve raw** without loss: `mt5_time_raw_epoch` (raw epoch seconds as MT5 returned, pre-correction), `mt5_time_msc` (raw epoch ms), and the full `raw jsonb`.
+- **Idempotency keys:** an `open` row MUST carry `position_id`; a `close`/`partial` row MUST carry `deal_id`. The reader MUST NOT blind-insert rows missing their stable key (see §11.3) — the partial-unique indexes only protect rows that HAVE the key.
+- `service_role` is **local/admin only** — never shipped to browser/client/Netlify.
 
 ## 1. Status
-- Design lineage: 0A → 0B probe → 0A-r2 → Codex `PASS_WITH_CHANGES` → 0A-r3 → final ChatGPT pass → **this packet** (concrete SQL).
-- Blocker note: the original parking blocker (P2 full-array `saveTrades` cleanup) is **cleared** (P2-4C shipped; prod `09842d7`). The remaining design blockers (product-mapping foundation, DELTA-SSF product decision) gate **materialization (Phase 1)**, **not** this schema gate.
-- This packet is **not** applied, **not** a runnable migration in `migrations/`. It lives under `artifacts/` for review.
+- Lineage: 0A → 0B probe → 0A-r2 → Codex `PASS_WITH_CHANGES` → 0A-r3 → ChatGPT pass → **packet** → Codex `PASS_WITH_CHANGES` → **this packet r2**.
+- Parking blocker (P2 full-array cleanup) is **cleared** (P2-4C, prod `09842d7`). Remaining design blockers (product-mapping foundation, DELTA-SSF decision) gate **materialization (Phase 1)**, not this schema gate.
+- **Not applied. Not a runnable migration in `migrations/`.** Lives under `artifacts/` for review.
 
 ## 2. Scope / non-scope
-**In scope (this packet authors, does NOT run):** DDL for 3 new tables (`mt5_import_staging`, `mt5_import_groups`, `mt5_import_cursors`), their indexes/partial-unique idempotency, `updated_at` triggers, RLS (browser SELECT-own only), minimal grants, and 4 `SECURITY DEFINER` RPC bodies.
-
-**Out of scope (NOT in this slice):** applying any SQL; the Python reader/probe/writer (0C); the Inbox UI (0D); trade **materialization** into THUS `trades` (Phase 1); close/partial drafts (Phase 2); screenshots (Phase 3); the product-mapping foundation; the DELTA-SSF product decision; any `index.html`/runtime change; any Product/Symbol/DELTA/GUGU/Storage touch.
+**In scope (authors, does NOT run):** DDL for 3 new tables + indexes/partial-unique + `updated_at` triggers; RLS (browser SELECT-own only); minimal grants; 3 `SECURITY DEFINER` RPC bodies (`mt5_confirm_group`, `mt5_set_leg_state`, `mt5_mark_materialized`).
+**Out of scope:** applying SQL; Python reader/probe/writer (0C); Inbox UI (0D); **materialization into THUS `trades`** (Phase 1); close/partial drafts (Phase 2); screenshots (Phase 3); product-mapping foundation; DELTA-SSF decision; any `index.html`/runtime/Product/Symbol/DELTA/GUGU/Storage change; `mt5_resolve_mapping` (deferred, §9).
 
 ---
 
-## 3. Conflict pre-check SQL (run FIRST, read-only; must return empty/zero before any apply)
+## 3. Conflict pre-check SQL (run FIRST, read-only; must return ZERO before apply)
 ```sql
--- (a) No existing mt5_import_* tables
-select tablename from pg_tables
-where schemaname='public' and tablename like 'mt5_import_%';                 -- expect: 0 rows
-
--- (b) No existing mt5_* functions/RPCs
+select tablename from pg_tables where schemaname='public' and tablename like 'mt5_import_%';            -- expect 0
 select p.proname from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-where n.nspname='public' and p.proname like 'mt5_%';                          -- expect: 0 rows
-
--- (c) No existing mt5_import_* policies
-select policyname, tablename from pg_policies
-where schemaname='public' and tablename like 'mt5_import_%';                  -- expect: 0 rows
-
--- (d) No existing mt5_import_* indexes / triggers
-select indexname from pg_indexes where schemaname='public' and tablename like 'mt5_import_%';  -- expect: 0
+  where n.nspname='public' and p.proname like 'mt5_%';                                                  -- expect 0
+select policyname, tablename from pg_policies where schemaname='public' and tablename like 'mt5_import_%'; -- expect 0
+select indexname from pg_indexes where schemaname='public' and tablename like 'mt5_import_%';           -- expect 0
 select tgname from pg_trigger t join pg_class c on c.oid=t.tgrelid
-where c.relname like 'mt5_import_%' and not t.tgisinternal;                   -- expect: 0
+  where c.relname like 'mt5_import_%' and not t.tgisinternal;                                           -- expect 0
 ```
-**STOP if any of (a)–(d) returns rows** — investigate before applying (this packet assumes create-only on a clean namespace).
+**STOP if any returns rows.** The packet is fail-closed: with no `if not exists`/`or replace`, a plain `CREATE` against a pre-existing object **errors**, which (inside the transaction) forces a full rollback.
+
+## 3.5 Apply procedure (REQUIRED — one transaction, fail-closed, no partial apply)
+1. Run §3 pre-check; proceed only if all zero.
+2. Execute §4 → §5 → §6 → §7 **as a single transaction**: literally `begin;` **before** §4.0 and `commit;` **after** §7's grants.
+3. **If ANY statement errors:** the transaction aborts — run `rollback;` and **STOP**. Never leave a half-applied schema. Do not "fix forward" mid-apply.
+4. All objects here are transaction-safe (no `CREATE INDEX CONCURRENTLY`, no `VACUUM`).
+5. Only after a clean `commit;` run §8 verification.
+
+```sql
+begin;   -- ⬅ START of the single apply transaction (everything in §4–§7 runs here)
+```
 
 ---
 
-## 4. DDL — tables, indexes, triggers (create-only)
+## 4. DDL — tables, indexes, triggers (fail-closed, create-only)
 
 ### 4.0 Shared `updated_at` trigger function
 ```sql
-create or replace function public.mt5_set_updated_at()
+create function public.mt5_set_updated_at()
 returns trigger language plpgsql set search_path = '' as $$
 begin new.updated_at := now(); return new; end; $$;
+revoke execute on function public.mt5_set_updated_at() from public, anon, authenticated;  -- trigger-invoked only
 ```
 
-### 4.1 `mt5_import_groups` (created first — `mt5_import_staging` FKs to it)
+### 4.1 `mt5_import_groups` (created first — staging FKs to it)
 ```sql
-create table if not exists public.mt5_import_groups (
+create table public.mt5_import_groups (
   id                  uuid primary key default gen_random_uuid(),
   user_id             uuid not null,
   source_account      text not null,
   normalized_symbol   text,
   instrument_class    text default 'unknown',   -- fail-open: no rejecting CHECK
   side                text,
-  state               text not null default 'grouped',  -- grouped | materialized | dismissed (RPC-controlled; no rejecting CHECK)
+  state               text not null default 'grouped',  -- grouped | materialized | dismissed (RPC-controlled)
   prenote             text,
   thesis              text,
   plan                text,
-  suggested_start_time timestamptz,   -- server-computed in mt5_confirm_group
-  suggested_end_time   timestamptz,
-  leg_count            int,
-  total_volume         numeric,
-  weighted_avg_price   numeric,
-  import_group_key     text,
-  materialized_trade_id text,         -- loose ref to a THUS trade id (string); NOT an FK to trades (decoupled)
-  materialized_at      timestamptz,
+  suggested_start_time  timestamptz,
+  suggested_end_time    timestamptz,
+  leg_count             int,
+  total_volume          numeric,
+  weighted_avg_price    numeric,
+  import_group_key      text,
+  materialized_trade_id text,        -- loose ref to a THUS trade id (string); NOT an FK to trades
+  materialized_product_id text,      -- AUDIT: which product was chosen at materialize (from mt5_mark_materialized)
+  materialized_at       timestamptz,
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now()
 );
-create index if not exists mt5_groups_user_acct on public.mt5_import_groups (user_id, source_account);
-create index if not exists mt5_groups_user_state on public.mt5_import_groups (user_id, state);
+create index mt5_groups_user_acct  on public.mt5_import_groups (user_id, source_account);
+create index mt5_groups_user_state on public.mt5_import_groups (user_id, state);
 create trigger mt5_groups_updated_at before update on public.mt5_import_groups
   for each row execute function public.mt5_set_updated_at();
 ```
 
 ### 4.2 `mt5_import_staging`
 ```sql
-create table if not exists public.mt5_import_staging (
+create table public.mt5_import_staging (
   id                  uuid primary key default gen_random_uuid(),
   user_id             uuid not null,
   source_account      text not null,
-  kind                text not null default 'unknown',   -- open|close|partial|balance|unknown (fail-open; no rejecting CHECK)
-  -- symbol / instrument (mapping safety: store EVERYTHING raw)
+  kind                text not null default 'unknown',   -- open|close|partial|balance|unknown (fail-open)
   symbol_raw          text,
   normalized_symbol   text,
   instrument_path     text,
   instrument_class    text default 'unknown',             -- fail-open
-  contract_size       numeric,                            -- e.g. DELTAU26 SSF = 1000  (tripwire input)
+  contract_size       numeric,                            -- e.g. DELTAU26 SSF = 1000 (tripwire input)
   digits              int,
-  product_id_candidate text,                              -- HINT ONLY; never authoritative (tripwire ignores it)
-  -- leg facts
+  product_id_candidate text,                              -- HINT ONLY; tripwire never trusts it
   side                text,                               -- buy|sell (raw)
   volume              numeric,
   price               numeric,
-  -- times: store true UTC + retain raw (MT5 = Asia/Bangkok wall-clock per probe)
-  open_time           timestamptz,                        -- true UTC
+  open_time           timestamptz,                        -- true UTC (reader-converted)
   close_time          timestamptz,                        -- true UTC
-  mt5_time            timestamptz,                        -- true UTC of the deal/position
+  mt5_time            timestamptz,                        -- true UTC
   mt5_time_msc        bigint,                             -- raw epoch ms (lossless)
-  mt5_time_raw_epoch  bigint,                             -- raw epoch seconds AS MT5 RETURNED (pre +7 correction)
-  server_tz           text,                               -- e.g. 'Asia/Bangkok' / offset
-  -- broker ids
+  mt5_time_raw_epoch  bigint,                             -- raw epoch seconds AS MT5 RETURNED (pre +7)
+  server_tz           text,
   position_id         bigint,
   deal_id             bigint,
   order_id            bigint,
   ticket              bigint,
   external_id         text,
-  -- money
   commission          numeric,
   swap                numeric,
   fee                 numeric,
   broker_profit       numeric,
-  -- open-row lifecycle
   position_state      text default 'open',                -- open|closed|gone (fail-open)
   first_seen_open_at  timestamptz,
   last_seen_open_at   timestamptz,
-  -- leg state machine (RPC-controlled): new|group_suggested|grouped|needs_mapping|materialized|dismissed
-  state               text not null default 'new',
+  state               text not null default 'new',        -- new|group_suggested|grouped|needs_mapping|materialized|dismissed
   import_group_key    text,
-  confirmed_group_id  uuid references public.mt5_import_groups(id) on delete set null,  -- ownership enforced in RPC, NOT trusted to FK/RLS
-  materialized_trade_id text,                             -- loose ref to THUS trade id (string); NOT FK
+  confirmed_group_id  uuid references public.mt5_import_groups(id) on delete set null,  -- ownership enforced in RPC
+  materialized_trade_id text,                             -- loose ref to THUS trade id; NOT FK
   materialized_at     timestamptz,
   dismissed_at        timestamptz,
   error_message       text,
   screenshot_url      text,                               -- Phase 3; URL/path ONLY, never base64
-  raw                 jsonb,                              -- full raw MT5 record
+  raw                 jsonb,
   created_at          timestamptz not null default now(),
   updated_at          timestamptz not null default now()
 );
 
--- Idempotency (partial unique): reader can re-run safely
-create unique index if not exists mt5_staging_open_uniq
+-- Idempotency (partial unique). NOTE: protects only rows that HAVE the key (see §11.3 for null-key rows).
+create unique index mt5_staging_open_uniq
   on public.mt5_import_staging (user_id, source_account, position_id)
   where kind='open' and position_id is not null;
-create unique index if not exists mt5_staging_deal_uniq
+create unique index mt5_staging_deal_uniq
   on public.mt5_import_staging (user_id, source_account, deal_id)
   where deal_id is not null and kind in ('close','partial');
-create unique index if not exists mt5_staging_balance_uniq
+create unique index mt5_staging_balance_uniq
   on public.mt5_import_staging (user_id, source_account, deal_id)
   where kind='balance' and deal_id is not null;
 
--- Query indexes
-create index if not exists mt5_staging_user_acct on public.mt5_import_staging (user_id, source_account);
-create index if not exists mt5_staging_user_state on public.mt5_import_staging (user_id, state);
-create index if not exists mt5_staging_group on public.mt5_import_staging (confirmed_group_id);
-create index if not exists mt5_staging_open_live on public.mt5_import_staging (user_id, position_state) where kind='open';
-create index if not exists mt5_staging_created on public.mt5_import_staging (created_at);
+create index mt5_staging_user_acct  on public.mt5_import_staging (user_id, source_account);
+create index mt5_staging_user_state on public.mt5_import_staging (user_id, state);
+create index mt5_staging_group      on public.mt5_import_staging (confirmed_group_id);
+create index mt5_staging_open_live  on public.mt5_import_staging (user_id, position_state) where kind='open';
+create index mt5_staging_created    on public.mt5_import_staging (created_at);
 
 create trigger mt5_staging_updated_at before update on public.mt5_import_staging
   for each row execute function public.mt5_set_updated_at();
@@ -163,7 +179,7 @@ create trigger mt5_staging_updated_at before update on public.mt5_import_staging
 
 ### 4.3 `mt5_import_cursors`
 ```sql
-create table if not exists public.mt5_import_cursors (
+create table public.mt5_import_cursors (
   user_id           uuid not null,
   source_account    text not null,
   last_seen_deal_id bigint,
@@ -178,49 +194,40 @@ create trigger mt5_cursors_updated_at before update on public.mt5_import_cursors
 
 ---
 
-## 5. RLS — enable + browser SELECT-own ONLY (no browser writes)
+## 5. RLS — enable + browser SELECT-own ONLY (no `drop`, no write policies)
 ```sql
 alter table public.mt5_import_staging enable row level security;
 alter table public.mt5_import_groups  enable row level security;
 alter table public.mt5_import_cursors enable row level security;
 
--- Browser may read only its own rows. (select auth.uid()) is the per-row owner check.
-drop policy if exists "mt5_import_staging select own" on public.mt5_import_staging;
 create policy "mt5_import_staging select own" on public.mt5_import_staging
   for select to authenticated using (user_id = (select auth.uid()));
-
-drop policy if exists "mt5_import_groups select own" on public.mt5_import_groups;
 create policy "mt5_import_groups select own" on public.mt5_import_groups
   for select to authenticated using (user_id = (select auth.uid()));
-
--- cursors: reader-internal. SELECT-own is OPTIONAL (browser doesn't need it). Included for symmetry; drop if undesired.
-drop policy if exists "mt5_import_cursors select own" on public.mt5_import_cursors;
-create policy "mt5_import_cursors select own" on public.mt5_import_cursors
-  for select to authenticated using (user_id = (select auth.uid()));
+-- mt5_import_cursors: reader-internal → NO browser policy (and no grant in §6). service_role bypasses RLS.
 ```
-- **No INSERT/UPDATE/DELETE policies for `authenticated`** → the browser cannot write these tables directly. User-initiated lifecycle changes go **only** through the SECURITY DEFINER RPCs (§7). The Python reader writes via `service_role` (bypasses RLS).
+No INSERT/UPDATE/DELETE policies for `authenticated`. RLS enabled with no write policy = browser cannot write. Lifecycle changes flow only through the DEFINER RPCs (§7); the reader writes via `service_role`.
 
-## 6. Grants — minimal
+## 6. Grants — hardened (revoke-all then SELECT-only)
 ```sql
--- Lock down, then grant only browser SELECT. service_role bypasses RLS and needs no explicit grant here.
-revoke all on public.mt5_import_staging from anon;
-revoke all on public.mt5_import_groups  from anon;
-revoke all on public.mt5_import_cursors from anon;
+revoke all on public.mt5_import_staging from public, anon, authenticated;
+revoke all on public.mt5_import_groups  from public, anon, authenticated;
+revoke all on public.mt5_import_cursors from public, anon, authenticated;
 grant select on public.mt5_import_staging to authenticated;
 grant select on public.mt5_import_groups  to authenticated;
--- cursors: NO authenticated grant by default (reader-only). Grant select only if the optional policy above is kept AND a UI needs it.
+-- mt5_import_cursors: NO authenticated/anon grant (reader-only). service_role bypasses RLS, needs no grant here.
 ```
-- `anon` gets nothing. `authenticated` gets SELECT (RLS-scoped to own rows) on staging/groups. No write grants. `service_role` (reader, local/admin only) is never shipped to browser/client/Netlify.
+Result: `anon` = nothing; `authenticated` = SELECT-only (RLS-scoped) on staging/groups, **no** INSERT/UPDATE/DELETE, **no** cursor access. (Transaction-level revoke is sufficient — the whole apply is atomic, so no committed state ever exposes a write grant; `ALTER DEFAULT PRIVILEGES` is not used as it targets *future* objects, not these.)
 
 ---
 
-## 7. RPC definitions (proposed full bodies — `SECURITY DEFINER`, ownership inside, `search_path=''`)
+## 7. RPC definitions (full bodies — `SECURITY DEFINER`, `search_path=''`, in-body ownership, per-RPC grant hardening)
 
-> All RPCs: `security definer`, `set search_path = ''` (every object fully schema-qualified; `auth.uid()` qualified), `auth.uid()` ownership enforced **inside** the body (never trusted to FK/RLS), reject unsafe transitions, **no writes to `trades`/`products`/`portfolio`/`notes`**, **no materialization into THUS trades**.
+> All RPCs: `security definer`, `set search_path = ''` (every object fully schema-qualified; `auth.uid()` qualified), ownership enforced **inside** via `auth.uid()`, reject unsafe transitions, **no writes to `trades`/`products`/`portfolio`/`notes`**, **no materialization into THUS trades**. Each `create` is immediately followed (same transaction) by `revoke execute … from public, anon, authenticated` then `grant execute … to authenticated` — closing any transient PUBLIC-execute default.
 
-### 7.1 `mt5_confirm_group` — confirm-first grouping of open legs into one idea
+### 7.1 `mt5_confirm_group` — confirm-first grouping (concurrency-safe)
 ```sql
-create or replace function public.mt5_confirm_group(
+create function public.mt5_confirm_group(
   p_leg_ids   uuid[],
   p_prenote   text default null,
   p_thesis    text default null,
@@ -232,39 +239,38 @@ declare
   v_uid uuid := auth.uid();
   v_group_id uuid;
   v_n int := coalesce(array_length(p_leg_ids,1),0);
-  v_ok int; v_accts int; v_keys int;
+  v_ok int; v_accts int; v_keys int; v_upd int;
   v_acct text; v_sym text; v_cls text; v_side text; v_key text;
   v_legcount int; v_totvol numeric; v_wavg numeric; v_start timestamptz; v_end timestamptz;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
   if v_n = 0 then raise exception 'no legs provided'; end if;
 
-  -- every leg must be owned, kind=open, groupable (new|group_suggested), and ungrouped
-  select count(*) into v_ok from public.mt5_import_staging s
-   where s.id = any(p_leg_ids) and s.user_id = v_uid
-     and s.kind = 'open' and s.state in ('new','group_suggested') and s.confirmed_group_id is null;
-  if v_ok <> v_n then
-    raise exception 'legs not all owned/open/ungroupable (% eligible of %)', v_ok, v_n;
-  end if;
+  -- (concurrency) lock all OWNED candidate legs; a concurrent grouping of the same legs blocks here
+  perform 1 from public.mt5_import_staging s
+    where s.id = any(p_leg_ids) and s.user_id = v_uid for update;
 
-  -- single source_account
+  -- re-check eligibility UNDER the lock (a racing committed group would drop this count)
+  select count(*) into v_ok from public.mt5_import_staging s
+    where s.id = any(p_leg_ids) and s.user_id = v_uid
+      and s.kind='open' and s.state in ('new','group_suggested') and s.confirmed_group_id is null;
+  if v_ok <> v_n then raise exception 'legs not all owned/open/ungrouped (% eligible of %)', v_ok, v_n; end if;
+
   select count(distinct s.source_account) into v_accts from public.mt5_import_staging s
-   where s.id = any(p_leg_ids) and s.user_id = v_uid;
+    where s.id = any(p_leg_ids) and s.user_id = v_uid;
   if v_accts <> 1 then raise exception 'legs span multiple accounts'; end if;
 
-  -- single (symbol,class,side) unless explicitly allowed
   if not p_allow_mixed then
     select count(distinct (s.normalized_symbol, s.instrument_class, s.side)) into v_keys
       from public.mt5_import_staging s where s.id = any(p_leg_ids) and s.user_id = v_uid;
     if v_keys <> 1 then raise exception 'mixed symbol/class/side — pass p_allow_mixed to override'; end if;
   end if;
 
-  -- representative fields + server-side aggregates
   select max(s.source_account), max(s.normalized_symbol), max(s.instrument_class), max(s.side), max(s.import_group_key),
          count(*), sum(s.volume),
-         case when sum(s.volume) > 0 then sum(s.price * s.volume)/sum(s.volume) else null end,
-         min(coalesce(s.open_time, s.mt5_time)), max(coalesce(s.open_time, s.mt5_time))
-    into v_acct, v_sym, v_cls, v_side, v_key, v_legcount, v_totvol, v_wavg, v_start, v_end
+         case when sum(s.volume) > 0 then sum(s.price*s.volume)/sum(s.volume) else null end,
+         min(coalesce(s.open_time,s.mt5_time)), max(coalesce(s.open_time,s.mt5_time))
+    into v_acct,v_sym,v_cls,v_side,v_key,v_legcount,v_totvol,v_wavg,v_start,v_end
     from public.mt5_import_staging s where s.id = any(p_leg_ids) and s.user_id = v_uid;
 
   insert into public.mt5_import_groups
@@ -277,17 +283,25 @@ begin
      v_legcount, v_totvol, v_wavg, v_key)
   returning id into v_group_id;
 
+  -- atomic guarded update; affected count MUST equal expected, else abort (rolls back the inserted group → no orphan)
   update public.mt5_import_staging
-     set confirmed_group_id = v_group_id, state = 'grouped', updated_at = now()
-   where id = any(p_leg_ids) and user_id = v_uid;
+    set confirmed_group_id = v_group_id, state='grouped', updated_at=now()
+   where id = any(p_leg_ids) and user_id = v_uid
+     and kind='open' and state in ('new','group_suggested') and confirmed_group_id is null;
+  get diagnostics v_upd = row_count;
+  if v_upd <> v_n then
+    raise exception 'concurrent modification: updated % of % legs — aborting (group rolled back)', v_upd, v_n;
+  end if;
 
   return v_group_id;
 end; $$;
+revoke execute on function public.mt5_confirm_group(uuid[],text,text,text,boolean) from public, anon, authenticated;
+grant  execute on function public.mt5_confirm_group(uuid[],text,text,text,boolean) to authenticated;
 ```
 
-### 7.2 `mt5_set_leg_state` — controlled leg transitions (NO →materialized, NO →grouped here)
+### 7.2 `mt5_set_leg_state` — controlled transitions; dismiss ONLY ungrouped legs
 ```sql
-create or replace function public.mt5_set_leg_state(p_leg_ids uuid[], p_new_state text)
+create function public.mt5_set_leg_state(p_leg_ids uuid[], p_new_state text)
 returns int language plpgsql security definer set search_path = '' as $$
 declare v_uid uuid := auth.uid(); v_rows int := 0;
 begin
@@ -298,25 +312,32 @@ begin
     raise exception 'unsupported target state: %', p_new_state;
   end if;
 
-  if p_new_state = 'dismissed' then                 -- from any non-materialized state
+  if p_new_state = 'dismissed' then
+    -- v0: only UNGROUPED/UNCONFIRMED legs may be dismissed here. Grouped/materialized legs are NOT
+    -- dismissible via this RPC (ungroup/edit-group is deferred — see §12).
     update public.mt5_import_staging set state='dismissed', dismissed_at=now(), updated_at=now()
-     where id = any(p_leg_ids) and user_id=v_uid and state <> 'materialized';
-  elsif p_new_state = 'new' then                    -- needs_mapping → new, or group_suggested → new
+     where id = any(p_leg_ids) and user_id=v_uid
+       and confirmed_group_id is null and state in ('new','group_suggested','needs_mapping');
+  elsif p_new_state = 'new' then
     update public.mt5_import_staging set state='new', updated_at=now()
-     where id = any(p_leg_ids) and user_id=v_uid and state in ('needs_mapping','group_suggested');
-  elsif p_new_state = 'group_suggested' then        -- new → group_suggested
+     where id = any(p_leg_ids) and user_id=v_uid
+       and confirmed_group_id is null and state in ('needs_mapping','group_suggested');
+  elsif p_new_state = 'group_suggested' then
     update public.mt5_import_staging set state='group_suggested', updated_at=now()
-     where id = any(p_leg_ids) and user_id=v_uid and state='new';
+     where id = any(p_leg_ids) and user_id=v_uid
+       and confirmed_group_id is null and state='new';
   end if;
 
   get diagnostics v_rows = row_count;
-  return v_rows;
+  return v_rows;   -- caller compares to expected; 0 = nothing eligible (e.g. tried to dismiss a grouped leg)
 end; $$;
+revoke execute on function public.mt5_set_leg_state(uuid[],text) from public, anon, authenticated;
+grant  execute on function public.mt5_set_leg_state(uuid[],text) to authenticated;
 ```
 
-### 7.3 `mt5_mark_materialized` — flip lifecycle AFTER the browser durably wrote the THUS draft (tripwire enforced)
+### 7.3 `mt5_mark_materialized` — lifecycle flip AFTER browser durably wrote the THUS draft (strict + tripwire)
 ```sql
-create or replace function public.mt5_mark_materialized(
+create function public.mt5_mark_materialized(
   p_group_id uuid,
   p_trade_id text,
   p_product_id text,
@@ -324,154 +345,162 @@ create or replace function public.mt5_mark_materialized(
   p_product_class text
 ) returns void
 language plpgsql security definer set search_path = '' as $$
-declare v_uid uuid := auth.uid(); v_grp int; v_bad int;
+declare v_uid uuid := auth.uid(); v_grp int; v_total int; v_grouped int; v_foreign int; v_nullcs int; v_bad int;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
-  if p_trade_id is null or length(p_trade_id) = 0 then
+  if p_trade_id is null or length(p_trade_id)=0 then
     raise exception 'missing trade_id — materialize the THUS draft via the durable single-row path FIRST';
   end if;
   if p_product_contract_size is null then raise exception 'missing product_contract_size'; end if;
 
-  -- group must be owned and still in 'grouped'
+  -- lock + verify the group is owned and still 'grouped'
+  perform 1 from public.mt5_import_groups g where g.id=p_group_id and g.user_id=v_uid for update;
   select count(*) into v_grp from public.mt5_import_groups g
-   where g.id = p_group_id and g.user_id = v_uid and g.state = 'grouped';
+    where g.id=p_group_id and g.user_id=v_uid and g.state='grouped';
   if v_grp <> 1 then raise exception 'group not owned, or not in grouped state'; end if;
 
-  -- TRIPWIRE: every leg's contract_size MUST equal the chosen product's contract_size (exact).
-  -- If both classes are known+specific they must match too. product_id_candidate is NOT trusted here.
-  -- This is what stops DELTAU26 (csize 1000) from materializing against DELTA stock (csize 1) = 1000x P/L error.
+  -- lock the group's legs (serialize concurrent materialize calls)
+  perform 1 from public.mt5_import_staging s where s.confirmed_group_id=p_group_id and s.user_id=v_uid for update;
+
+  -- ownership: no leg of this group may belong to another user (FK does not enforce ownership)
+  select count(*) into v_foreign from public.mt5_import_staging s
+    where s.confirmed_group_id=p_group_id and s.user_id<>v_uid;
+  if v_foreign > 0 then raise exception 'group contains % leg(s) not owned by caller', v_foreign; end if;
+
+  -- require >=1 owned leg and ALL owned legs currently 'grouped' (reject dismissed/non-grouped members)
+  select count(*) into v_total   from public.mt5_import_staging s where s.confirmed_group_id=p_group_id and s.user_id=v_uid;
+  select count(*) into v_grouped from public.mt5_import_staging s where s.confirmed_group_id=p_group_id and s.user_id=v_uid and s.state='grouped';
+  if v_total < 1 then raise exception 'group has no owned legs'; end if;
+  if v_grouped <> v_total then raise exception 'group has % non-grouped leg(s) — refusing to materialize', v_total - v_grouped; end if;
+
+  -- TRIPWIRE (mapping safety):
+  --  (a) NULL contract_size is NOT materializable → route to needs_mapping.
+  --  (b) contract_size must EXACTLY match the chosen product (exact, not tolerance — see note).
+  --  (c) a known-specific leg class REQUIRES a matching known product class (cannot be skipped via null/unknown).
+  --  product_id_candidate is NOT consulted here.
+  select count(*) into v_nullcs from public.mt5_import_staging s
+    where s.confirmed_group_id=p_group_id and s.user_id=v_uid and s.contract_size is null;
+  if v_nullcs > 0 then
+    raise exception '% leg(s) have NULL contract_size — route to needs_mapping; cannot materialize', v_nullcs;
+  end if;
   select count(*) into v_bad from public.mt5_import_staging s
-   where s.confirmed_group_id = p_group_id and s.user_id = v_uid
-     and (
-       (s.contract_size is not null and s.contract_size <> p_product_contract_size)
-       or (p_product_class is not null and p_product_class <> 'unknown'
-           and s.instrument_class is not null and s.instrument_class <> 'unknown'
-           and s.instrument_class <> p_product_class)
-     );
+    where s.confirmed_group_id=p_group_id and s.user_id=v_uid
+      and (
+        s.contract_size <> p_product_contract_size
+        or (s.instrument_class is not null and s.instrument_class <> 'unknown'
+            and (p_product_class is null or p_product_class = 'unknown' or p_product_class <> s.instrument_class))
+      );
   if v_bad > 0 then
-    raise exception 'mapping tripwire: % incompatible leg(s) (contract_size/class) — refusing to materialize', v_bad;
+    raise exception 'mapping tripwire: % incompatible leg(s) (contract_size/class) — refusing (e.g. DELTAU26 csize 1000 vs DELTA-stock csize 1)', v_bad;
   end if;
 
+  -- flip lifecycle ONLY (no write to trades/products/portfolio/notes). Browser already wrote the THUS draft.
   update public.mt5_import_groups
-     set state='materialized', materialized_trade_id=p_trade_id, materialized_at=now(), updated_at=now()
-   where id = p_group_id and user_id = v_uid;
-
+    set state='materialized', materialized_trade_id=p_trade_id, materialized_product_id=p_product_id,
+        materialized_at=now(), updated_at=now()
+   where id=p_group_id and user_id=v_uid;
   update public.mt5_import_staging
-     set state='materialized', materialized_trade_id=p_trade_id, materialized_at=now(), updated_at=now()
-   where confirmed_group_id = p_group_id and user_id = v_uid;
-  -- NOTE: does NOT write to trades. The browser wrote the THUS draft first (Phase 1, durable commitOpen) and passed p_trade_id.
+    set state='materialized', materialized_trade_id=p_trade_id, materialized_at=now(), updated_at=now()
+   where confirmed_group_id=p_group_id and user_id=v_uid;
 end; $$;
+revoke execute on function public.mt5_mark_materialized(uuid,text,text,numeric,text) from public, anon, authenticated;
+grant  execute on function public.mt5_mark_materialized(uuid,text,text,numeric,text) to authenticated;
+```
+> **contract_size = exact match (rationale):** MT5 `trade_contract_size` is a fixed per-symbol constant (e.g. SSF `DELTAU26` = 1000, index futures, etc.), not a fractional/variable quantity, so exact equality is the correct, safest guard and trivially catches the 1000×/1× class confusion. If a broker is ever observed reporting a variant size for the same instrument, revisit with an explicit tolerance — **do not** loosen pre-emptively.
+
+```sql
+commit;   -- ⬅ END of the single apply transaction. If anything above errored, run `rollback;` and STOP.
 ```
 
-### 7.4 `mt5_resolve_mapping` (optional) — needs_mapping → new with a candidate hint
-```sql
-create or replace function public.mt5_resolve_mapping(p_leg_ids uuid[], p_product_id text)
-returns int language plpgsql security definer set search_path = '' as $$
-declare v_uid uuid := auth.uid(); v_rows int := 0;
-begin
-  if v_uid is null then raise exception 'not authenticated'; end if;
-  update public.mt5_import_staging
-     set product_id_candidate = p_product_id, state = 'new', updated_at = now()
-   where id = any(p_leg_ids) and user_id = v_uid and state = 'needs_mapping';
-  get diagnostics v_rows = row_count;
-  return v_rows;   -- product_id_candidate stays a HINT; the real check is the materialize-time tripwire (7.3)
-end; $$;
-```
-
-### 7.5 RPC grants
-```sql
-revoke all on function public.mt5_confirm_group(uuid[],text,text,text,boolean) from public, anon;
-revoke all on function public.mt5_set_leg_state(uuid[],text)                   from public, anon;
-revoke all on function public.mt5_mark_materialized(uuid,text,text,numeric,text) from public, anon;
-revoke all on function public.mt5_resolve_mapping(uuid[],text)                 from public, anon;
-grant execute on function public.mt5_confirm_group(uuid[],text,text,text,boolean) to authenticated;
-grant execute on function public.mt5_set_leg_state(uuid[],text)                   to authenticated;
-grant execute on function public.mt5_mark_materialized(uuid,text,text,numeric,text) to authenticated;
-grant execute on function public.mt5_resolve_mapping(uuid[],text)                 to authenticated;
-```
+### 7.4 `mt5_resolve_mapping` — **DEFERRED (not in this packet)**
+Removed from Phase 0A to avoid a misleading partial RPC. Mapping authority stays in the **materialize-time tripwire** (§7.3). Re-routing `needs_mapping → new` (and any candidate-hint write) will be designed in a later slice that **re-runs** the compatibility check at write time. Until then, the reader sets `state='needs_mapping'` for unmapped futures and a human resolves mapping out-of-band.
 
 ---
 
-## 8. Post-apply verification queries (run AFTER an approved apply; SELECT-only)
+## 8. Post-apply verification (run AFTER a clean `commit;`; SELECT-only)
 ```sql
--- tables exist
-select tablename from pg_tables where schemaname='public' and tablename like 'mt5_import_%' order by 1;  -- expect 3
-
--- RLS enabled on all three
+-- tables (3) + RLS enabled
+select tablename from pg_tables where schemaname='public' and tablename like 'mt5_import_%' order by 1;     -- expect 3
 select relname, relrowsecurity from pg_class
-where relname in ('mt5_import_staging','mt5_import_groups','mt5_import_cursors');                          -- expect rowsecurity=t
+  where relname in ('mt5_import_staging','mt5_import_groups','mt5_import_cursors');                          -- rowsecurity=t
 
--- policies = exactly the SELECT-own set (no write policies)
+-- policies = exactly SELECT-own (NO write policy)
 select tablename, policyname, cmd, roles from pg_policies
-where schemaname='public' and tablename like 'mt5_import_%' order by 1,2;                                  -- expect only SELECT/authenticated
+  where schemaname='public' and tablename like 'mt5_import_%' order by 1,2;                                  -- only cmd=SELECT, {authenticated}
+select count(*) as write_policies from pg_policies
+  where schemaname='public' and tablename like 'mt5_import_%' and cmd <> 'SELECT';                           -- expect 0
 
--- RPCs present
-select proname, prosecdef from pg_proc p join pg_namespace n on n.oid=p.pronamespace
-where n.nspname='public' and proname like 'mt5_%' order by 1;                                              -- expect 4 RPCs + mt5_set_updated_at, prosecdef=t for RPCs
-
--- grants: no anon; authenticated has SELECT only (no INSERT/UPDATE/DELETE) on staging/groups
+-- table grants: NO write grants to anon/authenticated; NO anon grants at all
 select table_name, grantee, privilege_type from information_schema.role_table_grants
-where table_schema='public' and table_name like 'mt5_import_%' order by 1,2,3;
+  where table_schema='public' and table_name like 'mt5_import_%' order by 1,2,3;
+select count(*) as browser_write_grants from information_schema.role_table_grants
+  where table_schema='public' and table_name like 'mt5_import_%'
+    and grantee in ('anon','authenticated') and privilege_type in ('INSERT','UPDATE','DELETE');             -- expect 0
+select count(*) as anon_grants from information_schema.role_table_grants
+  where table_schema='public' and table_name like 'mt5_import_%' and grantee='anon';                        -- expect 0
 
--- routine grants: execute = authenticated only
+-- RPCs present + SECURITY DEFINER; execute = authenticated only (no PUBLIC/anon)
+select proname, prosecdef from pg_proc p join pg_namespace n on n.oid=p.pronamespace
+  where n.nspname='public' and proname like 'mt5_%' order by 1;                                              -- 3 RPCs (secdef=t) + mt5_set_updated_at
 select routine_name, grantee, privilege_type from information_schema.role_routine_grants
-where routine_schema='public' and routine_name like 'mt5_%' order by 1,2;
+  where routine_schema='public' and routine_name like 'mt5_%' order by 1,2;                                  -- execute → authenticated only
 
--- no existing THUS tables changed (implied by create-only + clean §3 pre-check; spot-check none of these gained mt5 columns)
+-- no existing THUS table gained mt5 columns (create-only proof)
 select table_name from information_schema.columns
-where table_schema='public' and column_name like 'mt5\_%' and table_name in ('trades','products','portfolio_summary','trade_groups');  -- expect 0
+  where table_schema='public' and column_name like 'mt5\_%'
+    and table_name in ('trades','products','portfolio_summary','trade_groups');                              -- expect 0
 ```
 
 ## 9. Two-account RLS spot-check plan (later; checklist — no real run in this slice)
-Using two test auth users A and B and `service_role` to seed (browser can't write):
-- [ ] `service_role` inserts a staging row owned by A → A (authenticated) `select` sees it; B (authenticated) `select` sees **none** of A's rows.
-- [ ] B calls `mt5_confirm_group(A_leg_ids,…)` → ownership check fails inside the RPC (`auth.uid()` ≠ owner) → 0 legs eligible → **exception**, no rows changed.
-- [ ] A calls `mt5_set_leg_state(A_leg_ids,'dismissed')` → succeeds for A's own legs only.
-- [ ] `mt5_mark_materialized` with a leg whose `contract_size=1000` against `p_product_contract_size=1` → **tripwire exception** (the DELTAU26-vs-DELTA-stock guard).
-- [ ] Neither A nor B can `insert/update/delete` staging/groups directly (no policy/grant) → permission denied.
+- [ ] `service_role` seeds a staging row owned by A → A (authenticated) `select` sees it; B sees **none** of A's rows.
+- [ ] B calls `mt5_confirm_group(A_leg_ids,…)` → in-RPC ownership filter yields 0 eligible → **exception**, no change.
+- [ ] A calls `mt5_set_leg_state(A_ungrouped_leg,'dismissed')` → succeeds; A calls it on a **grouped** leg → 0 rows (not dismissible).
+- [ ] `mt5_mark_materialized` on a group whose leg `contract_size=1000` with `p_product_contract_size=1` → **tripwire exception**; with a NULL-csize leg → **null-csize exception**.
+- [ ] Neither A nor B can `insert/update/delete` staging/groups directly (no policy/grant) → permission denied; neither can `select` cursors.
 
-## 10. Rollback plan (newly-created `mt5_import_*` / `mt5_*` objects ONLY — no existing table touched)
+## 10. Rollback (new `mt5_import_*` / `mt5_*` objects ONLY; no existing table touched)
 ```sql
--- functions
-drop function if exists public.mt5_resolve_mapping(uuid[],text);
 drop function if exists public.mt5_mark_materialized(uuid,text,text,numeric,text);
 drop function if exists public.mt5_set_leg_state(uuid[],text);
 drop function if exists public.mt5_confirm_group(uuid[],text,text,text,boolean);
--- tables (indexes/policies/triggers drop with them); staging first (FK → groups)
-drop table if exists public.mt5_import_staging;
+drop table if exists public.mt5_import_staging;   -- indexes/policies/triggers drop with it (FK → groups)
 drop table if exists public.mt5_import_cursors;
 drop table if exists public.mt5_import_groups;
--- shared trigger fn last (after its triggers are gone with the tables)
 drop function if exists public.mt5_set_updated_at();
 ```
-No `trades`/`products`/`portfolio`/`notes`/`trade_groups` object is created, altered, or dropped.
+> `if exists` is acceptable in the **rollback** path (idempotent teardown of partial state); the **apply** path is strictly fail-closed (plain `CREATE`). No `trades`/`products`/`portfolio`/`notes`/`trade_groups` object is created/altered/dropped.
 
-## 11. STOP conditions (must all hold before any apply)
-- No apply without **explicit user GO** + **fresh Codex pass** + **Supabase SQL review**.
-- Conflict pre-check (§3) returns **clean**; **create-only** (no `ALTER`/`DROP` of existing objects).
-- **No browser write grants/policies** on `mt5_import_*`.
-- **No `service_role`** in client/browser/Netlify.
+## 11. STOP conditions
+### 11.1 Apply gating
+- No apply without **explicit user GO** + **fresh Codex pass** + **Supabase SQL review** + **clean §3 pre-check**.
+- Apply runs as **one transaction**; any error → `rollback;` → **STOP**. **No partial apply.**
+- **Create-only**, fail-closed: plain `CREATE` (no `or replace`/`if not exists`); no `ALTER`/`DROP` of existing objects.
+- **No browser write grants/policies** on `mt5_import_*`; **no `service_role`** in client/browser/Netlify.
 - **No writes to `trades`/`products`/`portfolio`/`notes`**; **no materialization** into THUS trades in Phase 0A.
-- **No Product/Symbol/DELTA runtime edits**.
-- **No `DELTAU26` → DELTA-stock silent mapping** (tripwire in `mt5_mark_materialized` must fire).
-- **No base64 screenshots** (URL/path only, Phase 3).
-- **No GUGU boundary violation** (the reader is a separate input-only role).
-- **No hard dependency on `trade_groups`/G2** (preserve `mt5_import_groups.id` for future migration).
+- **No Product/Symbol/DELTA runtime edits**; **no GUGU boundary violation**; **no base64 screenshots**; **no hard dependency on `trade_groups`/G2** (preserve `mt5_import_groups.id`).
+
+### 11.2 Staging-vs-prod apply (reconciled — was a drift vs r3)
+- r3 originally preferred **staging/branch Supabase first**. The project has **no separate staging Supabase**.
+- Therefore: a **create-only apply to prod** is a **user-ratified decision, NOT the default** (precedent: P2-5-A applied new create-only objects to prod after a clean conflict pre-check).
+- With no staging, require **extra caution**: clean §3 pre-check, single-transaction apply, §10 rollback ready before starting, and §8 verification immediately after.
+
+### 11.3 Idempotency STOP / reader invariant
+- The partial-unique indexes protect only rows **with** their key. **`balance` rows with NULL `deal_id`, `open` rows with NULL `position_id`, and `close`/`partial` rows with NULL `deal_id` are NOT dedup-protected and CAN duplicate.**
+- **Reader invariant (STOP):** the reader MUST NOT blind-insert a position/deal row missing its stable key (`open`→`position_id`, `close`/`partial`→`deal_id`). Such rows are either skipped, quarantined (`state='needs_mapping'`/`error_message`), or deduped reader-side (e.g. content hash) — never repeatedly inserted. This is **accepted fail-open** at the DB layer with the dedupe responsibility on the reader.
 
 ## 12. Open questions / deferred decisions
-- **Product-mapping foundation** (class-aware resolver for futures/SSF/stocks) — needed for **Phase 1 materialization**, not for this schema. Deferred.
-- **DELTA-SSF product preset decision** — `DELTAU26` (csize 1000) has no THUS product; until one exists it stays `needs_mapping`. Deferred.
-- **Staging-vs-prod apply** — no separate staging Supabase exists; decide whether to apply create-only to prod (P2-5-A precedent: clean conflict pre-check + create-only) or stand up a branch DB. Review decision.
-- **MT5 probe refresh** — optional; the 0B findings are recorded. If wanted, promote the scratch probe to a tracked read-only `ops/` script.
-- **0C staging writer** (Python reader → staging via service_role) and **0D Inbox UI** (read-only) — after schema is reviewed + applied.
-- **Soft CHECKs vs fail-open** — `kind`/`state`/`position_state`/`instrument_class` are stored without rejecting CHECKs (fail-open). Decide later whether to add *soft* documented CHECKs once the value sets stabilize.
-- **Contract_size tripwire: exact vs tolerance** — packet uses **exact** equality (safest). Confirm no broker reports fractional/variant csize that needs tolerance.
-- **Cursors browser SELECT** — included optionally; drop the policy+grant if no UI reads cursors.
+- **Product-mapping foundation** + **DELTA-SSF preset** — gate **Phase 1 materialization**, not this schema. Deferred.
+- **`mt5_resolve_mapping`** — deferred (§7.4); design a check-on-write version later.
+- **Ungroup / edit-group** — no RPC in v0; grouped legs are immutable except via materialize. Deferred.
+- **Soft CHECK vs fail-open** on `kind`/`state`/`position_state`/`instrument_class` — kept fail-open; revisit soft documented CHECKs once value sets stabilize.
+- **0C staging writer** (service_role) + **0D Inbox UI** (read-only) — after schema reviewed + applied.
+- **MT5 probe refresh** — optional; promote scratch probe to a tracked read-only `ops/` script if wanted.
+- **Cursors browser SELECT** — intentionally **none** in r2 (reader-internal); add a SELECT-own policy + grant later only if a UI needs cursor state.
 
 ---
 
 ## Next step routing
 
 Next step routing: SEND_TO_CHATGPT_REVIEW
-Reason: Phase 0A packet is authored but NOT applied; it needs a fresh Codex pass and a Supabase SQL review before any database execution.
-Next action: Review this packet, then prepare (1) a Codex review prompt and (2) a Supabase SQL review prompt. Apply stays hard-gated behind explicit user GO + clean conflict pre-check.
+Reason: Phase 0A packet r2 addresses the Codex PASS_WITH_CHANGES items but is still NOT applied; it needs a Codex re-review and then a Supabase SQL review before any database execution.
+Next action: Route this revised packet back to Codex re-review; on PASS, prepare the Supabase SQL review prompt. Apply stays hard-gated behind explicit user GO + clean conflict pre-check + single-transaction execution.
