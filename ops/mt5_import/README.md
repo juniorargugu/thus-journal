@@ -90,9 +90,48 @@ masked — **do not paste or share it** unless it has been reviewed/redacted.
 - Account login is **masked by default**; `--out` JSON also masks it.
 - Never paste full `--show-login` output or raw account dumps into shared transcripts/issues.
 
+## `build_rows.py` — 0C-2 DRY-RUN staging row builder
+
+**Purpose:** read MT5 (read-only) and transform open positions / deals / `symbol_info` into
+dictionaries shaped for `public.mt5_import_staging`, then **print** a redacted dry-run summary and
+optionally write a **redacted JSON** to a git-ignored path. **Builds row dicts in memory only —
+no Supabase, no DB write, no RPC.** Modules: `build_rows.py` + `common.py` (shared helpers) +
+`tz.py` (Bangkok→UTC).
+
+**Identity (CLI, NOT `.env`):** rows need `user_id` + `source_account`, so a live run requires:
+- `--user-id <uuid>` — the THUS auth uid (UUID-validated); stamps `staging.user_id` for browser RLS.
+- `--source-account <text>` — the MT5 login / source_account (non-empty). The run **warns** if it
+  doesn't match the terminal login (the writer slice will hard-STOP on a mismatch).
+
+```sh
+# pure-logic self-tests (no MT5, no DB): tz conversion, UUID, --out guard, DELTAU26 guard, skips
+python ops/mt5_import/build_rows.py --self-test
+python ops/mt5_import/tz.py            # tz self-check only
+
+# live dry-run (prints staging rows summary; no file written)
+python ops/mt5_import/build_rows.py --days 7 --user-id <uuid> --source-account <mt5_login>
+
+# force symbol_info + write a REDACTED JSON to the ignored out/ dir
+python ops/mt5_import/build_rows.py --days 7 --user-id <uuid> --source-account <mt5_login> \
+    --symbols DELTAU26 GOU26 S50U26 --out ops/mt5_import/out/rows_smoke.json
+```
+
+**Mapping rules (this slice):**
+- **Open rows** (`kind='open'`) come only from `positions_get`; **require `position_id`** (else skip+count).
+- **Deal rows** require `deal_id` (else skip+count): `BALANCE`→`balance` (position_id may be 0);
+  trade `OUT`/`OUT_BY`→`close` (**partial-vs-full deferred** — `deal_id` keys both identically);
+  trade `IN`/`INOUT` and non-trade types→`unknown` (opens are sourced from `positions_get`, not deals).
+- **True-UTC conversion** in `tz.py`: stores `wall − 7h` UTC and preserves `mt5_time_raw_epoch` +
+  `mt5_time_msc` + `raw`.
+- **`state`**: `needs_mapping` for futures/SSF/ambiguous (no THUS product yet), else `new`.
+- **`product_id_candidate` is always `null`** in this slice (no product resolution).
+- **DELTAU26 guard:** must appear as `contract_size 1000`, class `ssf`, `state='needs_mapping'`,
+  `product_id_candidate=None` — it must **never** collapse onto the DELTA stock preset (csize 1).
+
+`--out` uses the same safe-path guard as `probe.py` (git-ignored / `ops/mt5_import/out/` only;
+trackable paths refused). Generated JSON is **local and account-bearing** — do not share unredacted.
+
 ## Next gates (NOT in this slice)
-- **0C-2** — dry-run staging **row builder**: MT5 reads → exact `mt5_import_staging` row dicts
-  (true-UTC conversion, idempotency keys, normalization), **printed only / no DB write**.
 - **0C-3** — gated **writer**: idempotent upserts to `mt5_import_staging` + `mt5_import_cursors`
   **only**, behind `MT5_WRITE=1`, with a field-level update allowlist. Requires the `.env`/service_role
   secrets slice (protected by the 0C-0 `.gitignore` rules).
