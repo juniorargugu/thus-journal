@@ -1,12 +1,21 @@
-# MT5 Auto Draft Import — Phase 0A SQL/RPC Implementation Packet (r2, post-Codex)
+# MT5 Auto Draft Import — Phase 0A SQL/RPC Implementation Packet (r3, post-SQL-review polish)
 
 > ## ⛔ `GATED — REVIEW ONLY — NOT APPLIED`
 > - **Target baseline:** `09842d7` (prod). **Nothing in this file has been run.** No Supabase write, no migration, no apply.
-> - **Apply requires ALL of:** explicit user GO **+** a fresh **Codex** pass **+** a **Supabase SQL review** **+** a clean conflict pre-check (§3) **+** execution inside **one transaction** (§3.5).
+> - **Review status:** Codex re-review = **PASS**; Supabase SQL review = **PASS / READY_FOR_CONFLICT_PRECHECK**. r3 folds in that review's optional (non-blocking) polish; the packet is **still NOT APPLIED**.
+> - **Apply still requires ALL of:** explicit user GO **+** a clean conflict pre-check (§3) **+** execution inside **one transaction** (§3.5). (Codex + Supabase SQL review are now satisfied.)
 > - This artifact translates the approved [`phase_0a_r3_design_plan.md`](phase_0a_r3_design_plan.md) into concrete, **fail-closed, create-only** SQL. No `ALTER`/`DROP` of any existing object.
 > - Project: `wtfwynvvkiuottjnmozu`. There is **no separate staging Supabase** — the "staging vs prod create-only" decision is user-ratified, not default (§11.2, §12).
 
-**Artifact date:** 2026-06-25 · **Revision:** r2 (addresses Codex `PASS_WITH_CHANGES`) · **Type:** SQL/RPC packet (docs-only, gated)
+**Artifact date:** 2026-06-25 · **Revision:** r3 (folds in Supabase SQL-review optional polish; Codex PASS + SQL-review PASS) · **Type:** SQL/RPC packet (docs-only, gated)
+
+### r3 change log (Supabase SQL-review optional polish — non-blocking, safety unchanged)
+1. **Exact-name conflict pre-checks (§3):** added explicit `pg_class.relname` (index) and `pg_trigger.tgname` (trigger) existence checks for the packet's 10 index names + 3 trigger names, so a same-name object on *any* table is caught before `begin;`. Pre-check only; fail-closed `CREATE` unchanged.
+2. **Explicit `service_role` grants (§6) + verification (§8):** the reader (0C) no longer relies on Supabase default privileges — `service_role` is explicitly granted SELECT/INSERT/UPDATE on staging+cursors and SELECT on groups (no DELETE; groups stay write-via-RPC). Browser roles unchanged (anon=none, authenticated=SELECT-only on staging/groups).
+3. **Split routine-grant verification (§8):** separate assertions — the 3 RPCs have `authenticated` EXECUTE; the helper `mt5_set_updated_at()` has ZERO browser execute.
+4. **`trim` on `p_trade_id` (§7.3):** `length(trim(p_trade_id))=0` rejects all-whitespace trade ids.
+
+> r3 changes nothing about apply safety (no DDL/RLS/RPC-logic change beyond the trim guard and additive service_role grants); it is read-side/verification/ergonomics polish. Data-quality nits (`allow_mixed` aggregate pick, `weighted_avg_price` null-price handling) remain **deferred reader invariants**, intentionally not patched here.
 
 ### r2 change log (Codex items addressed)
 1. **Fail-closed:** removed `create or replace` / `if not exists` / `drop … if exists`; plain `CREATE` only (fails if anything pre-exists).
@@ -32,7 +41,7 @@ The SQL stores UTC-intended `timestamptz` columns and does **no** timezone math.
 - `service_role` is **local/admin only** — never shipped to browser/client/Netlify.
 
 ## 1. Status
-- Lineage: 0A → 0B probe → 0A-r2 → Codex `PASS_WITH_CHANGES` → 0A-r3 → ChatGPT pass → **packet** → Codex `PASS_WITH_CHANGES` → **this packet r2**.
+- Lineage: 0A → 0B probe → 0A-r2 → Codex `PASS_WITH_CHANGES` → 0A-r3 → ChatGPT pass → **packet** → Codex `PASS_WITH_CHANGES` → packet r2 → Codex re-review `PASS` → Supabase SQL review `PASS / READY_FOR_CONFLICT_PRECHECK` → **this packet r3** (optional polish folded in).
 - Parking blocker (P2 full-array cleanup) is **cleared** (P2-4C, prod `09842d7`). Remaining design blockers (product-mapping foundation, DELTA-SSF decision) gate **materialization (Phase 1)**, not this schema gate.
 - **Not applied. Not a runnable migration in `migrations/`.** Lives under `artifacts/` for review.
 
@@ -51,6 +60,19 @@ select policyname, tablename from pg_policies where schemaname='public' and tabl
 select indexname from pg_indexes where schemaname='public' and tablename like 'mt5_import_%';           -- expect 0
 select tgname from pg_trigger t join pg_class c on c.oid=t.tgrelid
   where c.relname like 'mt5_import_%' and not t.tgisinternal;                                           -- expect 0
+
+-- exact-name guards (r3): index names are schema-global, so a same-name index on ANY existing table
+-- (not just mt5_import_*) would collide. Trigger names are checked by exact name across the schema too.
+select c.relname from pg_class c join pg_namespace n on n.oid=c.relnamespace
+  where n.nspname='public' and c.relkind='i'
+    and c.relname in ('mt5_groups_user_acct','mt5_groups_user_state',
+                      'mt5_staging_open_uniq','mt5_staging_deal_uniq','mt5_staging_balance_uniq',
+                      'mt5_staging_user_acct','mt5_staging_user_state','mt5_staging_group',
+                      'mt5_staging_open_live','mt5_staging_created');                                   -- expect 0
+select t.tgname from pg_trigger t join pg_class c on c.oid=t.tgrelid
+  join pg_namespace n on n.oid=c.relnamespace
+  where n.nspname='public' and not t.tgisinternal
+    and t.tgname in ('mt5_groups_updated_at','mt5_staging_updated_at','mt5_cursors_updated_at');        -- expect 0
 ```
 **STOP if any returns rows.** The packet is fail-closed: with no `if not exists`/`or replace`, a plain `CREATE` against a pre-existing object **errors**, which (inside the transaction) forces a full rollback.
 
@@ -215,9 +237,16 @@ revoke all on public.mt5_import_groups  from public, anon, authenticated;
 revoke all on public.mt5_import_cursors from public, anon, authenticated;
 grant select on public.mt5_import_staging to authenticated;
 grant select on public.mt5_import_groups  to authenticated;
--- mt5_import_cursors: NO authenticated/anon grant (reader-only). service_role bypasses RLS, needs no grant here.
+-- mt5_import_cursors: NO authenticated/anon grant (reader-internal). service_role bypasses RLS.
+
+-- service_role (server-side reader / Phase 0C) — EXPLICIT grants (r3): do NOT rely on Supabase default
+-- privileges for the reader's writes. The reader writes ONLY staging + cursors; groups are written by the
+-- DEFINER RPC (mt5_confirm_group), so groups stays read-only here. No DELETE anywhere (append/RPC lifecycle).
+grant select, insert, update on public.mt5_import_staging to service_role;
+grant select, insert, update on public.mt5_import_cursors to service_role;
+grant select                 on public.mt5_import_groups  to service_role;
 ```
-Result: `anon` = nothing; `authenticated` = SELECT-only (RLS-scoped) on staging/groups, **no** INSERT/UPDATE/DELETE, **no** cursor access. (Transaction-level revoke is sufficient — the whole apply is atomic, so no committed state ever exposes a write grant; `ALTER DEFAULT PRIVILEGES` is not used as it targets *future* objects, not these.)
+Result: `anon` = nothing; `authenticated` = SELECT-only (RLS-scoped) on staging/groups, **no** INSERT/UPDATE/DELETE, **no** cursor access. `service_role` = explicit SELECT/INSERT/UPDATE on staging+cursors and SELECT on groups (server-side reader only — never shipped to browser; **no DELETE**, **no group writes**). (Transaction-level revoke is sufficient — the whole apply is atomic, so no committed state ever exposes a browser write grant; `ALTER DEFAULT PRIVILEGES` is not used as it targets *future* objects, not these. The explicit `service_role` grants replace the prior implicit reliance on Supabase default privileges.)
 
 ---
 
@@ -348,7 +377,7 @@ language plpgsql security definer set search_path = '' as $$
 declare v_uid uuid := auth.uid(); v_grp int; v_total int; v_grouped int; v_foreign int; v_nullcs int; v_bad int;
 begin
   if v_uid is null then raise exception 'not authenticated'; end if;
-  if p_trade_id is null or length(p_trade_id)=0 then
+  if p_trade_id is null or length(trim(p_trade_id))=0 then
     raise exception 'missing trade_id — materialize the THUS draft via the durable single-row path FIRST';
   end if;
   if p_product_contract_size is null then raise exception 'missing product_contract_size'; end if;
@@ -439,11 +468,30 @@ select count(*) as browser_write_grants from information_schema.role_table_grant
 select count(*) as anon_grants from information_schema.role_table_grants
   where table_schema='public' and table_name like 'mt5_import_%' and grantee='anon';                        -- expect 0
 
--- RPCs present + SECURITY DEFINER; execute = authenticated only (no PUBLIC/anon)
+-- service_role write capability (r3): explicit grant must have landed (reader/0C depends on it)
+select count(*) as svc_staging_write from information_schema.role_table_grants
+  where table_schema='public' and table_name='mt5_import_staging'
+    and grantee='service_role' and privilege_type in ('INSERT','UPDATE');                                   -- expect 2
+select count(*) as svc_cursors_write from information_schema.role_table_grants
+  where table_schema='public' and table_name='mt5_import_cursors'
+    and grantee='service_role' and privilege_type in ('INSERT','UPDATE');                                   -- expect 2
+
+-- RPCs present + SECURITY DEFINER
 select proname, prosecdef from pg_proc p join pg_namespace n on n.oid=p.pronamespace
   where n.nspname='public' and proname like 'mt5_%' order by 1;                                              -- 3 RPCs (secdef=t) + mt5_set_updated_at
+-- (a) the 3 RPCs: EXECUTE granted to authenticated (and only authenticated — no anon/PUBLIC)
 select routine_name, grantee, privilege_type from information_schema.role_routine_grants
-  where routine_schema='public' and routine_name like 'mt5_%' order by 1,2;                                  -- execute → authenticated only
+  where routine_schema='public'
+    and routine_name in ('mt5_confirm_group','mt5_set_leg_state','mt5_mark_materialized')
+  order by 1,2;                                                                                              -- each → grantee=authenticated
+select count(*) as rpc_authenticated_exec from information_schema.role_routine_grants
+  where routine_schema='public'
+    and routine_name in ('mt5_confirm_group','mt5_set_leg_state','mt5_mark_materialized')
+    and grantee='authenticated' and privilege_type='EXECUTE';                                               -- expect 3
+-- (b) helper trigger fn mt5_set_updated_at(): ZERO browser execute (no anon/authenticated/PUBLIC)
+select count(*) as helper_browser_exec from information_schema.role_routine_grants
+  where routine_schema='public' and routine_name='mt5_set_updated_at'
+    and grantee in ('anon','authenticated','PUBLIC');                                                       -- expect 0
 
 -- no existing THUS table gained mt5 columns (create-only proof)
 select table_name from information_schema.columns
@@ -472,7 +520,7 @@ drop function if exists public.mt5_set_updated_at();
 
 ## 11. STOP conditions
 ### 11.1 Apply gating
-- No apply without **explicit user GO** + **fresh Codex pass** + **Supabase SQL review** + **clean §3 pre-check**.
+- No apply without **explicit user GO** + **fresh Codex pass** + **Supabase SQL review** + **clean §3 pre-check**. *(As of r3: Codex re-review = PASS and Supabase SQL review = PASS / READY_FOR_CONFLICT_PRECHECK are satisfied; the remaining gates are the explicit user GO and a clean §3 pre-check at apply time.)*
 - Apply runs as **one transaction**; any error → `rollback;` → **STOP**. **No partial apply.**
 - **Create-only**, fail-closed: plain `CREATE` (no `or replace`/`if not exists`); no `ALTER`/`DROP` of existing objects.
 - **No browser write grants/policies** on `mt5_import_*`; **no `service_role`** in client/browser/Netlify.
@@ -502,5 +550,5 @@ drop function if exists public.mt5_set_updated_at();
 ## Next step routing
 
 Next step routing: SEND_TO_CHATGPT_REVIEW
-Reason: Phase 0A packet r2 addresses the Codex PASS_WITH_CHANGES items but is still NOT applied; it needs a Codex re-review and then a Supabase SQL review before any database execution.
-Next action: Route this revised packet back to Codex re-review; on PASS, prepare the Supabase SQL review prompt. Apply stays hard-gated behind explicit user GO + clean conflict pre-check + single-transaction execution.
+Reason: Phase 0A packet r3 folds in the Supabase SQL-review optional polish (Codex re-review = PASS; Supabase SQL review = PASS / READY_FOR_CONFLICT_PRECHECK). It is still NOT applied.
+Next action: Prepare a user-run §3 conflict pre-check prompt. Apply remains separate and hard-gated behind an explicit user GO after the pre-check returns clean, executed as a single transaction.
