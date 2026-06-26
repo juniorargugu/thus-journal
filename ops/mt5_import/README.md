@@ -141,12 +141,47 @@ python ops/mt5_import/build_rows.py --days 7 --user-id <uuid> --source-account <
 trackable paths refused). The dump is a **secret-free, login-masked, account-bearing local JSON** —
 do not paste/share it unredacted.
 
+## `writer.py` + `staging_db.py` — 0C-3a OPEN-ONLY staging writer
+
+**Purpose:** the first service_role write. Writes eligible **`kind='open'` rows only**, to
+**`mt5_import_staging` only**. Design: [`../../artifacts/mt5_auto_draft_import/phase_0c3_writer_design.md`](../../artifacts/mt5_auto_draft_import/phase_0c3_writer_design.md).
+
+- **Dry-run by default** — constructs **no** Supabase client, reads **no** `SUPABASE_*`/service_role
+  env, writes nothing; just prints the write-plan (candidate opens + out-of-scope ignored counts).
+- **Three-key write gate** — a real write needs **all three**: `--write` **+** `--confirm WRITE_STAGING`
+  **+** env `MT5_WRITE=1`. Then also: local `SUPABASE_URL`+`SUPABASE_SERVICE_KEY` (never logged),
+  `--user-id`+`--source-account`, terminal login **==** `--source-account` (hard-STOP on mismatch),
+  and planned writes ≤ `--max-write-count` (default **3**).
+- **`staging_db.py`** is structurally allow-listed to `{mt5_import_staging}` — no generic writer, no
+  RPC, no DELETE, **no upsert/on_conflict** (Phase 0A partial indexes). Per open: **SELECT** exact key
+  → absent **INSERT** (sanitized) / present **PATCH** allow-listed fields / duplicate-race **re-SELECT**.
+- **PATCH allowlist:** `last_seen_open_at`, `price`, `volume`, `mt5_time`, `mt5_time_msc`,
+  `mt5_time_raw_epoch` (no `raw` in 0C-3a). **Never** `state`/`confirmed_group_id`/`dismissed_at`/
+  `materialized_*`/`first_seen_open_at`/instrument fields/`kind`. PATCH is filtered to
+  `state in (needs_mapping,new,group_suggested)` + `confirmed_group_id is null`; existing
+  `materialized`/`dismissed`/`grouped` rows are **skipped + reported**.
+- **Out of 0C-3a scope:** deals/`close`/`partial`/`balance`/`unknown` (reported as ignored, never
+  written), `mt5_import_cursors` (cursor deferred), lifecycle reconcile, `mt5_import_groups`, RPCs,
+  products/trades, Storage, GUGU, app deploy.
+
+```sh
+# pure-logic self-tests (no MT5, no DB): gate, sanitize, patch allowlist, skip-states
+python ops/mt5_import/writer.py --self-test
+
+# DRY-RUN (no Supabase touched): prints the write-plan
+python ops/mt5_import/writer.py --days 7 --user-id <uuid> --source-account <mt5_login> \
+    --symbols DELTAU26 GOU26 S50U26
+
+# ARMED (writes 1–3 open rows). Placeholders only — never commit a real key.
+#   set local env: SUPABASE_URL=..., SUPABASE_SERVICE_KEY=<service_role>, MT5_WRITE=1
+python ops/mt5_import/writer.py --days 7 --user-id <uuid> --source-account <mt5_login> \
+    --write --confirm WRITE_STAGING --max-write-count 3 --position-id <one_open_position_id>
+```
+`--position-id` targets a single open (handy for the first smoke when live opens > 3); if not found
+among eligible opens it STOPs. **Writer logs can be account-bearing — do not paste/share them.**
+
 ## Next gates (NOT in this slice)
-- **0C-3** — gated **writer**: idempotent upserts to `mt5_import_staging` + `mt5_import_cursors`
-  **only**, behind `MT5_WRITE=1`. The writer **must**:
-  - **hard-STOP** if `--source-account` ≠ the terminal login (cross-account guard; 0C-2 only WARNs);
-  - use an **explicit field-level update allowlist** for existing open rows (`position_state`,
-    `last_seen_open_at`, `price`, `volume`, `updated_at`) — **never** broad-upsert/replace an open row
-    (never touch `state`/`confirmed_group_id`/`dismissed_at`/`materialized_*`);
-  - **skip `writer_eligible=false` (unknown) rows** and drop the `writer_*` meta keys.
-  Requires the `.env`/service_role secrets slice (protected by the 0C-0 `.gitignore` rules).
+- **0C-3b** — deal writer (`close`/`partial`, insert-once by `deal_id`).
+- **0C-3c** — balance rows + cursor (`mt5_import_cursors`); cursor advances only after every covered
+  write is inserted/confirmed-duplicate.
+- **0C-3d** — open-lifecycle reconcile (`position_state` `closed`/`gone`), with a suspicious-drop guard.
