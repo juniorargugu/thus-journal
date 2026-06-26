@@ -23,3 +23,7 @@ ops/mt5_import/out/
 ops/mt5_import/*.json
 artifacts/mt5_auto_draft_import/0c_local_*.json
 artifacts/mt5_auto_draft_import/0c_dryrun_*.json
+
+# --- Python cache ---
+__pycache__/
+*.py[cod]

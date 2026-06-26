@@ -123,15 +123,30 @@ python ops/mt5_import/build_rows.py --days 7 --user-id <uuid> --source-account <
   trade `IN`/`INOUT` and non-trade types→`unknown` (opens are sourced from `positions_get`, not deals).
 - **True-UTC conversion** in `tz.py`: stores `wall − 7h` UTC and preserves `mt5_time_raw_epoch` +
   `mt5_time_msc` + `raw`.
-- **`state`**: `needs_mapping` for futures/SSF/ambiguous (no THUS product yet), else `new`.
+- **`state` — 0C-2 resolves NO products.** `state='new'` is **reserved** for rows with a reviewed,
+  non-null product resolution; since `product_id_candidate` is always `null` here, **every row is
+  `needs_mapping`** (DELTA *stock* included — not just futures/SSF). `state='new'` only appears once a
+  future reviewed resolver supplies a safe candidate.
 - **`product_id_candidate` is always `null`** in this slice (no product resolution).
+- **Writer eligibility (dry-run meta, NOT staging columns):** each row carries `writer_eligible` +
+  `writer_skip_reason`. Phase 0A unique indexes protect `open`(position_id), `close`/`partial`(deal_id),
+  `balance`(deal_id) — but **not** `kind='unknown'`. So **`unknown` rows are dry-run inspection ONLY**
+  (`writer_eligible=false`, reason `kind_unknown_not_idempotent_under_phase_0a`); a **0C-3 writer MUST
+  skip them** unless a reviewed idempotency strategy / schema patch exists, and MUST drop the
+  `writer_*` meta keys before any insert.
 - **DELTAU26 guard:** must appear as `contract_size 1000`, class `ssf`, `state='needs_mapping'`,
   `product_id_candidate=None` — it must **never** collapse onto the DELTA stock preset (csize 1).
 
 `--out` uses the same safe-path guard as `probe.py` (git-ignored / `ops/mt5_import/out/` only;
-trackable paths refused). Generated JSON is **local and account-bearing** — do not share unredacted.
+trackable paths refused). The dump is a **secret-free, login-masked, account-bearing local JSON** —
+do not paste/share it unredacted.
 
 ## Next gates (NOT in this slice)
 - **0C-3** — gated **writer**: idempotent upserts to `mt5_import_staging` + `mt5_import_cursors`
-  **only**, behind `MT5_WRITE=1`, with a field-level update allowlist. Requires the `.env`/service_role
-  secrets slice (protected by the 0C-0 `.gitignore` rules).
+  **only**, behind `MT5_WRITE=1`. The writer **must**:
+  - **hard-STOP** if `--source-account` ≠ the terminal login (cross-account guard; 0C-2 only WARNs);
+  - use an **explicit field-level update allowlist** for existing open rows (`position_state`,
+    `last_seen_open_at`, `price`, `volume`, `updated_at`) — **never** broad-upsert/replace an open row
+    (never touch `state`/`confirmed_group_id`/`dismissed_at`/`materialized_*`);
+  - **skip `writer_eligible=false` (unknown) rows** and drop the `writer_*` meta keys.
+  Requires the `.env`/service_role secrets slice (protected by the 0C-0 `.gitignore` rules).

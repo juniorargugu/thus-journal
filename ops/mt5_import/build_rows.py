@@ -33,16 +33,30 @@ import tz
 _FORBIDDEN_ENV = ("SUPABASE_SERVICE_KEY", "SUPABASE_URL")
 
 MAX_REASONABLE_DAYS = 400
-NEEDS_MAPPING_CLASSES = ("ssf", "futures", "unknown")  # no THUS product exists for these yet
+UNKNOWN_WRITER_SKIP_REASON = "kind_unknown_not_idempotent_under_phase_0a"
+
+# Dry-run-only meta keys attached to each row (NOT staging columns). A 0C-3 writer MUST drop these
+# before insert AND must skip any row whose `writer_eligible` is False.
+ROW_META_KEYS = ("writer_eligible", "writer_skip_reason")
 
 
 # ---------------------------------------------------------------------------------------------
 # Pure mapping helpers (no MT5, no I/O) — these are what `--self-test` exercises.
 # ---------------------------------------------------------------------------------------------
-def initial_state(instrument_class: str) -> str:
-    """Unmapped futures/SSF/ambiguous -> 'needs_mapping' (gated out of grouping until a human maps);
-    mapped/common instruments -> 'new'. No THUS products are resolved in this slice."""
-    return "needs_mapping" if (instrument_class or "unknown") in NEEDS_MAPPING_CLASSES else "new"
+def initial_state(product_id_candidate) -> str:
+    """`state='new'` is RESERVED for rows with a safe, reviewed product resolution. 0C-2 resolves NO
+    products, so `product_id_candidate` is always None here -> every row is 'needs_mapping'. Only a
+    non-null candidate (from a future reviewed resolver) may yield 'new'."""
+    return "new" if product_id_candidate is not None else "needs_mapping"
+
+
+def writer_eligibility(kind: str):
+    """(eligible, skip_reason). Phase 0A unique indexes protect open(position_id),
+    close/partial(deal_id), balance(deal_id) — but NOT kind='unknown'. So unknown rows are
+    dry-run inspection ONLY; a 0C-3 writer must skip them (inserting would duplicate on rerun)."""
+    if kind == "unknown":
+        return False, UNKNOWN_WRITER_SKIP_REASON
+    return True, None
 
 
 def _side(type_code) -> str | None:
@@ -100,9 +114,12 @@ def map_open_position(p: dict, user_id: str, source_account: str, now_iso: str, 
         "position_state": "open",
         "first_seen_open_at": now_iso,
         "last_seen_open_at": now_iso,
-        "state": initial_state(icls),
+        "state": initial_state(None),   # no product resolution in this slice -> needs_mapping
         "raw": p,
     }
+    eligible, skip_reason = writer_eligibility("open")
+    row["writer_eligible"] = eligible          # dry-run meta (not a staging column)
+    row["writer_skip_reason"] = skip_reason
     return row, None
 
 
@@ -145,9 +162,12 @@ def map_deal(d: dict, user_id: str, source_account: str, symbols_meta: dict):
         "swap": d.get("swap"),
         "fee": d.get("fee"),
         "broker_profit": d.get("profit"),
-        "state": initial_state(icls),
+        "state": initial_state(None),   # no product resolution in this slice -> needs_mapping
         "raw": d,
     }
+    eligible, skip_reason = writer_eligibility(kind)
+    row["writer_eligible"] = eligible          # dry-run meta (not a staging column)
+    row["writer_skip_reason"] = skip_reason
     return row, None
 
 
@@ -164,7 +184,7 @@ def delta_guard(symbols_meta: dict, rows: list):
         state_ok = all(r.get("state") == "needs_mapping" for r in drows)
         no_hint = all(r.get("product_id_candidate") is None for r in drows)
     else:
-        state_ok = initial_state(meta.get("instrument_class")) == "needs_mapping"
+        state_ok = initial_state(None) == "needs_mapping"
         no_hint = True
     return {
         "observed": True,
@@ -330,10 +350,12 @@ def main(argv):
                 os.makedirs(parent, exist_ok=True)
             with open(args.out, "w", encoding="utf-8") as f:
                 json.dump(report, f, indent=2, default=str)
-            print(f"\nWrote redacted JSON -> {args.out}")
-            print("  (login masked; user_id/source_account as provided; no secrets, no env, no service_role.)")
+            print(f"\nWrote secret-free, login-masked, account-bearing local JSON -> {args.out}")
+            print("  (login masked; user_id/source_account as provided; no secrets/env/service_role. "
+                  "Account-bearing: do NOT paste/share unredacted.)")
         else:
-            print("\n(No file written. Pass --out <git-ignored path> to save a redacted JSON.)")
+            print("\n(No file written. Pass --out <git-ignored path> to save a "
+                  "secret-free, login-masked, account-bearing local JSON.)")
 
         print("\nDONE. DRY-RUN only - built row dicts in memory; nothing written to MT5 or any database.")
     finally:
@@ -341,10 +363,15 @@ def main(argv):
     return 0
 
 
-def _build_report(args, user_id, source_account, from_dt, to_dt, rows, skipped, symbols_meta, acct):
-    kind_counts = {}
+def _count_by(rows, key):
+    out = {}
     for r in rows:
-        kind_counts[r["kind"]] = kind_counts.get(r["kind"], 0) + 1
+        out[r.get(key)] = out.get(r.get(key), 0) + 1
+    return out
+
+
+def _build_report(args, user_id, source_account, from_dt, to_dt, rows, skipped, symbols_meta, acct):
+    kind_counts = _count_by(rows, "kind")
     return {
         "metadata": {
             "slice": "0C-2 dry-run staging row builder",
@@ -361,9 +388,12 @@ def _build_report(args, user_id, source_account, from_dt, to_dt, rows, skipped, 
             "open_rows": kind_counts.get("open", 0),
             "deal_rows_by_kind": {k: v for k, v in kind_counts.items() if k != "open"},
             "rows_total": len(rows),
+            "writer_eligible_rows": sum(1 for r in rows if r.get("writer_eligible")),
+            "writer_ineligible_unknown": sum(1 for r in rows if r.get("kind") == "unknown"),
             "skipped_total": len(skipped),
             "missing_position_key": sum(1 for s in skipped if s.get("kind") == "open"),
             "missing_deal_key": sum(1 for s in skipped if s.get("kind") == "deal"),
+            "states": _count_by(rows, "state"),
             "symbols": sorted(symbols_meta.keys()),
             "contract_sizes": {s: m.get("contract_size") for s, m in sorted(symbols_meta.items())},
         },
@@ -394,6 +424,9 @@ def _print_summary(report, rows, symbols_meta):
     print(f"open rows         : {s['open_rows']}")
     print(f"deal rows by kind : {s['deal_rows_by_kind']}")
     print(f"rows total        : {s['rows_total']}")
+    print(f"writer-eligible   : {s['writer_eligible_rows']}  "
+          f"(writer-INELIGIBLE unknown={s['writer_ineligible_unknown']} -> 0C-3 must skip)")
+    print(f"states            : {s['states']}")
     print(f"skipped (no key)  : {s['skipped_total']} "
           f"(open missing position_id={s['missing_position_key']}, deal missing deal_id={s['missing_deal_key']})")
     for sk in report["skipped"][:10]:
@@ -457,17 +490,34 @@ def self_test():
             fails.append(f"DELTAU26 state should be 'needs_mapping', got {row['state']!r}")
         if row["product_id_candidate"] is not None:
             fails.append("DELTAU26 product_id_candidate must be None (no stock DELTA hint)")
+        if row.get("writer_eligible") is not True:
+            fails.append("DELTAU26 open row should be writer_eligible")
     g = delta_guard(symbols_meta, [row] if row else [])
     if not g.get("passed"):
         fails.append(f"delta_guard did not pass: {g}")
 
-    # A DELTA stock row must be 'new' (mapped/common path), proving the SSF/stock split.
+    # state rule: 'new' ONLY with a non-null product candidate; None -> needs_mapping (no resolver).
+    if initial_state(None) != "needs_mapping":
+        fails.append("initial_state(None) should be 'needs_mapping'")
+    if initial_state("some-product-id") != "new":
+        fails.append("initial_state(<candidate>) should be 'new'")
+
+    # A DELTA STOCK row also has product_id_candidate=None in 0C-2 -> must be 'needs_mapping' (NOT 'new').
     stock = {"symbol": "DELTA", "identifier": 1000, "ticket": 1000, "type": 0,
              "volume": 100.0, "price_open": 70.0, "time": 1782420725, "time_msc": 1782420725000}
     srow, _ = map_open_position(stock, "123e4567-e89b-12d3-a456-426614174000", "3000020",
                                 "2026-06-25T00:00:00Z", symbols_meta)
-    if srow and srow["state"] != "new":
-        fails.append(f"DELTA stock state should be 'new', got {srow['state']!r}")
+    if srow and srow["state"] != "needs_mapping":
+        fails.append(f"DELTA stock state should be 'needs_mapping' (no product candidate), got {srow['state']!r}")
+
+    # writer eligibility: open/close/balance eligible; unknown NOT eligible.
+    if writer_eligibility("open") != (True, None):
+        fails.append("open should be writer-eligible")
+    if writer_eligibility("close") != (True, None) or writer_eligibility("balance") != (True, None):
+        fails.append("close/balance should be writer-eligible")
+    elig, reason = writer_eligibility("unknown")
+    if elig is not False or reason != UNKNOWN_WRITER_SKIP_REASON:
+        fails.append(f"unknown should be writer-INELIGIBLE with reason, got {(elig, reason)!r}")
 
     # missing-key skips
     _, sk_open = map_open_position({"symbol": "GOU26", "identifier": 0, "ticket": 0}, "u", "a", "t", {})
@@ -485,11 +535,21 @@ def self_test():
     if classify_deal_kind(0, 0) != "unknown":
         fails.append("IN trade deal not classified as unknown")
 
-    # balance deal keyed by deal_id with position_id 0 must still build
+    # balance deal keyed by deal_id with position_id 0 must still build (and be writer-eligible)
     brow, bskip = map_deal({"symbol": None, "ticket": 555, "type": 2, "entry": 0,
                             "position_id": 0, "profit": -0.57, "time": 1782420725}, "u", "a", {})
     if bskip or not brow or brow["kind"] != "balance" or brow["deal_id"] != 555:
         fails.append("balance deal (position_id=0, deal_id present) did not build correctly")
+    elif brow.get("writer_eligible") is not True:
+        fails.append("balance deal should be writer-eligible")
+
+    # an IN trade deal builds a kind='unknown' row that is writer-INELIGIBLE (not idempotent in 0A)
+    urow, uskip = map_deal({"symbol": "GOU26", "ticket": 777, "type": 0, "entry": 0,
+                            "position_id": 123, "price": 4200.0, "time": 1782420725}, "u", "a", {})
+    if uskip or not urow or urow["kind"] != "unknown":
+        fails.append("IN trade deal did not build as kind='unknown'")
+    elif urow.get("writer_eligible") is not False or urow.get("writer_skip_reason") != UNKNOWN_WRITER_SKIP_REASON:
+        fails.append("unknown deal row should be writer-INELIGIBLE with skip reason")
 
     print("build_rows self-test:", "PASS" if not fails else "FAIL")
     for x in fails:
