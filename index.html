@@ -6317,7 +6317,20 @@ function _mt5TimeKey(v){if(!v)return -Infinity;const t=Date.parse(v);return isNa
 function _mt5OpenSortKey(r){return Math.max(_mt5TimeKey(r.last_seen_open_at),_mt5TimeKey(r.open_time),_mt5TimeKey(r.mt5_time));}
 function _mt5ClosedSortKey(r){return Math.max(_mt5TimeKey(r.close_time),_mt5TimeKey(r.mt5_time));}
 
-function Mt5InboxRow({r,openIds}){
+// Local-only triage (0D-2): dismissed row keys live in localStorage. No backend write, no RPC.
+const MT5_DISMISSED_KEY="tj_mt5_inbox_dismissed";
+// Stable local triage key. source_account is used internally only (never rendered).
+function _mt5RowKey(r){
+  const has=v=>v!==null&&v!==undefined&&v!=="";
+  const acct=has(r.source_account)?String(r.source_account):"";
+  const bucket=_mt5Bucket(r);
+  if(bucket==="open"&&has(r.position_id))return`open:${acct}:${r.position_id}`;
+  if(bucket==="closed"&&has(r.deal_id))return`deal:${acct}:${r.deal_id}`;
+  const fb=has(r.id)?r.id:(has(r.ticket)?r.ticket:r.mt5_time);
+  return`row:${acct}:${fb}`;
+}
+
+function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss}){
   const bucket=_mt5Bucket(r);
   const isOpen=bucket==="open", isClosed=bucket==="closed";
   const reseen=!!r.last_seen_open_at||(r.updated_at&&r.created_at&&r.updated_at!==r.created_at);
@@ -6360,6 +6373,7 @@ function Mt5InboxRow({r,openIds}){
         {r.side&&<span className={(String(r.side).toLowerCase()==="buy")?"text-green font-medium":"text-red font-medium"}>{String(r.side).toUpperCase()}</span>}
         <span className="text-muted" title="masked account">{_mt5MaskAccount(r.source_account)}</span>
         {reseen&&<span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow/15 text-yellow border border-yellow/20">re-seen</span>}
+        {onToggleDismiss&&<button onClick={onToggleDismiss} title={dismissed?"Restore to main Inbox on this browser":"Hide from main Inbox on this browser"} className={"ml-auto "+clsBtn("ghost","sm")}>{dismissed?"Undo":"Dismiss"}</button>}
       </div>
       <div className="flex flex-wrap gap-1 mb-2">
         <span className="px-1.5 py-0.5 rounded text-[10px] bg-input text-muted border border-border">Staging only</span>
@@ -6368,6 +6382,7 @@ function Mt5InboxRow({r,openIds}){
         {noProduct&&<span className="px-1.5 py-0.5 rounded text-[10px] bg-input text-muted border border-border">No product mapped</span>}
       </div>
       <div className="text-[11px] text-muted mb-2">{kindCopy}</div>
+      {dismissed&&<div className="text-[11px] text-muted mb-2">Dismissed locally — not changed in MT5 or Supabase</div>}
       {needsMapping&&<div className="text-[11px] text-yellow/90 mb-2">No Journal draft/trade has been created from this row.</div>}
       {relHint&&<div className="text-[11px] text-muted mb-2">{relHint}</div>}
       {deriv&&(
@@ -6422,6 +6437,10 @@ function Mt5InboxPanel({authUid}){
   const[rows,setRows]=useState([]);
   const[err,setErr]=useState(null);
   const[loadedAt,setLoadedAt]=useState(null);
+  const[view,setView]=useState("needs");   // needs | dismissed | all (local-only triage view)
+  const[dismissed,setDismissed]=useState(()=>{const a=ls.get(MT5_DISMISSED_KEY,[]);return new Set(Array.isArray(a)?a.map(String):[]);});
+  // Local-only: flip a row's dismissed state and persist to localStorage. No network, no DB, no RPC.
+  const toggleDismiss=(key)=>{setDismissed(prev=>{const next=new Set(prev);if(next.has(key))next.delete(key);else next.add(key);ls.set(MT5_DISMISSED_KEY,Array.from(next));return next;});};
 
   const load=async()=>{
     if(!authUid){setRows([]);return;}   // effect guards this; reload button is no-op without a uid
@@ -6440,21 +6459,25 @@ function Mt5InboxPanel({authUid}){
 
   const toggle=()=>{const v=!on;ls.set(MT5_INBOX_FLAG,v);setOn(v);};
 
-  // Derived (read-only): sections, summary, and the open-position id set for the relationship hint.
-  const openRows=rows.filter(r=>_mt5Bucket(r)==="open").slice().sort((a,b)=>_mt5OpenSortKey(b)-_mt5OpenSortKey(a));
-  const closedRows=rows.filter(r=>_mt5Bucket(r)==="closed").slice().sort((a,b)=>_mt5ClosedSortKey(b)-_mt5ClosedSortKey(a));
-  const otherRows=rows.filter(r=>_mt5Bucket(r)==="other").slice().sort((a,b)=>_mt5TimeKey(b.mt5_time)-_mt5TimeKey(a.mt5_time));
-  const openIds=new Set(openRows.map(r=>String(r.position_id)).filter(x=>x&&x!=="null"&&x!=="undefined"));
+  // Derived (read-only): view-filtered sections; summary + openIds from ALL loaded rows (stable across views).
+  const isDismissed=(r)=>dismissed.has(_mt5RowKey(r));
+  const viewRows=rows.filter(r=>view==="all"?true:(view==="dismissed"?isDismissed(r):!isDismissed(r)));
+  const openRows=viewRows.filter(r=>_mt5Bucket(r)==="open").slice().sort((a,b)=>_mt5OpenSortKey(b)-_mt5OpenSortKey(a));
+  const closedRows=viewRows.filter(r=>_mt5Bucket(r)==="closed").slice().sort((a,b)=>_mt5ClosedSortKey(b)-_mt5ClosedSortKey(a));
+  const otherRows=viewRows.filter(r=>_mt5Bucket(r)==="other").slice().sort((a,b)=>_mt5TimeKey(b.mt5_time)-_mt5TimeKey(a.mt5_time));
+  const openIds=new Set(rows.filter(r=>_mt5Bucket(r)==="open").map(r=>String(r.position_id)).filter(x=>x&&x!=="null"&&x!=="undefined"));
   const needsMappingCount=rows.filter(r=>r.state==="needs_mapping").length;
   const noProductCount=rows.filter(r=>_mt5NoProduct(r)).length;
   const accounts=Array.from(new Set(rows.map(r=>_mt5MaskAccount(r.source_account))));
+  const dismissedCount=rows.filter(isDismissed).length;
+  const needsActionCount=rows.length-dismissedCount;
 
   const renderSection=(title,secRows)=>(
     <div className="mb-3">
       <div className="text-xs font-semibold text-txt mb-1.5">{title} <span className="text-muted font-normal">({secRows.length})</span></div>
       {secRows.length===0
         ? <div className="text-[11px] text-muted bg-input/20 rounded px-2 py-1.5">— ไม่มี —</div>
-        : <div className="space-y-2">{secRows.map(r=><Mt5InboxRow key={r.id} r={r} openIds={openIds}/>)}</div>}
+        : <div className="space-y-2">{secRows.map(r=><Mt5InboxRow key={r.id} r={r} openIds={openIds} dismissed={isDismissed(r)} onToggleDismiss={()=>toggleDismiss(_mt5RowKey(r))}/>)}</div>}
     </div>
   );
 
@@ -6506,9 +6529,17 @@ function Mt5InboxPanel({authUid}){
                 {otherRows.length>0&&<span>other <b className="text-txt">{otherRows.length}</b></span>}
                 <span>needs_mapping <b className="text-txt">{needsMappingCount}</b></span>
                 <span>no product <b className="text-txt">{noProductCount}</b></span>
+                <span>needs action <b className="text-txt">{needsActionCount}</b></span>
+                <span>dismissed <b className="text-txt">{dismissedCount}</b></span>
                 <span>accounts <b className="text-txt">{accounts.join(", ")}</b></span>
               </div>
               <div className="text-[11px] text-muted mb-3">Read-only mirror of MT5 — nothing here is a trade in your journal.</div>
+              <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                <button onClick={()=>setView("needs")} className={clsBtn(view==="needs"?"yellow":"ghost","sm")}>Needs action ({needsActionCount})</button>
+                <button onClick={()=>setView("dismissed")} className={clsBtn(view==="dismissed"?"yellow":"ghost","sm")}>Dismissed ({dismissedCount})</button>
+                <button onClick={()=>setView("all")} className={clsBtn(view==="all"?"yellow":"ghost","sm")}>All ({rows.length})</button>
+              </div>
+              <div className="text-[11px] text-muted mb-3">Dismiss is local-only. It does not change MT5, Supabase, or Journal.</div>
               {renderSection("📂 Open MT5 positions",openRows)}
               {renderSection("✅ Closed MT5 deals",closedRows)}
               {otherRows.length>0&&renderSection("• Other staging rows",otherRows)}
