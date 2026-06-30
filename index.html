@@ -6330,7 +6330,44 @@ function _mt5RowKey(r){
   return`row:${acct}:${fb}`;
 }
 
-function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss}){
+// Local-only product mapping PREVIEW (0D-3): NOT real mapping. localStorage only — no DB/RPC/draft/materialize.
+const MT5_PREVIEW_KEY="tj_mt5_inbox_product_preview";
+// Human label for a preview product chosen from the already-loaded app product list (no query).
+function _mt5PreviewLabel(p){
+  if(!p)return"";
+  const sym=p.currentContract||p.baseSymbol||p.name||p.id;
+  const extra=(p.name&&p.name!==sym)?` — ${p.name}`:"";
+  return`${sym}${extra}`;
+}
+// Preview controls: product dropdown if the app already has products loaded, else a tiny text input.
+// onSet(product_id|null,label) / onClear() — both write ONLY localStorage in the parent. No network.
+function Mt5PreviewControls({preview,products,onSet,onClear}){
+  const[draft,setDraft]=useState("");
+  const hasProducts=Array.isArray(products)&&products.length>0;
+  if(hasProducts){
+    return(
+      <div className="flex flex-wrap items-center gap-1.5">
+        <select value={(preview&&preview.product_id)||""}
+          onChange={e=>{const pid=e.target.value;if(!pid){onClear&&onClear();return;}const p=products.find(x=>String(x.id)===String(pid));onSet&&onSet(pid,_mt5PreviewLabel(p));}}
+          className="bg-input border border-border rounded px-2 py-1 text-[11px] text-txt max-w-full">
+          <option value="">— select preview product —</option>
+          {products.map(p=><option key={p.id} value={p.id}>{_mt5PreviewLabel(p)}</option>)}
+        </select>
+        {preview&&preview.product_id&&<button onClick={()=>onClear&&onClear()} className={clsBtn("ghost","sm")}>Clear preview</button>}
+      </div>
+    );
+  }
+  return(
+    <div className="flex flex-wrap items-center gap-1.5">
+      <input value={draft} onChange={e=>setDraft(e.target.value)} placeholder="Preview product label"
+        className="bg-input border border-border rounded px-2 py-1 text-[11px] text-txt"/>
+      <button onClick={()=>{const v=draft.trim();if(!v)return;onSet&&onSet(null,v);setDraft("");}} className={clsBtn("ghost","sm")}>Save preview</button>
+      {preview&&preview.label&&<button onClick={()=>onClear&&onClear()} className={clsBtn("ghost","sm")}>Clear preview</button>}
+    </div>
+  );
+}
+
+function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss,products,preview,onSetPreview,onClearPreview}){
   const bucket=_mt5Bucket(r);
   const isOpen=bucket==="open", isClosed=bucket==="closed";
   const reseen=!!r.last_seen_open_at||(r.updated_at&&r.created_at&&r.updated_at!==r.created_at);
@@ -6339,6 +6376,8 @@ function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss}){
   const sizeCheck=_mt5NeedsSizeCheck(r.instrument_class);
   const noProduct=_mt5NoProduct(r);
   const needsMapping=r.state==="needs_mapping";
+  const nameAloneRisk=/^DELTA[A-Z]\d/.test((r.symbol_raw||"").toString().toUpperCase())||(r.instrument_class||"").toString().toLowerCase()==="ssf";
+  const showPreview=needsMapping||noProduct;   // 0D-3 local preview only for unmapped rows
   const fld=(label,val)=>(val===null||val===undefined||val==="")?null:(
     <div className="flex justify-between gap-2 min-w-0">
       <span className="text-muted shrink-0">{label}</span>
@@ -6391,6 +6430,21 @@ function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss}){
         </div>
       )}
       {sizeCheck&&!deriv&&<div className="text-[11px] text-muted mb-2">Check contract size before mapping.</div>}
+      {showPreview&&(
+        <div className="mt-1 mb-2 rounded-lg border border-border/50 bg-input/20 px-2.5 py-2">
+          <div className="text-[11px] font-semibold text-txt mb-1">Mapping preview <span className="text-muted font-normal">(local only)</span></div>
+          <div className="text-[11px] text-muted mb-1">No real product mapped</div>
+          <div className="text-[11px] mb-1.5">
+            {(preview&&preview.label)
+              ? <span className="text-green">Local preview: {preview.label}</span>
+              : <span className="text-muted">No local preview selected</span>}
+          </div>
+          <Mt5PreviewControls preview={preview} products={products} onSet={onSetPreview} onClear={onClearPreview}/>
+          {(sizeCheck||deriv)&&<div className="text-[10px] text-orange mt-1.5">Check symbol and contract size before using this preview.</div>}
+          {nameAloneRisk&&<div className="text-[10px] text-orange mt-0.5">Do not map by name alone.</div>}
+          <div className="text-[10px] text-muted mt-1.5">Local preview only — does not change MT5, Supabase, or Journal.</div>
+        </div>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5">
         {isOpen&&fld("position_id",r.position_id)}
         {isOpen&&fld("position_state",r.position_state)}
@@ -6431,7 +6485,7 @@ function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss}){
   );
 }
 
-function Mt5InboxPanel({authUid}){
+function Mt5InboxPanel({authUid,products}){
   const[on,setOn]=useState(()=>ls.get(MT5_INBOX_FLAG,false));
   const[loading,setLoading]=useState(false);
   const[rows,setRows]=useState([]);
@@ -6441,6 +6495,10 @@ function Mt5InboxPanel({authUid}){
   const[dismissed,setDismissed]=useState(()=>{const a=ls.get(MT5_DISMISSED_KEY,[]);return new Set(Array.isArray(a)?a.map(String):[]);});
   // Local-only: flip a row's dismissed state and persist to localStorage. No network, no DB, no RPC.
   const toggleDismiss=(key)=>{setDismissed(prev=>{const next=new Set(prev);if(next.has(key))next.delete(key);else next.add(key);ls.set(MT5_DISMISSED_KEY,Array.from(next));return next;});};
+  const[preview,setPreview]=useState(()=>{const o=ls.get(MT5_PREVIEW_KEY,{});return(o&&typeof o==="object"&&!Array.isArray(o))?o:{};});
+  // Local-only: set/clear a row's PREVIEW product. Persists to localStorage. No network, no DB, no draft.
+  const setRowPreview=(key,product_id,label)=>{setPreview(prev=>{const next={...prev,[key]:{product_id:(product_id===undefined?null:product_id),label:label||"",saved_at:new Date().toISOString()}};ls.set(MT5_PREVIEW_KEY,next);return next;});};
+  const clearRowPreview=(key)=>{setPreview(prev=>{const next={...prev};delete next[key];ls.set(MT5_PREVIEW_KEY,next);return next;});};
 
   const load=async()=>{
     if(!authUid){setRows([]);return;}   // effect guards this; reload button is no-op without a uid
@@ -6471,13 +6529,14 @@ function Mt5InboxPanel({authUid}){
   const accounts=Array.from(new Set(rows.map(r=>_mt5MaskAccount(r.source_account))));
   const dismissedCount=rows.filter(isDismissed).length;
   const needsActionCount=rows.length-dismissedCount;
+  const previewCount=rows.filter(r=>preview[_mt5RowKey(r)]).length;
 
   const renderSection=(title,secRows)=>(
     <div className="mb-3">
       <div className="text-xs font-semibold text-txt mb-1.5">{title} <span className="text-muted font-normal">({secRows.length})</span></div>
       {secRows.length===0
         ? <div className="text-[11px] text-muted bg-input/20 rounded px-2 py-1.5">— ไม่มี —</div>
-        : <div className="space-y-2">{secRows.map(r=><Mt5InboxRow key={r.id} r={r} openIds={openIds} dismissed={isDismissed(r)} onToggleDismiss={()=>toggleDismiss(_mt5RowKey(r))}/>)}</div>}
+        : <div className="space-y-2">{secRows.map(r=><Mt5InboxRow key={r.id} r={r} openIds={openIds} dismissed={isDismissed(r)} onToggleDismiss={()=>toggleDismiss(_mt5RowKey(r))} products={products} preview={preview[_mt5RowKey(r)]} onSetPreview={(pid,label)=>setRowPreview(_mt5RowKey(r),pid,label)} onClearPreview={()=>clearRowPreview(_mt5RowKey(r))}/>)}</div>}
     </div>
   );
 
@@ -6531,6 +6590,7 @@ function Mt5InboxPanel({authUid}){
                 <span>no product <b className="text-txt">{noProductCount}</b></span>
                 <span>needs action <b className="text-txt">{needsActionCount}</b></span>
                 <span>dismissed <b className="text-txt">{dismissedCount}</b></span>
+                <span>local previews <b className="text-txt">{previewCount}</b></span>
                 <span>accounts <b className="text-txt">{accounts.join(", ")}</b></span>
               </div>
               <div className="text-[11px] text-muted mb-3">Read-only mirror of MT5 — nothing here is a trade in your journal.</div>
@@ -7000,7 +7060,7 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
         </div>
       </div>
 
-      <Mt5InboxPanel authUid={authUid}/>
+      <Mt5InboxPanel authUid={authUid} products={products}/>
 
     </div>
   );
