@@ -6261,11 +6261,12 @@ const DELTA_STOCK_PRESET={
   contractSize:1,tickSize:0.01,tickValue:0.01,manualPriceOnly:true,
   initialMargin:0,commissionPerLeg:0,vatEnabled:false,
 };
-// ─── MT5 Phase 0D-0: read-only staging Inbox (diagnostic, default-OFF) ──────────────────────
+// ─── MT5 Phase 0D-1: read-only staging Inbox (diagnostic, default-OFF) ──────────────────────
 // Renders mt5_import_staging rows owned by the current user through the existing authenticated
-// RLS SELECT-own policy. READ-ONLY: no writes, no RPC, no lifecycle actions — the only
-// interactions are toggling the local flag and retrying the read. `authUid` is passed in; the
-// panel NEVER discovers/guesses uid. See artifacts/mt5_auto_draft_import/phase_0d0_*.
+// RLS SELECT-own policy. READ-ONLY: no writes, no RPC, no lifecycle/mapping/group actions — the
+// only interactions are toggling the local flag and retrying the read. `authUid` is passed in; the
+// panel NEVER discovers/guesses uid. 0D-1 adds sectioning, a summary strip, safety labels, kind-aware
+// detail and a read-only position↔deal hint. See artifacts/mt5_auto_draft_import/phase_0d0_*.
 const MT5_INBOX_FLAG="tj_mt5_inbox";
 
 // Mask the MT5 login so it survives screenshots without exposing the full account number.
@@ -6292,16 +6293,63 @@ function _mt5IsSsfRisk(r){
   const cls=(r.instrument_class||"").toString().toLowerCase();
   return cls==="ssf"||(Number(r.contract_size)>=1000);
 }
+// Section bucket by kind: 'open' | 'closed' (close/partial) | 'other' (balance/unknown/etc).
+function _mt5Bucket(r){
+  const k=(r.kind||"").toString().toLowerCase();
+  if(k==="open")return"open";
+  if(k==="close"||k==="partial")return"closed";
+  return"other";
+}
+// Instrument classes where contract size must be checked before mapping.
+function _mt5NeedsSizeCheck(cls){
+  const c=(cls||"").toString().toLowerCase();
+  return c==="futures"||c==="ssf"||c==="option"||c==="unknown"||c==="";
+}
+// Derivative/SSF-style symbol that must NOT be mapped to a stock by name alone (e.g. DELTAU26).
+function _mt5IsDerivativeName(r){
+  const cls=(r.instrument_class||"").toString().toLowerCase();
+  const sym=(r.symbol_raw||"").toString().toUpperCase();
+  return cls==="ssf"||/^DELTA[A-Z]\d/.test(sym)||_mt5IsSsfRisk(r);
+}
+function _mt5NoProduct(r){return r.product_id_candidate===null||r.product_id_candidate===undefined||r.product_id_candidate==="";}
+// Read-only sort keys (desc): parse ISO timestamps; null/invalid sink to the bottom.
+function _mt5TimeKey(v){if(!v)return -Infinity;const t=Date.parse(v);return isNaN(t)?-Infinity:t;}
+function _mt5OpenSortKey(r){return Math.max(_mt5TimeKey(r.last_seen_open_at),_mt5TimeKey(r.open_time),_mt5TimeKey(r.mt5_time));}
+function _mt5ClosedSortKey(r){return Math.max(_mt5TimeKey(r.close_time),_mt5TimeKey(r.mt5_time));}
 
-function Mt5InboxRow({r}){
+function Mt5InboxRow({r,openIds}){
+  const bucket=_mt5Bucket(r);
+  const isOpen=bucket==="open", isClosed=bucket==="closed";
   const reseen=!!r.last_seen_open_at||(r.updated_at&&r.created_at&&r.updated_at!==r.created_at);
   const ssf=_mt5IsSsfRisk(r);
+  const deriv=_mt5IsDerivativeName(r);
+  const sizeCheck=_mt5NeedsSizeCheck(r.instrument_class);
+  const noProduct=_mt5NoProduct(r);
+  const needsMapping=r.state==="needs_mapping";
   const fld=(label,val)=>(val===null||val===undefined||val==="")?null:(
     <div className="flex justify-between gap-2 min-w-0">
       <span className="text-muted shrink-0">{label}</span>
       <span className="text-txt tabular-nums text-right break-all">{String(val)}</span>
     </div>
   );
+  const always=(label,val)=>(
+    <div className="flex justify-between gap-2 min-w-0">
+      <span className="text-muted shrink-0">{label}</span>
+      <span className="text-txt tabular-nums text-right break-all">{(val===null||val===undefined||val==="")?"—":String(val)}</span>
+    </div>
+  );
+  // Read-only position↔deal hint (closed rows only). NO group_id, NO write, NO RPC, NO Journal linkage.
+  let relHint=null;
+  if(isClosed&&r.position_id!==null&&r.position_id!==undefined&&r.position_id!==""){
+    relHint=(openIds&&openIds.has(String(r.position_id)))
+      ? `Matches open staging position ${r.position_id}`
+      : "No matching open staging row currently loaded";
+  }
+  const kindCopy=isOpen
+    ? "This is an MT5 open-position staging row. It has not created or changed a Journal position."
+    : isClosed
+      ? "This is an MT5 historical deal staging row. It is not linked to a Journal trade yet."
+      : "This is an MT5 staging row (balance/other). It is not a Journal trade.";
   return(
     <div className="bg-input/30 border border-border/40 rounded-lg p-3 text-xs">
       <div className="flex flex-wrap items-center gap-1.5 mb-2">
@@ -6313,35 +6361,51 @@ function Mt5InboxRow({r}){
         <span className="text-muted" title="masked account">{_mt5MaskAccount(r.source_account)}</span>
         {reseen&&<span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow/15 text-yellow border border-yellow/20">re-seen</span>}
       </div>
-      {r.state==="needs_mapping"&&(
-        <div className="text-[11px] text-yellow/90 mb-2" title="ข้อมูลนี้ดึงมาจาก MT5 และยังไม่ถูกผูกกับสินค้าใน THUS — ยังไม่มีการสร้างเทรดใดๆ">
-          ยังไม่จับคู่สินค้า — ยังไม่มีการสร้างเทรด
-        </div>
-      )}
-      {ssf&&(
+      <div className="flex flex-wrap gap-1 mb-2">
+        <span className="px-1.5 py-0.5 rounded text-[10px] bg-input text-muted border border-border">Staging only</span>
+        <span className="px-1.5 py-0.5 rounded text-[10px] bg-input text-muted border border-border">Not a Journal trade</span>
+        {needsMapping&&<span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow/15 text-yellow border border-yellow/20">Needs mapping</span>}
+        {noProduct&&<span className="px-1.5 py-0.5 rounded text-[10px] bg-input text-muted border border-border">No product mapped</span>}
+      </div>
+      <div className="text-[11px] text-muted mb-2">{kindCopy}</div>
+      {needsMapping&&<div className="text-[11px] text-yellow/90 mb-2">No Journal draft/trade has been created from this row.</div>}
+      {relHint&&<div className="text-[11px] text-muted mb-2">{relHint}</div>}
+      {deriv&&(
         <div className="text-[11px] text-orange bg-orange/10 border border-orange/20 rounded px-2 py-1 mb-2">
-          ⚠ SSF / contract_size {String(r.contract_size)} — ห้าม map เป็น stock preset (csize 1) มิฉะนั้น P/L ผิด ~{Math.round(Number(r.contract_size)||0)}×
+          Derivative/SSF-style symbol — do not map by name alone.{ssf?` (contract_size ${String(r.contract_size)} — never a stock preset csize 1)`:""}
         </div>
       )}
+      {sizeCheck&&!deriv&&<div className="text-[11px] text-muted mb-2">Check contract size before mapping.</div>}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-0.5">
-        {fld("position_state",r.position_state)}
-        {fld("position_id",r.position_id)}
-        {fld("deal_id",r.deal_id)}
-        {fld("order_id",r.order_id)}
-        {fld("volume",r.volume)}
-        {fld("price",r.price)}
-        {fld("contract_size",r.contract_size)}
-        {fld("instrument_class",r.instrument_class)}
-        <div className="flex justify-between gap-2 min-w-0">
-          <span className="text-muted shrink-0">product_id_candidate</span>
-          <span className="text-txt tabular-nums text-right break-all">{(r.product_id_candidate===null||r.product_id_candidate===undefined||r.product_id_candidate==="")?"—":String(r.product_id_candidate)}</span>
-        </div>
-        {fld("broker_profit",r.broker_profit)}
-        {fld("open_time",r.open_time)}
-        {fld("close_time",r.close_time)}
-        {fld("mt5_time",r.mt5_time)}
-        {fld("first_seen_open_at",r.first_seen_open_at)}
-        {fld("last_seen_open_at",r.last_seen_open_at)}
+        {isOpen&&fld("position_id",r.position_id)}
+        {isOpen&&fld("position_state",r.position_state)}
+        {isOpen&&fld("side",r.side)}
+        {isOpen&&fld("volume",r.volume)}
+        {isOpen&&fld("price",r.price)}
+        {isOpen&&fld("open_time",r.open_time)}
+        {isOpen&&fld("first_seen_open_at",r.first_seen_open_at)}
+        {isOpen&&fld("last_seen_open_at",r.last_seen_open_at)}
+        {isClosed&&fld("deal_id",r.deal_id)}
+        {isClosed&&fld("position_id",r.position_id)}
+        {isClosed&&fld("order_id",r.order_id)}
+        {isClosed&&fld("side",r.side)}
+        {isClosed&&fld("volume",r.volume)}
+        {isClosed&&fld("price",r.price)}
+        {isClosed&&fld("close_time",r.close_time)}
+        {isClosed&&fld("mt5_time",r.mt5_time)}
+        {isClosed&&fld("broker_profit",r.broker_profit)}
+        {isClosed&&fld("commission",r.commission)}
+        {isClosed&&fld("swap",r.swap)}
+        {isClosed&&fld("fee",r.fee)}
+        {!isOpen&&!isClosed&&fld("deal_id",r.deal_id)}
+        {!isOpen&&!isClosed&&fld("position_id",r.position_id)}
+        {!isOpen&&!isClosed&&fld("volume",r.volume)}
+        {!isOpen&&!isClosed&&fld("price",r.price)}
+        {!isOpen&&!isClosed&&fld("mt5_time",r.mt5_time)}
+        {always("state",r.state)}
+        {always("contract_size",r.contract_size)}
+        {always("instrument_class",r.instrument_class)}
+        {always("product_id_candidate",r.product_id_candidate)}
         {fld("import_group_key",r.import_group_key)}
         {fld("confirmed_group_id",r.confirmed_group_id)}
         {fld("created_at",r.created_at)}
@@ -6360,7 +6424,7 @@ function Mt5InboxPanel({authUid}){
   const[loadedAt,setLoadedAt]=useState(null);
 
   const load=async()=>{
-    if(!authUid){setErr("ยังไม่ได้ login (no authUid)");setRows([]);return;}
+    if(!authUid){setRows([]);return;}   // effect guards this; reload button is no-op without a uid
     setLoading(true);setErr(null);
     const res=await db.loadMt5Staging(authUid);
     setLoading(false);
@@ -6368,13 +6432,31 @@ function Mt5InboxPanel({authUid}){
     else{setErr((res&&res.error)||"load failed");setRows([]);}
   };
 
-  // Load ONLY when the flag is ON and we have a uid. Flag OFF → no query fires at all.
+  // Load ONLY when the flag is ON and we have a uid. Flag OFF (or no uid) → no query fires at all.
   useEffect(()=>{
     if(on&&authUid){load();}
     else{setRows([]);setErr(null);setLoadedAt(null);}
   },[on,authUid]);
 
   const toggle=()=>{const v=!on;ls.set(MT5_INBOX_FLAG,v);setOn(v);};
+
+  // Derived (read-only): sections, summary, and the open-position id set for the relationship hint.
+  const openRows=rows.filter(r=>_mt5Bucket(r)==="open").slice().sort((a,b)=>_mt5OpenSortKey(b)-_mt5OpenSortKey(a));
+  const closedRows=rows.filter(r=>_mt5Bucket(r)==="closed").slice().sort((a,b)=>_mt5ClosedSortKey(b)-_mt5ClosedSortKey(a));
+  const otherRows=rows.filter(r=>_mt5Bucket(r)==="other").slice().sort((a,b)=>_mt5TimeKey(b.mt5_time)-_mt5TimeKey(a.mt5_time));
+  const openIds=new Set(openRows.map(r=>String(r.position_id)).filter(x=>x&&x!=="null"&&x!=="undefined"));
+  const needsMappingCount=rows.filter(r=>r.state==="needs_mapping").length;
+  const noProductCount=rows.filter(r=>_mt5NoProduct(r)).length;
+  const accounts=Array.from(new Set(rows.map(r=>_mt5MaskAccount(r.source_account))));
+
+  const renderSection=(title,secRows)=>(
+    <div className="mb-3">
+      <div className="text-xs font-semibold text-txt mb-1.5">{title} <span className="text-muted font-normal">({secRows.length})</span></div>
+      {secRows.length===0
+        ? <div className="text-[11px] text-muted bg-input/20 rounded px-2 py-1.5">— ไม่มี —</div>
+        : <div className="space-y-2">{secRows.map(r=><Mt5InboxRow key={r.id} r={r} openIds={openIds}/>)}</div>}
+    </div>
+  );
 
   return(
     <section className="bg-card border border-border rounded-xl p-5">
@@ -6383,37 +6465,53 @@ function Mt5InboxPanel({authUid}){
         <button onClick={toggle} className={clsBtn(on?"yellow":"ghost","sm")}>{on?"ON":"OFF"}</button>
       </div>
       <div className="text-xs text-muted mb-3 leading-relaxed">
-        Read-only MT5 mirror — not Journal trades.<br/>
+        Read-only MT5 mirror — not Journal trades. Rows need mapping before they could ever become a trade.<br/>
         ข้อมูลจาก MT5 แบบอ่านอย่างเดียว — ยังไม่ใช่เทรดใน Journal
       </div>
       {!on&&(
         <div className="text-xs text-muted bg-input/30 rounded-lg px-3 py-2">
-          ปิดอยู่ — เปิดเพื่อดูแถว staging จาก MT5 (อ่านอย่างเดียว ไม่มีการเขียนข้อมูล)
+          ปิดอยู่ (diagnostic). กดปุ่ม <span className="text-txt font-medium">OFF→ON</span> ด้านบนเพื่อดูแถว staging จาก MT5 แบบอ่านอย่างเดียว (ไม่มีการเขียนข้อมูล).
         </div>
       )}
-      {on&&(
+      {on&&!authUid&&(
+        <div className="text-xs text-muted bg-input/30 rounded-lg px-3 py-2">
+          ต้อง sign in ก่อน — ไม่มี auth session จึงไม่ดึงข้อมูล (RLS SELECT-own). No query is sent.
+        </div>
+      )}
+      {on&&authUid&&(
         <div>
           <div className="flex items-center justify-between mb-3 text-xs">
             <span className="text-muted">
-              {loading?"กำลังโหลด…":`${rows.length} แถว`}
-              {loadedAt&&!loading?` · โหลดเมื่อ ${fmtTime(loadedAt)}`:""}
+              {loading?"กำลังโหลด…":`${rows.length} row(s)`}
+              {loadedAt&&!loading?` · loaded ${fmtTime(loadedAt)}`:""}
             </span>
-            <button onClick={load} disabled={loading} className={clsBtn("ghost","sm")}>↻ โหลดใหม่</button>
+            <button onClick={load} disabled={loading} className={clsBtn("ghost","sm")}>↻ Reload</button>
           </div>
           {err&&(
             <div className="text-xs text-red bg-red/10 border border-red/20 rounded-lg px-3 py-2 mb-3">
-              โหลดไม่สำเร็จ: {err} <button onClick={load} className="underline ml-1">ลองอีกครั้ง</button>
+              Could not load MT5 staging rows. <button onClick={load} className="underline ml-1">Try again</button>
             </div>
           )}
           {!err&&!loading&&rows.length===0&&(
             <div className="text-xs text-muted bg-input/30 rounded-lg px-3 py-2">
-              ยังไม่มีแถว staging — local writer จะ mirror open positions มาที่นี่ (อ่านอย่างเดียว)
+              No MT5 staging rows found for this user. The local writer mirrors MT5 open positions / closed deals here (read-only).
             </div>
           )}
-          {rows.length>0&&(
-            <div className="space-y-2">
-              <div className="text-[11px] text-muted">Read-only mirror of MT5 — nothing here is a trade in your journal.</div>
-              {rows.map(r=><Mt5InboxRow key={r.id} r={r}/>)}
+          {!err&&rows.length>0&&(
+            <div>
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-muted mb-2 bg-input/20 rounded-lg px-3 py-2">
+                <span>total <b className="text-txt">{rows.length}</b></span>
+                <span>open <b className="text-txt">{openRows.length}</b></span>
+                <span>close/partial <b className="text-txt">{closedRows.length}</b></span>
+                {otherRows.length>0&&<span>other <b className="text-txt">{otherRows.length}</b></span>}
+                <span>needs_mapping <b className="text-txt">{needsMappingCount}</b></span>
+                <span>no product <b className="text-txt">{noProductCount}</b></span>
+                <span>accounts <b className="text-txt">{accounts.join(", ")}</b></span>
+              </div>
+              <div className="text-[11px] text-muted mb-3">Read-only mirror of MT5 — nothing here is a trade in your journal.</div>
+              {renderSection("📂 Open MT5 positions",openRows)}
+              {renderSection("✅ Closed MT5 deals",closedRows)}
+              {otherRows.length>0&&renderSection("• Other staging rows",otherRows)}
             </div>
           )}
         </div>
