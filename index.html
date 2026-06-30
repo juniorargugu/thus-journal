@@ -6353,7 +6353,7 @@ function Mt5InboxRow({r}){
 }
 
 function Mt5InboxPanel({authUid}){
-  const[on,setOn]=useState(()=>LS.get(MT5_INBOX_FLAG,false));
+  const[on,setOn]=useState(()=>ls.get(MT5_INBOX_FLAG,false));
   const[loading,setLoading]=useState(false);
   const[rows,setRows]=useState([]);
   const[err,setErr]=useState(null);
@@ -6374,7 +6374,7 @@ function Mt5InboxPanel({authUid}){
     else{setRows([]);setErr(null);setLoadedAt(null);}
   },[on,authUid]);
 
-  const toggle=()=>{const v=!on;LS.set(MT5_INBOX_FLAG,v);setOn(v);};
+  const toggle=()=>{const v=!on;ls.set(MT5_INBOX_FLAG,v);setOn(v);};
 
   return(
     <section className="bg-card border border-border rounded-xl p-5">
