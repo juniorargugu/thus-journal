@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
 """
-MT5 Auto Draft Import — Phase 0C-3a OPEN-ONLY staging writer.
+MT5 Auto Draft Import — staging writer: 0C-3a opens (`--scope open`, default) + 0C-3b close/partial
+deals (`--scope deals`).
 
-Writes eligible `kind='open'` rows to `mt5_import_staging` ONLY. Dry-run by default; a real write
-requires a THREE-key gate (`--write` + `--confirm WRITE_STAGING` + env `MT5_WRITE=1`) plus local
+Writes eligible rows to `mt5_import_staging` ONLY. Dry-run by default; a real write requires a
+THREE-key gate (`--write` + `--confirm WRITE_STAGING` + env `MT5_WRITE=1`) plus local
 `SUPABASE_URL`/`SUPABASE_SERVICE_KEY`, a matching `--source-account`, and a `--max-write-count` cap.
 
 HARD GUARANTEES (design: ../../artifacts/mt5_auto_draft_import/phase_0c3_writer_design.md)
   - DRY-RUN constructs NO Supabase client and reads NO `SUPABASE_*` / service_role env.
-  - Writes ONLY `kind='open'` rows, ONLY to `mt5_import_staging` (via the allow-listed staging_db).
-  - NO deals/balance/unknown writes, NO cursor, NO lifecycle reconcile, NO groups, NO RPCs,
-    NO trades/products/portfolio/notes/trade_groups, NO Storage, NO upsert, NO DELETE.
+  - `--scope open`: writes ONLY `kind='open'` rows (SELECT->INSERT/PATCH).
+  - `--scope deals`: writes ONLY `kind in ('close','partial')` rows, insert-once IMMUTABLE
+    (SELECT->INSERT; NO PATCH). Armed deals require `--deal-id`; a 409 whose reselect cannot be
+    confirmed (or finds the other close/partial kind) hard-STOPS — never counted as success.
+  - Both scopes: ONLY `mt5_import_staging` (allow-listed staging_db). NO balance/unknown writes,
+    NO cursor, NO lifecycle reconcile, NO groups, NO RPCs, NO trades/products/portfolio/notes/
+    trade_groups, NO Storage, NO upsert, NO DELETE.
   - Reuses the 0C-2 pure mappers from build_rows.py (build_rows.py is NOT modified).
 """
 
@@ -131,6 +136,20 @@ def deal_candidate_filter(deal_rows, open_rows):
     return candidates, counters
 
 
+def classify_deal_match(existing_rows, incoming_kind):
+    """Pure: classify the staged close/partial rows found for a deal_id against the incoming kind.
+      'absent'    -> no rows. Caller decides: PRE-insert = proceed to INSERT; POST-409 = hard STOP
+                     (a 409 that the reselect cannot confirm is an inconsistent state, never success).
+      'mismatch'  -> a row with the OTHER close/partial kind exists -> hard STOP (immutable fact).
+      'same_kind' -> only same-kind row(s) exist -> duplicate no-op success.
+    """
+    if not existing_rows:
+        return "absent"
+    if any(e.get("kind") != incoming_kind for e in existing_rows):
+        return "mismatch"
+    return "same_kind"
+
+
 # ---------------------------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------------------------
@@ -224,6 +243,10 @@ def main(argv):
         common.stop("--source-account must be a non-empty string (the MT5 login / source_account).")
     user_id = args.user_id.strip()
     source_account = str(args.source_account).strip()
+
+    # Harmless-but-confusing: --deal-id only applies to --scope deals. Warn; do NOT broaden scope.
+    if args.scope == "open" and args.deal_id is not None:
+        common.eprint("WARN: --deal-id is ignored in --scope open (open scope targets --position-id).")
 
     # THREE-key gate (reads ONLY MT5_WRITE here, and only when --write is set).
     mode, reason = gate_status(args.write, args.confirm, os.environ.get("MT5_WRITE") if args.write else None)
@@ -380,10 +403,12 @@ def _run_deals_scope(mode, args, user_id, source_account, open_rows, deal_rows, 
         kind = r["kind"]
         existing = db.select_deals_by_key(user_id, source_account, did)
         if existing:
-            if any(e.get("kind") != kind for e in existing):
+            # Pre-insert: rows already present. 'absent' cannot occur here (guarded by `if existing`).
+            if classify_deal_match(existing, kind) == "mismatch":
                 duplicate_kind_mismatch += 1
-                common.stop(f"deal_id={did} already staged as kind={existing[0].get('kind')!r} but incoming "
-                            f"kind={kind!r} -> close/partial mismatch. Refusing (immutable historical fact).", code=2)
+                ek = sorted({e.get("kind") for e in existing})
+                common.stop(f"deal_id={did} already staged as kind={ek} but incoming kind={kind!r} "
+                            f"-> close/partial mismatch. Refusing (immutable historical fact).", code=2)
             duplicate_existing += 1
             print(f"  DUPLICATE-EXISTING deal_id={did} kind={kind} -> no-op (immutable)")
             continue
@@ -393,12 +418,20 @@ def _run_deals_scope(mode, args, user_id, source_account, open_rows, deal_rows, 
             print(f"  INSERT deal_id={did} kind={kind} state={r['state']}")
         except staging_db.DuplicateInsert:
             again = db.select_deals_by_key(user_id, source_account, did)
-            if any(e.get("kind") != kind for e in again):
+            decision = classify_deal_match(again, kind)
+            if decision == "absent":
+                # 409 said the row exists, but the reselect found nothing -> inconsistent. NEVER count
+                # as a duplicate success; fail loud so a real anomaly is never masked.
+                common.stop(f"deal_id={did} INSERT hit 409 duplicate but the reselect returned no row "
+                            f"-> 409 duplicate race could not be confirmed by reselect (inconsistent). "
+                            f"Refusing.", code=2)
+            if decision == "mismatch":
                 duplicate_kind_mismatch += 1
-                common.stop(f"deal_id={did} race -> now staged as kind={again[0].get('kind')!r} != incoming "
-                            f"{kind!r} -> mismatch. Refusing.", code=2)
+                ek = sorted({e.get("kind") for e in again})
+                common.stop(f"deal_id={did} 409 race -> now staged as kind={ek} != incoming kind={kind!r} "
+                            f"-> close/partial mismatch. Refusing.", code=2)
             duplicate_race += 1
-            print(f"  DUPLICATE-RACE deal_id={did} kind={kind} -> re-selected, no-op (immutable)")
+            print(f"  DUPLICATE-RACE deal_id={did} kind={kind} -> reselect confirmed same kind, no-op (immutable)")
 
     print("\nARMED WRITE RESULT (mt5_import_staging, close/partial deals only):")
     print(f"  planned_deal_writes={planned} inserted={inserted} duplicate_existing={duplicate_existing} "
@@ -593,6 +626,17 @@ def self_test():
             fails.append(f"staging_db missing deal helper {needed}")
     if staging_db.ALLOWED_TABLES != frozenset({"mt5_import_staging"}):
         fails.append("staging_db allowlist must remain {mt5_import_staging} after 0C-3b")
+
+    # 409 duplicate-race classification (the patched blocker): empty reselect -> 'absent' -> caller
+    # hard-STOPs; same-kind -> 'same_kind' -> duplicate_race success; other-kind -> 'mismatch' -> STOP.
+    if classify_deal_match([], "close") != "absent":
+        fails.append("409 + empty reselect must classify as 'absent' (caller hard-STOPs, not success)")
+    if classify_deal_match([{"kind": "close"}], "close") != "same_kind":
+        fails.append("409 + same-kind reselect must be 'same_kind' (duplicate_race success)")
+    if classify_deal_match([{"kind": "partial"}], "close") != "mismatch":
+        fails.append("409 + other-kind reselect must be 'mismatch' (hard STOP)")
+    if classify_deal_match([{"kind": "close"}, {"kind": "partial"}], "close") != "mismatch":
+        fails.append("any other-kind row among reselect must be 'mismatch'")
 
     print("writer self-test:", "PASS" if not fails else "FAIL")
     for x in fails:
