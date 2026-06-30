@@ -6332,21 +6332,27 @@ function _mt5RowKey(r){
 
 // Local-only product mapping PREVIEW (0D-3): NOT real mapping. localStorage only — no DB/RPC/draft/materialize.
 const MT5_PREVIEW_KEY="tj_mt5_inbox_product_preview";
-// Human label for a preview product chosen from the already-loaded app product list (no query).
-// Row-aware: if the MT5 row symbol matches the product's next/current series, show that series
-// explicitly (e.g. "GOU26 — Gold Futures (next)"); otherwise show both series. product_id is unchanged.
+// "current / next" contract pair for a product (or single / baseSymbol / "—").
+function _mt5ContractPair(p){
+  if(!p)return"—";
+  const cur=p.currentContract||"",nxt=p.nextContract||"";
+  if(cur&&nxt)return`${cur} / ${nxt}`;
+  return cur||nxt||p.baseSymbol||"—";
+}
+// Consistent product-family label for the preview dropdown (no query):
+//   "<Name> — <cur> / <nxt> · csize <n>"  + " · matches row: <sym> (current|next)" when the row matches.
+// All options share this shape so Gold isn't shown U-only while others show M/U. product_id is unchanged.
 function _mt5PreviewLabel(p,rowSym){
   if(!p)return"";
   const name=p.name||p.baseSymbol||p.id||"";
-  const cur=p.currentContract||"";
-  const nxt=p.nextContract||"";
+  const cur=p.currentContract||"",nxt=p.nextContract||"";
+  const csize=(p.contractSize===null||p.contractSize===undefined||p.contractSize==="")?"—":String(p.contractSize);
+  const contracts=(cur&&nxt)?`${cur} / ${nxt}`:(cur||nxt||"");
+  let label=contracts?`${name} — ${contracts} · csize ${csize}`:`${name} · csize ${csize}`;
   const rs=(rowSym||"").toString().toUpperCase();
-  let contract,suffix="";
-  if(nxt&&rs&&rs===nxt.toUpperCase()){contract=nxt;suffix=" (next)";}
-  else if(cur&&rs&&rs===cur.toUpperCase()){contract=cur;suffix=" (current)";}
-  else if(cur&&nxt){contract=`${cur} / ${nxt}`;}
-  else{contract=cur||p.baseSymbol||name||p.id;}
-  return(name&&name!==contract)?`${contract} — ${name}${suffix}`:`${contract}${suffix}`;
+  if(cur&&rs&&rs===cur.toUpperCase())label+=` · matches row: ${rowSym} (current)`;
+  else if(nxt&&rs&&rs===nxt.toUpperCase())label+=` · matches row: ${rowSym} (next)`;
+  return label;
 }
 // Preview controls: product dropdown if the app already has products loaded, else a tiny text input.
 // onSet(product_id|null,label) / onClear() — both write ONLY localStorage in the parent. No network.
@@ -6387,6 +6393,16 @@ function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss,products,preview,onSet
   const needsMapping=r.state==="needs_mapping";
   const nameAloneRisk=/^DELTA[A-Z]\d/.test((r.symbol_raw||"").toString().toUpperCase())||(r.instrument_class||"").toString().toLowerCase()==="ssf";
   const showPreview=needsMapping||noProduct;   // 0D-3 local preview only for unmapped rows
+  // Compact preview comparison (local-only): selected product vs this MT5 row.
+  const previewProduct=(preview&&preview.product_id&&Array.isArray(products))?products.find(x=>String(x.id)===String(preview.product_id)):null;
+  const _rowSymCmp=(r.symbol_raw||r.normalized_symbol||"").toString().toUpperCase();
+  const seriesMatch=previewProduct?(
+    (previewProduct.currentContract&&_rowSymCmp===String(previewProduct.currentContract).toUpperCase())?"current"
+    :(previewProduct.nextContract&&_rowSymCmp===String(previewProduct.nextContract).toUpperCase())?"next":"none"
+  ):null;
+  const csizeDiffers=!!previewProduct&&r.contract_size!==null&&r.contract_size!==undefined&&r.contract_size!==""
+    &&previewProduct.contractSize!==null&&previewProduct.contractSize!==undefined&&previewProduct.contractSize!==""
+    &&Number(previewProduct.contractSize)!==Number(r.contract_size);
   const fld=(label,val)=>(val===null||val===undefined||val==="")?null:(
     <div className="flex justify-between gap-2 min-w-0">
       <span className="text-muted shrink-0">{label}</span>
@@ -6449,6 +6465,14 @@ function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss,products,preview,onSet
               : <span className="text-muted">No local preview selected</span>}
           </div>
           <Mt5PreviewControls preview={preview} products={products} onSet={onSetPreview} onClear={onClearPreview} rowSym={r.symbol_raw||r.normalized_symbol}/>
+          {previewProduct&&(
+            <div className="text-[10px] text-muted mt-1.5 leading-relaxed bg-input/20 rounded px-2 py-1">
+              <div>MT5 row: {r.symbol_raw||"—"} · csize {(r.contract_size===null||r.contract_size===undefined||r.contract_size==="")?"—":String(r.contract_size)} · {r.instrument_class||"—"}</div>
+              <div>Preview product: {previewProduct.name||previewProduct.baseSymbol||previewProduct.id} · {_mt5ContractPair(previewProduct)} · csize {(previewProduct.contractSize===null||previewProduct.contractSize===undefined||previewProduct.contractSize==="")?"—":String(previewProduct.contractSize)}</div>
+              <div>Series match: {seriesMatch}</div>
+            </div>
+          )}
+          {csizeDiffers&&<div className="text-[10px] text-orange mt-1">Contract size differs — verify before creating any draft.</div>}
           {(sizeCheck||deriv)&&<div className="text-[10px] text-orange mt-1.5">Check symbol and contract size before using this preview.</div>}
           {nameAloneRisk&&<div className="text-[10px] text-orange mt-0.5">Do not map by name alone.</div>}
           <div className="text-[10px] text-muted mt-1.5">Local preview only — does not change MT5, Supabase, or Journal.</div>
