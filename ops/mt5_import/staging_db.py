@@ -148,3 +148,35 @@ class StagingDB:
         )
         _, _, rows = self._request("PATCH", STAGING, q, body=patch, prefer="return=representation")
         return len(rows or [])
+
+    # -- 0C-3b close/partial DEAL surface (insert-once IMMUTABLE — NO patch_deal) ---------------
+    # Idempotency key = (user_id, source_account, deal_id) with kind in ('close','partial')
+    # (Phase 0A mt5_staging_deal_uniq is PARTIAL -> no upsert/on_conflict; explicit SELECT->INSERT).
+    def _deal_key_query(self, user_id, source_account, deal_id, extra=""):
+        return (f"?kind=in.(close,partial)&user_id={self._eq(user_id)}"
+                f"&source_account={self._eq(source_account)}&deal_id={self._eq(deal_id)}{extra}")
+
+    def select_deals_by_key(self, user_id, source_account, deal_id):
+        """Return ALL existing close/partial rows for the exact deal key (0 or 1 normally; >1 only if
+        the DB were inconsistent). The caller inspects `kind` for close/partial mismatch. Never patched."""
+        q = self._deal_key_query(user_id, source_account, deal_id, extra="&select=id,deal_id,kind,state&limit=5")
+        _, _, rows = self._request("GET", STAGING, q)
+        return rows or []
+
+    def count_deal_by_scope(self, user_id, source_account) -> int:
+        q = (f"?kind=in.(close,partial)&user_id={self._eq(user_id)}"
+             f"&source_account={self._eq(source_account)}&select=deal_id")
+        _, headers, _ = self._request("GET", STAGING, q, prefer="count=exact", range_header="0-0")
+        return _parse_total(headers.get("Content-Range", ""))
+
+    def count_deal_by_key(self, user_id, source_account, deal_id) -> int:
+        q = self._deal_key_query(user_id, source_account, deal_id, extra="&select=deal_id")
+        _, headers, _ = self._request("GET", STAGING, q, prefer="count=exact", range_header="0-0")
+        return _parse_total(headers.get("Content-Range", ""))
+
+    def insert_deal(self, sanitized_row: dict):
+        """Plain INSERT (NO upsert/on_conflict). Refuses anything but close/partial. 409 -> DuplicateInsert."""
+        if sanitized_row.get("kind") not in ("close", "partial"):
+            raise StagingDBError("insert_deal refuses a non-close/partial row")
+        _, _, rows = self._request("POST", STAGING, body=sanitized_row, prefer="return=representation")
+        return rows[0] if rows else None

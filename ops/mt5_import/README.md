@@ -180,8 +180,48 @@ python ops/mt5_import/writer.py --days 7 --user-id <uuid> --source-account <mt5_
 `--position-id` targets a single open (handy for the first smoke when live opens > 3); if not found
 among eligible opens it STOPs. **Writer logs can be account-bearing — do not paste/share them.**
 
+## `writer.py --scope deals` — 0C-3b CLOSE/PARTIAL deal staging writer
+Same file, same 3-key gate (`--write` + `--confirm WRITE_STAGING` + `MT5_WRITE=1`), same identity /
+source-account / `--max-write-count` machinery — selected with **`--scope deals`** (default stays
+`--scope open` = 0C-3a, byte-unchanged).
+
+- **Writes only `kind in ('close','partial')`** to `mt5_import_staging`. Today the 0C-2 mapper emits
+  only `close` (partial deferred — `deal_id` keys both identically); `partial` is accepted
+  **structurally** for forward-compat. **Never** writes open / `balance` / `unknown` (all reported as
+  ignored counters), never cursor, never groups, never RPC, never THUS tables.
+- **Idempotency key:** `(user_id, source_account, deal_id)` with `kind in ('close','partial')`
+  (Phase 0A `mt5_staging_deal_uniq` is PARTIAL → **no** upsert/`on_conflict`). Strategy:
+  SELECT exact deal key → absent: INSERT sanitized row → present (same kind): duplicate no-op →
+  INSERT 409 race: re-SELECT, no-op. **Deals are insert-once IMMUTABLE — there is NO `patch_deal`.**
+- **close/partial mismatch guard:** if `deal_id` already exists staged as the *other* kind, the writer
+  **fails loud** (non-zero) and does not insert — prevents close/partial ambiguity / duplicate facts.
+- **Sanitization** projects onto the exact staging columns, strips `writer_eligible`/`writer_skip_reason`
+  and non-schema keys, asserts close|partial + writer-eligible + required (`user_id, source_account,
+  kind, deal_id, state`). **`raw` is PRESERVED** in the DB (Phase 0A column; lossless) but the 0D-0
+  Inbox never selects it. Rows stay `state='needs_mapping'`, `product_id_candidate=null` (no resolver;
+  DELTAU26 stays SSF / `contract_size` preserved — never mapped to a stock preset).
+- **Targeting:** armed `--scope deals` **requires `--deal-id`** (one deal) and **forbids `--position-id`**
+  (one position has many deals). `--position-id` is **dry-run/report-only** narrowing (warns it may
+  match many). First smoke uses `--max-write-count 1`.
+- **Not a continuous importer:** cursor is deferred to 0C-3c, so each run **rescans the bounded
+  `--days`/window and deduplicates by deal key** (idempotent, slower-but-safe). It never reads or
+  advances `mt5_import_cursors`.
+- **0D-0 Inbox:** renders close/partial rows with the deployed UI unchanged (its `select` already
+  includes `kind, deal_id, order_id, side, volume, price, close_time, broker_profit, state,
+  product_id_candidate, contract_size, instrument_class`).
+
+```bash
+# DRY-RUN deals (no Supabase touched): prints the deal write-plan + ignored counters
+python ops/mt5_import/writer.py --scope deals --days 7 --user-id <uuid> --source-account <mt5_login> \
+    --deal-id <one_close_deal_id> --max-write-count 1
+
+# ARMED deals (writes exactly 1 close/partial row). Placeholders only — never commit a real key.
+#   set local env: SUPABASE_URL=..., SUPABASE_SERVICE_KEY=<service_role>, MT5_WRITE=1
+python ops/mt5_import/writer.py --scope deals --days 7 --user-id <uuid> --source-account <mt5_login> \
+    --deal-id <one_close_deal_id> --max-write-count 1 --write --confirm WRITE_STAGING
+```
+
 ## Next gates (NOT in this slice)
-- **0C-3b** — deal writer (`close`/`partial`, insert-once by `deal_id`).
 - **0C-3c** — balance rows + cursor (`mt5_import_cursors`); cursor advances only after every covered
   write is inserted/confirmed-duplicate.
 - **0C-3d** — open-lifecycle reconcile (`position_state` `closed`/`gone`), with a suspicious-drop guard.
