@@ -6333,25 +6333,34 @@ function _mt5RowKey(r){
 // Local-only product mapping PREVIEW (0D-3): NOT real mapping. localStorage only — no DB/RPC/draft/materialize.
 const MT5_PREVIEW_KEY="tj_mt5_inbox_product_preview";
 // Human label for a preview product chosen from the already-loaded app product list (no query).
-function _mt5PreviewLabel(p){
+// Row-aware: if the MT5 row symbol matches the product's next/current series, show that series
+// explicitly (e.g. "GOU26 — Gold Futures (next)"); otherwise show both series. product_id is unchanged.
+function _mt5PreviewLabel(p,rowSym){
   if(!p)return"";
-  const sym=p.currentContract||p.baseSymbol||p.name||p.id;
-  const extra=(p.name&&p.name!==sym)?` — ${p.name}`:"";
-  return`${sym}${extra}`;
+  const name=p.name||p.baseSymbol||p.id||"";
+  const cur=p.currentContract||"";
+  const nxt=p.nextContract||"";
+  const rs=(rowSym||"").toString().toUpperCase();
+  let contract,suffix="";
+  if(nxt&&rs&&rs===nxt.toUpperCase()){contract=nxt;suffix=" (next)";}
+  else if(cur&&rs&&rs===cur.toUpperCase()){contract=cur;suffix=" (current)";}
+  else if(cur&&nxt){contract=`${cur} / ${nxt}`;}
+  else{contract=cur||p.baseSymbol||name||p.id;}
+  return(name&&name!==contract)?`${contract} — ${name}${suffix}`:`${contract}${suffix}`;
 }
 // Preview controls: product dropdown if the app already has products loaded, else a tiny text input.
 // onSet(product_id|null,label) / onClear() — both write ONLY localStorage in the parent. No network.
-function Mt5PreviewControls({preview,products,onSet,onClear}){
+function Mt5PreviewControls({preview,products,onSet,onClear,rowSym}){
   const[draft,setDraft]=useState("");
   const hasProducts=Array.isArray(products)&&products.length>0;
   if(hasProducts){
     return(
       <div className="flex flex-wrap items-center gap-1.5">
         <select value={(preview&&preview.product_id)||""}
-          onChange={e=>{const pid=e.target.value;if(!pid){onClear&&onClear();return;}const p=products.find(x=>String(x.id)===String(pid));onSet&&onSet(pid,_mt5PreviewLabel(p));}}
+          onChange={e=>{const pid=e.target.value;if(!pid){onClear&&onClear();return;}const p=products.find(x=>String(x.id)===String(pid));onSet&&onSet(pid,_mt5PreviewLabel(p,rowSym));}}
           className="bg-input border border-border rounded px-2 py-1 text-[11px] text-txt max-w-full">
           <option value="">— select preview product —</option>
-          {products.map(p=><option key={p.id} value={p.id}>{_mt5PreviewLabel(p)}</option>)}
+          {products.map(p=><option key={p.id} value={p.id}>{_mt5PreviewLabel(p,rowSym)}</option>)}
         </select>
         {preview&&preview.product_id&&<button onClick={()=>onClear&&onClear()} className={clsBtn("ghost","sm")}>Clear preview</button>}
       </div>
@@ -6439,7 +6448,7 @@ function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss,products,preview,onSet
               ? <span className="text-green">Local preview: {preview.label}</span>
               : <span className="text-muted">No local preview selected</span>}
           </div>
-          <Mt5PreviewControls preview={preview} products={products} onSet={onSetPreview} onClear={onClearPreview}/>
+          <Mt5PreviewControls preview={preview} products={products} onSet={onSetPreview} onClear={onClearPreview} rowSym={r.symbol_raw||r.normalized_symbol}/>
           {(sizeCheck||deriv)&&<div className="text-[10px] text-orange mt-1.5">Check symbol and contract size before using this preview.</div>}
           {nameAloneRisk&&<div className="text-[10px] text-orange mt-0.5">Do not map by name alone.</div>}
           <div className="text-[10px] text-muted mt-1.5">Local preview only — does not change MT5, Supabase, or Journal.</div>
