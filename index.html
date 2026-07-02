@@ -1014,6 +1014,131 @@ async function externalizeTradeImages(authUid,trade){
   return{trade:out,uploaded,failed,skipped};
 }
 
+// ── P2-5-D backfill driver (DEV-GATED, browser-authenticated). NO AUTO-RUN. ──────────────────
+// Reuses shipped code only: externalizeTradeImages (data:→Storage path upload, keeps base64 on
+// failure), isTradeImageStoragePath + signTradeImagePath (read-verify), db.saveTrade (durable
+// single-row upsert). NO service_role, NO full-array writer, NO close/open commit path, NO
+// updateTrade, NO SQL/RPC. applyBatch is inert unless ALL gates pass: exposure requires
+// localStorage['tj_p2_5d_backfill_dev']==='1' at load; applyBatch additionally requires the exact
+// confirm string + an integer limit + a metrics-only manifest (per-row stale guard). status()/
+// dryRun() are READ-ONLY. Never logs base64 / tokens / signed URLs — only trade ids, counts, reasons.
+const P25D_DEV_FLAG="tj_p2_5d_backfill_dev";
+const P25D_CONFIRM="I_UNDERSTAND_P2_5D_WRITES_ARE_GATED";
+const _p25dIsDataRef=(r)=>typeof r==="string"&&r.startsWith("data:");
+const _p25dSortKeys=(v)=>Array.isArray(v)?v.map(_p25dSortKeys):(v&&typeof v==="object"?Object.keys(v).sort().reduce((o,k)=>{o[k]=_p25dSortKeys(v[k]);return o;},{}):v);
+async function _p25dSha256(str){const b=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(str));return Array.from(new Uint8Array(b)).map(x=>x.toString(16).padStart(2,"0")).join("");}
+const _p25dRawSha=(raw)=>_p25dSha256(JSON.stringify(_p25dSortKeys(raw)));   // mirrors Step-A manifest method (cross-lang number caveat noted for review)
+const _p25dImgStats=(raw)=>{                                                // counts + byte totals only — NO content
+  let count=0,bytes=0,pre=0,post=0;
+  for(const[arr,isPre] of [["preImages",true],["postImages",false]]){
+    for(const r of (raw[arr]||[])) if(_p25dIsDataRef(r)){count++;bytes+=new TextEncoder().encode(r).length;if(isPre)pre++;else post++;}
+  }
+  return{count,bytes,pre,post};
+};
+async function _p25dAuthUid(){try{const{data}=await SUPA.auth.getUser();return (data&&data.user&&data.user.id)||null;}catch{return null;}}
+async function _p25dFetchCandidates(uid){                                   // read-only; rows with any data: image ref
+  const{data,error}=await SUPA.from("trades").select("id,status,updated_at,raw").eq("user_id",uid).order("id",{ascending:true});
+  if(error)throw new Error("candidate fetch failed");
+  const out=[];
+  for(const row of (data||[])){const raw=row.raw||{};const s=_p25dImgStats(raw);if(s.count>0)out.push({id:row.id,status:row.status,updated_at:row.updated_at,raw,stats:s});}
+  return out;
+}
+const _p25dManifestIndex=(m)=>{ if(!m||!Array.isArray(m.perRow))return null; const x=new Map(); for(const r of m.perRow)x.set(String(r.tradeId),r); return x; };
+async function _p25dStaleGuard(cand,mrow){                                  // fail-closed; STOP on any mismatch
+  if(!mrow)return{ok:false,reason:"id_not_in_manifest"};
+  if(cand.status!=="closed")return{ok:false,reason:"status_not_closed"};
+  if(String(cand.updated_at)!==String(mrow.updated_at))return{ok:false,reason:"updated_at_mismatch"};
+  if(cand.stats.count!==mrow.imageCount)return{ok:false,reason:"image_count_mismatch"};
+  if(cand.stats.bytes!==mrow.base64StringBytes)return{ok:false,reason:"byte_count_mismatch"};
+  if((await _p25dRawSha(cand.raw))!==mrow.rawSha256)return{ok:false,reason:"raw_sha_mismatch"};
+  return{ok:true};
+}
+function _p25dVerifyDelta(before,after){                                    // allow ONLY image data:→path; all else byte-equal
+  const B={...before},A={...after};
+  for(const f of ["preImages","postImages"]){
+    const b=before[f]||[],a=after[f]||[];
+    if(b.length!==a.length)return{ok:false,reason:f+"_length_changed"};
+    for(let i=0;i<b.length;i++){
+      if(_p25dIsDataRef(b[i])){ if(!isTradeImageStoragePath(a[i]))return{ok:false,reason:f+"_data_not_replaced_by_path"}; }
+      else if(a[i]!==b[i])return{ok:false,reason:f+"_nonimage_ref_changed"};
+    }
+    for(const r of a) if(_p25dIsDataRef(r))return{ok:false,reason:f+"_data_ref_remains"};
+    delete B[f];delete A[f];
+  }
+  if(JSON.stringify(_p25dSortKeys(B))!==JSON.stringify(_p25dSortKeys(A)))return{ok:false,reason:"non_image_field_changed"};
+  return{ok:true};
+}
+async function _p25dDryRun(opts){                                           // READ-ONLY
+  const midx=_p25dManifestIndex(opts&&opts.manifest);
+  if(!midx){console.warn("[p2-5-d] dryRun needs opts.manifest (metrics-only, perRow[]).");return{ok:false,blocked:"manifest"};}
+  const uid=await _p25dAuthUid(); if(!uid){console.warn("[p2-5-d] dryRun: no auth session.");return{ok:false,blocked:"auth"};}
+  let cands; try{cands=await _p25dFetchCandidates(uid);}catch(e){console.warn("[p2-5-d] dryRun STOP: candidate fetch failed");return{ok:false,stop:"fetch"};}
+  let wouldProcess=0; const mismatches=[];
+  for(const c of cands){const g=await _p25dStaleGuard(c,midx.get(String(c.id))); if(g.ok)wouldProcess++; else mismatches.push({rowId:String(c.id),reason:g.reason});}
+  const out={ok:true,candidateRows:cands.length,manifestRows:midx.size,wouldProcess,mismatchCount:mismatches.length,mismatches,rowIds:cands.map(c=>String(c.id))};
+  console.warn("[p2-5-d] dryRun",{candidateRows:out.candidateRows,wouldProcess,mismatchCount:out.mismatchCount});
+  return out;
+}
+async function _p25dApplyBatch(confirmString,opts){                         // WRITE-CAPABLE — fully gated; NOT auto-run
+  if(confirmString!==P25D_CONFIRM){console.warn("[p2-5-d] blocked: exact confirm string required.");return{ok:false,blocked:"confirm"};}
+  let flag=null; try{flag=localStorage.getItem(P25D_DEV_FLAG);}catch{}
+  if(flag!=="1"){console.warn("[p2-5-d] blocked: dev flag tj_p2_5d_backfill_dev not '1'.");return{ok:false,blocked:"dev_flag"};}
+  const limit=opts&&opts.limit;
+  if(typeof limit!=="number"||!Number.isInteger(limit)||limit<1){console.warn("[p2-5-d] blocked: opts.limit (integer >=1) required.");return{ok:false,blocked:"limit"};}
+  const midx=_p25dManifestIndex(opts&&opts.manifest);
+  if(!midx){console.warn("[p2-5-d] blocked: opts.manifest (metrics-only, perRow[]) required.");return{ok:false,blocked:"manifest"};}
+  const uid=await _p25dAuthUid(); if(!uid){console.warn("[p2-5-d] blocked: no authenticated session.");return{ok:false,blocked:"auth"};}
+  let cands; try{cands=await _p25dFetchCandidates(uid);}catch(e){console.warn("[p2-5-d] STOP: candidate fetch failed");return{ok:false,stop:"fetch"};}
+  const report={processed:0,skipped:0,failed:0,uploadedPaths:0,remainingDataRefs:0,rowIds:[]};
+  let done=0;
+  for(const cand of cands){
+    if(done>=limit)break;
+    const g=await _p25dStaleGuard(cand,midx.get(String(cand.id)));
+    if(!g.ok){console.warn("[p2-5-d] STOP row "+cand.id+": "+g.reason);return{ok:false,stop:g.reason,rowId:String(cand.id),...report};}
+    done++;
+    let ext;
+    try{ const r=await externalizeTradeImages(uid,cand.raw); ext=r.trade;
+         if(r.failed>0){console.warn("[p2-5-d] STOP row "+cand.id+": upload_failed (base64 kept)");return{ok:false,stop:"upload_failed",rowId:String(cand.id),...report};}
+    }catch(e){console.warn("[p2-5-d] STOP row "+cand.id+": externalize_threw");return{ok:false,stop:"externalize_threw",rowId:String(cand.id),...report};}
+    let newPaths=0,remain=0;
+    for(const f of ["preImages","postImages"]){
+      const before=cand.raw[f]||[],after=ext[f]||[];
+      for(let i=0;i<after.length;i++){
+        if(_p25dIsDataRef(after[i])){remain++;}
+        else if(_p25dIsDataRef(before[i])&&isTradeImageStoragePath(after[i])){
+          newPaths++;
+          const signed=await signTradeImagePath(after[i]);   // read-verify; URL never printed
+          if(!signed){console.warn("[p2-5-d] STOP row "+cand.id+": path_not_signable");return{ok:false,stop:"path_not_signable",rowId:String(cand.id),...report};}
+        }
+      }
+    }
+    if(remain>0){report.remainingDataRefs+=remain;console.warn("[p2-5-d] STOP row "+cand.id+": data_ref_remains_after_success");return{ok:false,stop:"data_ref_remains",rowId:String(cand.id),...report};}
+    const res=await db.saveTrade(uid,ext);   // durable single-row (NOT full-array, NOT commit path, NOT updateTrade)
+    if(!res||!res.ok){console.warn("[p2-5-d] STOP row "+cand.id+": save_failed"+(res&&res.guard?(" ("+res.guard+")"):""));return{ok:false,stop:"save_failed",rowId:String(cand.id),...report};}
+    const{data:rr,error:rrErr}=await SUPA.from("trades").select("raw,status").eq("user_id",uid).eq("id",cand.id).maybeSingle();
+    if(rrErr||!rr||!rr.raw){console.warn("[p2-5-d] STOP row "+cand.id+": reread_failed");return{ok:false,stop:"reread_failed",rowId:String(cand.id),...report};}
+    if(rr.status!=="closed"){console.warn("[p2-5-d] STOP row "+cand.id+": status_changed");return{ok:false,stop:"status_changed",rowId:String(cand.id),...report};}
+    const dv=_p25dVerifyDelta(cand.raw,rr.raw);
+    if(!dv.ok){console.warn("[p2-5-d] STOP row "+cand.id+": delta_"+dv.reason);return{ok:false,stop:"delta_"+dv.reason,rowId:String(cand.id),...report};}
+    report.processed++;report.uploadedPaths+=newPaths;report.rowIds.push(String(cand.id));
+    console.warn("[p2-5-d] row ok "+cand.id+" (+"+newPaths+" paths)");
+  }
+  console.warn("[p2-5-d] batch complete",{processed:report.processed,uploadedPaths:report.uploadedPaths,rowIds:report.rowIds});
+  return{ok:true,...report};
+}
+function _p25dStatus(){
+  let flag=null; try{flag=localStorage.getItem(P25D_DEV_FLAG);}catch{}
+  const s={devFlagSet:flag==="1",writesGated:true,confirmStringExpected:P25D_CONFIRM,manifestRequired:true,
+    usage:"dryRun({manifest}) and status() are read-only. applyBatch('"+P25D_CONFIRM+"',{limit:1,manifest:<metrics-only manifest object>}) — dev flag must be '1', starts safe at limit 1."};
+  console.warn("[p2-5-d] status",{devFlagSet:s.devFlagSet,writesGated:true});
+  return s;
+}
+// Exposure itself is gated: the driver object is only attached when the dev flag is set at load.
+try{ if(localStorage.getItem(P25D_DEV_FLAG)==="1"){
+  window.__tjP25DBackfill={status:_p25dStatus,dryRun:_p25dDryRun,applyBatch:_p25dApplyBatch};
+  console.warn("[p2-5-d] dev driver exposed (flag set). applyBatch still requires confirm string + limit + manifest.");
+} }catch(e){/* localStorage unavailable — driver simply not exposed */}
+
 const clsInput="w-full bg-input border border-border rounded-lg px-3 py-2 text-txt text-sm focus:outline-none focus:border-yellow/60 focus:ring-1 focus:ring-yellow/20 transition placeholder-muted";
 // Sizing for long-form pre/post note textareas — comfortable for full templates,
 // capped to 50vh so Save/Cancel stays reachable inside modals. Mobile-safe.
