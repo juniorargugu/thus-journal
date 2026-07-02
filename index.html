@@ -3445,6 +3445,75 @@ function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authU
     </div>
   );
 }
+// ─── G2 Trade-Group mock (render-only, default-off via localStorage tj_trade_group_mock) ──
+// Proves the Trade Grouping DISPLAY model only. It NEVER injects group_id into any trade object
+// or action path, never persists, never writes localStorage, and never touches a P/L reducer.
+// mockGroups are a separate render-only structure: [{groupId, childIds}]. Child PositionCards keep
+// rendering with the ORIGINAL trade objects (this card is purely additive, above the untouched grid).
+const _groupFamilyKey=(t)=>String((t&&t.productId)||"").replace(/_next$/,"")||"(unknown)";
+// Bucket open trades by family+direction; keep only buckets with >=2 members. Deterministic
+// (follows openTrades order). childIds reference existing ids — no trade object is copied or mutated.
+const getTradeMockGroups=(openTrades)=>{
+  const buckets=new Map();
+  (openTrades||[]).forEach(t=>{
+    const key=_groupFamilyKey(t)+"||"+String((t&&t.direction)||"");
+    if(!buckets.has(key))buckets.set(key,[]);
+    buckets.get(key).push(t.id);
+  });
+  const groups=[];
+  for(const[key,ids]of buckets){ if(ids.length>=2)groups.push({groupId:"mock-"+key,childIds:ids.slice()}); }
+  return groups;
+};
+// Pure display summary — group totals computed at RENDER time only, via canonical per-trade helpers.
+// Never stored, never fed back into reducers or saves.
+const buildGroupCardSummary=(childTrades,products,livePrices)=>{
+  const kids=childTrades||[];
+  const fams=[...new Set(kids.map(_groupFamilyKey))];
+  const dirs=[...new Set(kids.map(t=>t&&t.direction))];
+  const mixed=fams.length>1||dirs.length>1;
+  const prod=resolveProduct(products||[],kids[0]&&kids[0].productId);
+  const friendly=prod?(prod.name||prod.baseSymbol||prod.id):null;   // no fabrication when unresolved
+  const seriesSet=[...new Set(kids.map(t=>t&&t.contractCode).filter(Boolean))].join(" / ");
+  let label,verifyHint=null;
+  if(mixed){label="Mixed group — "+kids.length+" trades";verifyHint="mixed family/direction — verify";}
+  else if(!prod){label=(fams[0]||"unknown")+" "+(dirs[0]||"")+(seriesSet?" — "+seriesSet:"");verifyHint="unknown product id — verify";}
+  else{label=friendly+" "+(dirs[0]||"")+(seriesSet?" — "+seriesSet:"");}
+  const anyOpen=kids.some(t=>t&&t.status==="open");
+  const totalContracts=kids.reduce((s,t)=>s+((t&&t.contracts)||0),0);
+  const totalRemaining=kids.reduce((s,t)=>s+(((t&&(t.remainingContracts!=null?t.remainingContracts:t.contracts)))||0),0);
+  let displayUnreal=0;   // display-only; mirrors PagePositions per-leg unrealized (no reducer touched)
+  kids.forEach(t=>{
+    if(!t||t.status!=="open")return;
+    const p=resolveProduct(products||[],t.productId);if(!p)return;
+    const lp=getLivePrice(livePrices||{},t,p);
+    const cp=lp!=null?lp:(t.currentPrice||t.entryPrice);
+    displayUnreal+=calcPL(p,t.contracts,t.entryPrice,cp,t.direction);
+  });
+  return{label,verifyHint,childCount:kids.length,status:anyOpen?"open":"closed",totalContracts,totalRemaining,displayUnreal};
+};
+// Read-only summary card. Renders ABOVE the untouched open-positions grid; does NOT intercept child actions.
+function GroupCard({childTrades,products,livePrices}){
+  const s=buildGroupCardSummary(childTrades,products,livePrices);
+  const plCls=s.displayUnreal>0?"text-green":(s.displayUnreal<0?"text-red":"text-muted");
+  return(
+    <div className="bg-card border border-yellow/40 rounded-2xl p-4">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[10px] uppercase tracking-wide text-yellow border border-yellow/40 rounded px-1.5 py-0.5">Group · mock</span>
+          <span className="font-semibold text-txt truncate">{s.label}</span>
+        </div>
+        <span className={`text-[10px] uppercase px-1.5 py-0.5 rounded border ${s.status==="open"?"text-green border-green/40":"text-muted border-border"}`}>{s.status}</span>
+      </div>
+      {s.verifyHint&&<div className="mt-1 text-xs text-orange">⚠ {s.verifyHint}</div>}
+      <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
+        <div><div className="text-muted text-xs">Legs</div><div className="text-txt font-medium">{s.childCount}</div></div>
+        <div><div className="text-muted text-xs">Contracts</div><div className="text-txt font-medium">{s.totalRemaining} / {s.totalContracts}</div></div>
+        <div><div className="text-muted text-xs">Unrealized (display)</div><div className={`font-medium ${plCls}`}>{fmtTHB(s.displayUnreal)}</div></div>
+      </div>
+      <div className="mt-2 text-[10px] text-muted">read-only summary · child cards below remain fully actionable</div>
+    </div>
+  );
+}
 function PagePositions({trades,products,productRegistry,balance,portfolio,onCommitOpen,onCommitExecuteDraft,onCommitClose,onCommitUpdate,onCommitMerge,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
   const[showForm,setShowForm]=useState(false);
   const[editTrade,setEditTrade]=useState(null);
@@ -3461,6 +3530,9 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onComm
   const openTrades=useMemo(()=>trades.filter(t=>t.status==="open"),[trades]);
   const draftTrades=useMemo(()=>trades.filter(t=>t.status==="draft"),[trades]);
   const closedTrades=useMemo(()=>trades.filter(t=>t.status==="closed"),[trades]);
+  // G2 render-only trade-group mock — READ-ONLY flag; no code writes tj_trade_group_mock. Default off.
+  const mockGroupsOn=useMemo(()=>{try{return localStorage.getItem("tj_trade_group_mock")==="1";}catch{return false;}},[]);
+  const mockGroups=useMemo(()=>mockGroupsOn?getTradeMockGroups(openTrades):[],[mockGroupsOn,openTrades]);
 
   const livePrices=livePricesProp||{};
   const liveTimestamps=liveTimestampsProp||{};
@@ -3664,6 +3736,10 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onComm
       <section>
         <IMAlertBanner trades={trades} products={products} balance={balance} livePrices={livePrices} liveTimestamps={liveTimestamps}/>
         <h2 className="font-semibold text-txt mb-3 flex items-center justify-between">Open Positions <span className="text-muted font-normal text-sm">({openTrades.length})</span><button onClick={()=>fetchPricesFn&&fetchPricesFn()} className="text-xs text-muted hover:text-yellow transition px-2 py-0.5 rounded hover:bg-input font-normal">🔄 Refresh</button></h2>
+        {mockGroupsOn&&(mockGroups.length>0
+          ?<div className="space-y-2 mb-3">{mockGroups.map(g=>{const kids=g.childIds.map(id=>openTrades.find(t=>t.id===id)).filter(Boolean);return<GroupCard key={g.groupId} childTrades={kids} products={products} livePrices={livePrices}/>;})}</div>
+          :<div className="mb-3 text-xs text-muted bg-card border border-dashed border-border rounded-lg px-3 py-2">🧪 Trade-group mock (dev): ไม่มีกลุ่ม — ต้องมี open positions ≥2 ที่ product+direction เดียวกัน</div>
+        )}
         {openTrades.length===0
           ?<div className="bg-card border border-border border-dashed rounded-2xl p-10 text-center space-y-3">
             <div className="text-4xl">📭</div>
