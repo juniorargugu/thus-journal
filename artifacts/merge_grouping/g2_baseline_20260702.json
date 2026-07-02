@@ -1,0 +1,270 @@
+{
+  "schemaVersion": "g2-baseline-v2",
+  "capturedAt": "2026-07-02T06:30:12.872Z",
+  "sourceCommit": "84cd77e",
+  "originMain": "59795e2",
+  "tradesSha256": "9eacdb45076c4959954001c00fec796767232ceac55bdea39ac1e3891662e19d",
+  "tradeCount": 127,
+  "openTradeCount": 5,
+  "closedTradeCount": 122,
+  "draftTradeCount": 0,
+  "realizedPL_total": -261608.99999999919,
+  "unrealizedPL_total": 364350.0000000008,
+  "equity": 1608526.560000002,
+  "balance": 1244176.560000001,
+  "hwm": 2998957.1800000016,
+  "winRate": 32.78688524590164,
+  "dashboardSummary": {
+    "winRate": 32.78688524590164,
+    "winsCount": 40,
+    "lossesCount": 46,
+    "beCount": 36,
+    "totalTrades": 122,
+    "pf": 0.9447637737788493,
+    "rr": 1.0864783398456765,
+    "avgWin": 102536.835,
+    "avgLoss": 94375.40652173916,
+    "maxDDAbs": 2128235,
+    "maxDDPct": 70.96583486397091,
+    "peakEquity": 2998957.1800000016,
+    "totalCommission": 45367.99999999999,
+    "largestWin": 538942.8,
+    "largestLoss": -422266,
+    "totalWin": 4101473.4000000004,
+    "totalLoss": -4341268.700000001
+  },
+  "calendarDailyPLs": {
+    "2025-11-04": {
+      "pnl": -93465.49999999968,
+      "count": 5
+    },
+    "2025-11-21": {
+      "pnl": -37393.86999999956,
+      "count": 3
+    },
+    "2025-10-20": {
+      "pnl": 14162.500000000538,
+      "count": 10
+    },
+    "2026-02-09": {
+      "pnl": 110760.00000000047,
+      "count": 3
+    },
+    "2026-01-27": {
+      "pnl": 485075.1999999999,
+      "count": 1
+    },
+    "2025-09-22": {
+      "pnl": 106749.2000000003,
+      "count": 3
+    },
+    "2025-09-11": {
+      "pnl": -50355.00000000007,
+      "count": 5
+    },
+    "2025-10-15": {
+      "pnl": 33671.49999999967,
+      "count": 4
+    },
+    "2026-04-29": {
+      "pnl": 69004.60000000006,
+      "count": 2
+    },
+    "2026-02-02": {
+      "pnl": -14896.000000000106,
+      "count": 1
+    },
+    "2026-04-28": {
+      "pnl": -103583.10000000011,
+      "count": 2
+    },
+    "2026-05-05": {
+      "pnl": -45.999999999756255,
+      "count": 2
+    },
+    "2025-10-09": {
+      "pnl": -578.0000000000769,
+      "count": 1
+    },
+    "2025-08-07": {
+      "pnl": -1384.6999999999455,
+      "count": 2
+    },
+    "2025-09-18": {
+      "pnl": -23098.00000000005,
+      "count": 5
+    },
+    "2026-03-05": {
+      "pnl": -105135,
+      "count": 3
+    },
+    "2025-11-28": {
+      "pnl": -9057.699999999782,
+      "count": 1
+    },
+    "2025-09-20": {
+      "pnl": -5063.100000000081,
+      "count": 3
+    },
+    "2026-05-07": {
+      "pnl": 41646.9,
+      "count": 3
+    },
+    "2026-03-09": {
+      "pnl": -1518735.0000000002,
+      "count": 9
+    },
+    "2025-09-03": {
+      "pnl": -54055.40000000002,
+      "count": 2
+    },
+    "2025-09-30": {
+      "pnl": 95411.5,
+      "count": 1
+    },
+    "2025-11-07": {
+      "pnl": -35169.099999999846,
+      "count": 2
+    },
+    "2025-10-28": {
+      "pnl": -240960.10000000027,
+      "count": 6
+    },
+    "2026-01-30": {
+      "pnl": 161380.000000001,
+      "count": 2
+    },
+    "2025-10-29": {
+      "pnl": 532.4999999999545,
+      "count": 1
+    },
+    "2026-05-15": {
+      "pnl": 105420.80000000013,
+      "count": 2
+    },
+    "2025-11-24": {
+      "pnl": -535.4,
+      "count": 2
+    },
+    "2026-04-17": {
+      "pnl": 183364.6,
+      "count": 1
+    },
+    "2025-11-25": {
+      "pnl": -16885.4,
+      "count": 2
+    },
+    "2025-10-06": {
+      "pnl": 64763.99999999997,
+      "count": 1
+    },
+    "2026-01-19": {
+      "pnl": -41377.99999999985,
+      "count": 1
+    },
+    "2026-01-26": {
+      "pnl": 1401200.9200000004,
+      "count": 3
+    },
+    "2025-10-03": {
+      "pnl": -25668.469999999907,
+      "count": 3
+    },
+    "2025-10-08": {
+      "pnl": -267.7,
+      "count": 1
+    },
+    "2025-10-01": {
+      "pnl": -30325.399999999918,
+      "count": 2
+    },
+    "2026-03-25": {
+      "pnl": -12805.599999999986,
+      "count": 1
+    },
+    "2026-02-12": {
+      "pnl": 13654.599999999782,
+      "count": 1
+    },
+    "2025-09-29": {
+      "pnl": 61841.89999999995,
+      "count": 4
+    },
+    "2025-10-14": {
+      "pnl": -152813.0999999998,
+      "count": 2
+    },
+    "2025-12-23": {
+      "pnl": -5170.000000000136,
+      "count": 3
+    },
+    "2025-11-27": {
+      "pnl": -267.7,
+      "count": 1
+    },
+    "2026-03-16": {
+      "pnl": -620882.0000000003,
+      "count": 2
+    },
+    "2026-03-20": {
+      "pnl": -549511.9999999998,
+      "count": 2
+    },
+    "2025-10-21": {
+      "pnl": 36332.3,
+      "count": 1
+    },
+    "2025-12-17": {
+      "pnl": -6687.699999999891,
+      "count": 1
+    },
+    "2026-01-13": {
+      "pnl": 326474,
+      "count": 2
+    },
+    "2025-10-10": {
+      "pnl": 64269.230000000105,
+      "count": 2
+    }
+  },
+  "perProductRealizedPL": {
+    "gold": 127717.00000000001,
+    "usdjpy": 118605,
+    "silver": 1161556,
+    "s50": -1669487
+  },
+  "perProductUnrealizedPL": {
+    "silver": -33750,
+    "s50": 398100.0000000008
+  },
+  "exportRowsLength": 127,
+  "livePriceKeysSnapshot": [
+    "gold",
+    "gold_m26",
+    "gold_u26",
+    "gold_z26",
+    "s50",
+    "s50_m26",
+    "s50_u26",
+    "s50_z26",
+    "silver_m26",
+    "silver_u26",
+    "silver_z26",
+    "usdjpy",
+    "usdjpy_fx",
+    "usdjpy_m26",
+    "usdjpy_u26",
+    "xagusd",
+    "xauusd"
+  ],
+  "notes": [
+    "unrealizedPL_total + perProductUnrealizedPL depend on tj_live_prices snapshot at capture; live prices drift and may differ from Dashboard render.",
+    "Take a Dashboard screenshot at the same instant as snippet run for visual cross-check.",
+    "balance = sum(deposits/withdrawals) + realizedPL_total. equity = balance + unrealizedPL_total. Matches calcCBStatus.",
+    "tradesSha256 = SHA-256 of JSON.stringify(localStorage.tj_trades) at capture. Detects 'data changed' independent of 'calc changed'.",
+    "Calendar daily P/L includes partial closes from merged open trades (legacy isMerged compatibility).",
+    "perProduct grouping key strips _next suffix per ROADMAP validation rules.",
+    "dashboardSummary mirrors buildCanonicalMetrics. nets array omitted to keep JSON small.",
+    "schemaVersion g2-baseline-v2 adds sourceCommit, originMain, draftTradeCount vs v1."
+  ]
+}
