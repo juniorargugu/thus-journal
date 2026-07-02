@@ -1,0 +1,337 @@
+{
+  "schemaVersion": "g2-baseline-v3",
+  "capturedAt": "2026-07-02T08:11:29.974Z",
+  "sourceCommit": "0695035",
+  "originMain": "59795e2",
+  "captureSource": "db_raw_browser_auth",
+  "priceSnapshotSource": "localStorage.tj_live_prices",
+  "canonicalTradesSha256": "80703a5731d3a5df88effb454966ee84b2244dd888a8539f476189fd115b8d84",
+  "livePriceSnapshotSha256": "17298dcc1844bf915ccf1584aa8fe9c417cf30d98d22c8b584416ff1719889f6",
+  "tradeCount": 153,
+  "openTradeCount": 1,
+  "closedTradeCount": 152,
+  "draftTradeCount": 0,
+  "realizedPL_total": -257319.9599999994,
+  "unrealizedPL_total": -47190.00000000006,
+  "equity": 1201275.6000000006,
+  "balance": 1248465.6000000006,
+  "hwm": 2998957.1800000016,
+  "winRate": 30.92105263157895,
+  "dashboardSummary": {
+    "winRate": 30.92105263157895,
+    "winsCount": 47,
+    "lossesCount": 62,
+    "beCount": 43,
+    "totalTrades": 152,
+    "pf": 0.9531637307295016,
+    "rr": 1.2573649213878533,
+    "avgWin": 104516.13702127659,
+    "avgLoss": 83123.15322580644,
+    "maxDDAbs": 2128235,
+    "maxDDPct": 70.96583486397091,
+    "peakEquity": 2998957.1800000016,
+    "totalCommission": 63697.09999999999,
+    "largestWin": 538942.8,
+    "largestLoss": -422266,
+    "totalWin": 4912258.4399999995,
+    "totalLoss": -5153635.499999999
+  },
+  "calendarDailyPLs": {
+    "2025-09-11": {
+      "pnl": -50355.00000000007,
+      "count": 5
+    },
+    "2025-09-18": {
+      "pnl": -23098.00000000005,
+      "count": 5
+    },
+    "2025-08-07": {
+      "pnl": -1384.6999999999455,
+      "count": 2
+    },
+    "2025-09-03": {
+      "pnl": -54055.40000000002,
+      "count": 2
+    },
+    "2025-09-22": {
+      "pnl": 106749.2000000003,
+      "count": 3
+    },
+    "2025-09-29": {
+      "pnl": 61841.89999999995,
+      "count": 4
+    },
+    "2025-09-20": {
+      "pnl": -5063.100000000082,
+      "count": 3
+    },
+    "2025-09-30": {
+      "pnl": 95411.5,
+      "count": 1
+    },
+    "2025-10-01": {
+      "pnl": -30325.399999999918,
+      "count": 2
+    },
+    "2025-10-03": {
+      "pnl": -25668.469999999907,
+      "count": 3
+    },
+    "2025-10-06": {
+      "pnl": 64763.99999999997,
+      "count": 1
+    },
+    "2025-10-10": {
+      "pnl": 64269.230000000105,
+      "count": 2
+    },
+    "2025-10-20": {
+      "pnl": 14162.500000000538,
+      "count": 10
+    },
+    "2025-10-08": {
+      "pnl": -267.7,
+      "count": 1
+    },
+    "2025-10-09": {
+      "pnl": -578.0000000000769,
+      "count": 1
+    },
+    "2025-10-14": {
+      "pnl": -152813.0999999998,
+      "count": 2
+    },
+    "2025-10-15": {
+      "pnl": 33671.49999999967,
+      "count": 4
+    },
+    "2025-10-21": {
+      "pnl": 36332.3,
+      "count": 1
+    },
+    "2025-10-28": {
+      "pnl": -240960.10000000024,
+      "count": 6
+    },
+    "2025-10-29": {
+      "pnl": 532.4999999999545,
+      "count": 1
+    },
+    "2025-11-04": {
+      "pnl": -93465.49999999968,
+      "count": 5
+    },
+    "2025-12-23": {
+      "pnl": -5170.000000000136,
+      "count": 3
+    },
+    "2025-11-07": {
+      "pnl": -35169.099999999846,
+      "count": 2
+    },
+    "2025-11-21": {
+      "pnl": -37393.86999999956,
+      "count": 3
+    },
+    "2025-11-25": {
+      "pnl": -16885.4,
+      "count": 2
+    },
+    "2025-11-24": {
+      "pnl": -535.4,
+      "count": 2
+    },
+    "2025-11-27": {
+      "pnl": -267.7,
+      "count": 1
+    },
+    "2025-11-28": {
+      "pnl": -9057.699999999782,
+      "count": 1
+    },
+    "2026-03-09": {
+      "pnl": -1518735,
+      "count": 9
+    },
+    "2026-02-09": {
+      "pnl": 110760.00000000047,
+      "count": 3
+    },
+    "2025-12-17": {
+      "pnl": -6687.699999999891,
+      "count": 1
+    },
+    "2026-01-13": {
+      "pnl": 326474,
+      "count": 2
+    },
+    "2026-01-19": {
+      "pnl": -41377.99999999985,
+      "count": 1
+    },
+    "2026-01-26": {
+      "pnl": 1401200.9200000004,
+      "count": 3
+    },
+    "2026-01-27": {
+      "pnl": 485075.1999999999,
+      "count": 1
+    },
+    "2026-01-30": {
+      "pnl": 161380.000000001,
+      "count": 2
+    },
+    "2026-03-16": {
+      "pnl": -620882.0000000003,
+      "count": 2
+    },
+    "2026-03-20": {
+      "pnl": -549511.9999999998,
+      "count": 2
+    },
+    "2026-02-02": {
+      "pnl": -14896.000000000106,
+      "count": 1
+    },
+    "2026-02-12": {
+      "pnl": 13654.599999999782,
+      "count": 1
+    },
+    "2026-03-05": {
+      "pnl": -105135,
+      "count": 3
+    },
+    "2026-03-25": {
+      "pnl": -12805.599999999986,
+      "count": 1
+    },
+    "2026-04-29": {
+      "pnl": 69004.60000000006,
+      "count": 2
+    },
+    "2026-04-28": {
+      "pnl": -103583.10000000011,
+      "count": 2
+    },
+    "2026-04-17": {
+      "pnl": 183364.6,
+      "count": 1
+    },
+    "2026-05-05": {
+      "pnl": -45.999999999756255,
+      "count": 2
+    },
+    "2026-05-07": {
+      "pnl": 41646.9,
+      "count": 3
+    },
+    "2026-06-08": {
+      "pnl": 131062.50000000047,
+      "count": 2
+    },
+    "2026-05-15": {
+      "pnl": 105420.80000000013,
+      "count": 2
+    },
+    "2026-06-02": {
+      "pnl": 79897.50000000028,
+      "count": 1
+    },
+    "2026-05-27": {
+      "pnl": -66773.99999999999,
+      "count": 3
+    },
+    "2026-05-25": {
+      "pnl": 2422.000000000179,
+      "count": 1
+    },
+    "2026-06-04": {
+      "pnl": -4118.00000000014,
+      "count": 1
+    },
+    "2026-06-09": {
+      "pnl": -50977.49999999987,
+      "count": 3
+    },
+    "2026-06-19": {
+      "pnl": -344910.2000000001,
+      "count": 4
+    },
+    "2026-06-15": {
+      "pnl": 465073.1400000004,
+      "count": 1
+    },
+    "2026-06-22": {
+      "pnl": -13376.10000000023,
+      "count": 1
+    },
+    "2026-06-23": {
+      "pnl": -39298.19999999928,
+      "count": 1
+    },
+    "2026-06-24": {
+      "pnl": 2197.5,
+      "count": 1
+    },
+    "2026-06-25": {
+      "pnl": -20502.90000000065,
+      "count": 3
+    },
+    "2026-06-26": {
+      "pnl": -62480.80000000022,
+      "count": 1
+    },
+    "2026-06-29": {
+      "pnl": 52407.39999999987,
+      "count": 1
+    },
+    "2026-06-30": {
+      "pnl": -18852.500000000317,
+      "count": 5
+    },
+    "2026-07-01": {
+      "pnl": -107480.80000000022,
+      "count": 1
+    }
+  },
+  "perProductRealizedPL": {
+    "s50": -1507306.999999999,
+    "usdjpy": 118605,
+    "gold": 59276.639999999636,
+    "silver": 1112289.3999999992,
+    "p_1780888169972": -40183.99999999998
+  },
+  "perProductUnrealizedPL": {
+    "gold": -47190.00000000006
+  },
+  "exportRowsLength": 153,
+  "livePriceKeysSnapshot": [
+    "gold",
+    "gold_m26",
+    "gold_u26",
+    "gold_z26",
+    "s50",
+    "s50_m26",
+    "s50_u26",
+    "s50_z26",
+    "silver_m26",
+    "silver_u26",
+    "silver_z26",
+    "usdjpy",
+    "usdjpy_fx",
+    "usdjpy_m26",
+    "usdjpy_u26",
+    "xagusd",
+    "xauusd"
+  ],
+  "notes": [
+    "v3: trades captured from DB raw via authenticated browser fetch (RLS-scoped), NOT localStorage.tj_trades (which is a quota-dead fossil at ~17MB).",
+    "canonicalTradesSha256 = SHA-256 of recursively key-sorted DB raw trades ordered by id.asc. livePriceSnapshotSha256 = SHA-256 of key-sorted tj_live_prices.",
+    "PRICE-INDEPENDENT hard invariant (must byte-match post-GroupCard): realizedPL_total, winRate, hwm, dashboardSummary, calendarDailyPLs, perProductRealizedPL, exportRowsLength.",
+    "PRICE-DEPENDENT soft (compare only when livePriceSnapshotSha256 matches): unrealizedPL_total, equity, perProductUnrealizedPL, livePriceKeysSnapshot.",
+    "balance = Σ(deposits−withdrawals) + realizedPL_total. equity = balance + unrealizedPL_total (mirrors calcCBStatus).",
+    "calendarDailyPLs uses calcNetPL (formula, incl. partialCloses); realized/dashboard use tradeNetPL (broker-first) — mirrors index.html.",
+    "contractToLiveKey uses series-suffix keys (e.g. gold_m26) per index.html:4145 — corrects the v1/v2 snippet's price-key defect.",
+    "perProduct family key strips _next suffix. dashboardSummary omits nets/wins/losses arrays to keep JSON small."
+  ]
+}
