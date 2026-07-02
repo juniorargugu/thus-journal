@@ -2812,135 +2812,6 @@ function useLivePrices(products,openTrades){
   return{prices:livePrices,timestamps:liveTimestamps,errors:liveErrors,fetchNow,fetching};
 }
 
-// ─── Layer 2: Historical daily price fetch ────────────────────────────────────
-async function fetchHistoricalDaily(yahooSymbol,fromDate,toDate){
-  try{
-    const url=`/.netlify/functions/history?sym=${encodeURIComponent(yahooSymbol)}&from=${fromDate}&to=${toDate}`;
-    const res=await fetch(url);
-    if(!res.ok)throw new Error("status "+res.status);
-    const d=await res.json();
-    if(d.error)throw new Error(d.error);
-    return d.prices||{}; // { "YYYY-MM-DD": closePrice }
-  }catch(e){console.warn("[history]",yahooSymbol,e.message);return null;}
-}
-
-// ─── Layer 2: Equity HWM hook ─────────────────────────────────────────────────
-// Computes daily equity = balance + unrealized P/L of open positions
-// Uses actual Yahoo prices for each day; only for instruments where Yahoo price
-// unit matches the product's price unit (category "TXI" or product.layer2Enabled=true)
-function useEquityHWM(trades,portfolio,products,authUid){
-  const[equityHWM,setEquityHWM]=useState(null);
-  const[dailyPoints,setDailyPoints]=useState([]); // [{date,balance,equity}]
-  const[loading,setLoading]=useState(false);
-  const[error,setError]=useState(null);
-  const[lastFetched,setLastFetched]=useState(null);
-
-  const compute=useCallback(async()=>{
-    if(!trades.length||!products.length){setError("ไม่มีข้อมูล trades");return;}
-    setLoading(true);setError(null);
-
-    // 1. Compatible products (Yahoo price unit ≈ product price unit)
-    const compatProds=products.filter(p=>p.yahooSymbol&&(p.layer2Enabled===true||(p.category==="TXI"&&p.layer2Enabled!==false)));
-
-    // 2. Determine date range from all trades that use compatible products
-    const compatIds=new Set(compatProds.map(p=>p.id));
-    const compatTrades=trades.filter(t=>compatIds.has(t.productId)&&t.openDateTime);
-    if(compatTrades.length===0){setError("ไม่มี instrument ที่รองรับ Layer 2 (ต้องเป็น TXI / ตั้ง layer2Enabled=true)");setLoading(false);return;}
-
-    const minDate=compatTrades.reduce((m,t)=>t.openDateTime<m?t.openDateTime:m,compatTrades[0].openDateTime).slice(0,10);
-    const maxDate=new Date().toISOString().slice(0,10);
-
-    // 3. Load price cache from Supabase
-    let cache={};
-    if(authUid){
-      try{
-        const saved=await db.loadUserData(authUid,["tj_price_history"]);
-        if(saved.tj_price_history)cache={...saved.tj_price_history};
-      }catch{}
-    }
-
-    // 4. Fetch missing prices per compatible product
-    const newFetches={};
-    await Promise.all(compatProds.map(async(prod)=>{
-      const sym=prod.yahooSymbol;
-      const cacheKey=sym;
-      const cached=cache[cacheKey]||{};
-      // Check if we have data up to today (re-fetch if last cached date < maxDate - 1 day)
-      const cachedDates=Object.keys(cached).sort();
-      const lastCached=cachedDates[cachedDates.length-1]||"";
-      // Determine fetch range: from minDate, skipping already-cached
-      const fetchFrom=lastCached&&lastCached>=minDate?lastCached:"2024-01-01"; // fetch from start or last
-      const prices=await fetchHistoricalDaily(sym,fetchFrom,maxDate);
-      if(prices){
-        const merged={...cached,...prices};
-        cache[cacheKey]=merged;
-        newFetches[cacheKey]=merged;
-      }
-    }));
-
-    // 5. Persist updated cache to Supabase
-    if(authUid&&Object.keys(newFetches).length>0){
-      try{await db.saveUserData(authUid,"tj_price_history",cache);}catch{}
-    }
-
-    // 6. Build sorted event timeline (deposits/withdrawals + closed P/L)
-    const txEvents=(portfolio.transactions||[]).map(tx=>({
-      date:tx.date.slice(0,10),
-      delta:tx.type==="deposit"?tx.amount:-tx.amount,
-    }));
-    const tradeEvents=trades.filter(t=>t.status==="closed"&&t.exitDateTime).map(t=>{
-      const prod=resolveProduct(products,t.productId);
-      return{date:t.exitDateTime.slice(0,10),delta:tradeNetPL(t,prod)};
-    });
-    const allEvents=[...txEvents,...tradeEvents].sort((a,b)=>a.date.localeCompare(b.date));
-
-    // 7. Build set of all relevant dates (each trading day from minDate to maxDate)
-    const dateSet=new Set();
-    compatProds.forEach(prod=>{
-      const prices=cache[prod.yahooSymbol]||{};
-      Object.keys(prices).forEach(d=>{if(d>=minDate)dateSet.add(d);});
-    });
-    const sortedDates=[...dateSet].sort();
-    if(sortedDates.length===0){setError("ไม่มีข้อมูลราคาย้อนหลัง");setLoading(false);return;}
-
-    // 8. Walk dates, accumulate balance + unrealized
-    let runBal=0,evIdx=0,maxEquity=0;
-    const points=[];
-    for(const date of sortedDates){
-      // Apply all events up to and including this date
-      while(evIdx<allEvents.length&&allEvents[evIdx].date<=date){
-        runBal+=allEvents[evIdx].delta;evIdx++;
-      }
-      // Sum unrealized P/L for each compatible position open on this date
-      let unreal=0;
-      compatTrades.forEach(t=>{
-        if(!t.openDateTime)return;
-        const openDate=t.openDateTime.slice(0,10);
-        const closeDate=t.exitDateTime?t.exitDateTime.slice(0,10):"9999-12-31";
-        if(date<openDate||date>closeDate)return;
-        const prod=resolveProduct(products,t.productId);
-        if(!prod)return;
-        const sym=prod.yahooSymbol;
-        const prices=cache[sym]||{};
-        const cp=prices[date];
-        if(cp==null)return;
-        // Use raw calcPL (not net — commission already in closed P/L via tradeNetPL)
-        unreal+=calcPL(prod,t.contracts,t.entryPrice,cp,t.direction);
-      });
-      const equity=runBal+unreal;
-      if(equity>maxEquity)maxEquity=equity;
-      points.push({date,balance:runBal,equity});
-    }
-
-    setEquityHWM(maxEquity>0?maxEquity:null);
-    setDailyPoints(points);
-    setLastFetched(new Date().toISOString());
-    setLoading(false);
-  },[trades,portfolio,products,authUid]);
-
-  return{equityHWM,dailyPoints,loading,error,lastFetched,fetch:compute};
-}
-
 function TVWidget({tvSymbol,productId}){
   const idRef=useRef(`tv_${productId}_${Math.random().toString(36).slice(2)}`);
   const containerRef=useRef();
@@ -3256,7 +3127,7 @@ function StepHistoryPopup({stepNum,events,targetBalance,onClose}){
   );
 }
 
-function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authUid,equityHWM,dailyPoints,l2Loading,l2Error,l2Fetched,fetchLayer2}){
+function PageSteps({trades,products,portfolio,onPortfolioChange,livePrices,authUid}){
   const txs=portfolio?.transactions||[];
   const sorted=[...txs].sort((a,b)=>new Date(a.date)-new Date(b.date));
   const firstDeposit=sorted.find(t=>t.type==="deposit");
@@ -5414,7 +5285,7 @@ function OvertradeDet({overtrades,getUnit,balance,products}){
   );
 }
 
-function PageDashboard({trades,products,balance,portfolio,equityHWM,l2Loading,l2Error,l2Fetched,fetchLayer2}){
+function PageDashboard({trades,products,balance,portfolio}){
   const SETUP_COLORS={"ประคองตลาด":"#3B82F6","สวนเทรนด์":"#F59E0B","Sideway":"#8B5CF6","Snow Ball":"#06B6D4","Scalp":"#F97316","Run-Trend":"#0ECB81","Other":"#848E9C"};
   const PROD_COLORS={gold:"#F0B90B",s50:"#3B82F6",silver:"#9CA3AF",usdjpy:"#8B5CF6"};
   const PROD_NAME={gold:"GOLD",s50:"S50",silver:"SILVER",usdjpy:"USDJPY"};
@@ -5659,8 +5530,8 @@ function PageDashboard({trades,products,balance,portfolio,equityHWM,l2Loading,l2
             const ddPct=hwm>balNow?(hwm-balNow)/hwm*100:0;
             // HWM Equity Layer 2 card intentionally hidden 2026-05-12:
             // duplicate of canonical HWM Balance and confused by including
-            // unrealized P/L from open positions. useEquityHWM() and Yahoo
-            // fetch path kept quarantined for one release; no UI consumer.
+            // unrealized P/L from open positions. The Layer-2 equity-HWM hook +
+            // Yahoo fetch path were removed 2026-07-02 (quarantine ended); no UI consumer.
             return(
               <MetricCard label="HWM (Balance)" icon="🏔️"
                 value={fmtTHB(hwm,0)+" ฿"}
@@ -9274,9 +9145,6 @@ function App({session,onSignOut}){
     if(hwm>0&&Math.abs(hwm-(portfolio.peakEquity||0))>1)setPortfolio(p=>({...p,peakEquity:hwm}));
   },[dbReady,trades.length,portfolio.transactions]);
 
-  // ── Layer 2: Equity HWM (app-level so Dashboard + Steps can both use it) ──
-  const{equityHWM,dailyPoints,loading:l2Loading,error:l2Error,lastFetched:l2Fetched,fetch:fetchLayer2}=useEquityHWM(trades,portfolio,products,authUid);
-
   const prevStepRef=useRef(null);
   useEffect(()=>{
     if(prevStepRef.current===null){prevStepRef.current=currentStep;return;}
@@ -9732,8 +9600,8 @@ function App({session,onSignOut}){
       <main className="max-w-screen-xl mx-auto px-4 py-5">
         {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onCommitMerge={commitMerge} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
         {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onCommitImport={commitImportTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
-        {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid} equityHWM={equityHWM} dailyPoints={dailyPoints} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
-        {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio} equityHWM={equityHWM} l2Loading={l2Loading} l2Error={l2Error} l2Fetched={l2Fetched} fetchLayer2={fetchLayer2}/>}
+        {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid}/>}
+        {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio}/>}
         {page==="calendar" &&<PageCalendar  trades={trades} products={products} uid={authUid} syncNotesToCloud={syncNotesToCloud}/>}
         {page==="notes"    &&<PageNotes uid={authUid} syncNotesToCloud={syncNotesToCloud} onPatternsChange={handlePatternsChange} initialPatterns={appPatterns}/>}
         {page==="settings" &&<PageSettings portfolio={portfolio} products={products} trades={trades} onPortfolioChange={setPortfolio} onProductsChange={setProducts} showToast={showToast} showConfirm={showConfirm} authUid={authUid}/>}
