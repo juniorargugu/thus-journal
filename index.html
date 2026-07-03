@@ -1072,9 +1072,37 @@ function _p25dValidateManifest(m){                                          // f
   if(Array.isArray(m.affectedRowIds)&&m.affectedRowIds.length!==P25D_EXPECT_ROWS)return{ok:false,reason:"rowIds_len_mismatch"};
   return{ok:true};
 }
-function _p25dManifestFp(m){                                                // fingerprint to bind dryRun→apply to same manifest
-  const ids=(Array.isArray(m.affectedRowIds)?m.affectedRowIds.slice():m.perRow.map(r=>r.tradeId)).map(String).sort();
-  return JSON.stringify({ids,rows:m.affectedRowCount,imgs:m.affectedImageCount});
+function _p25dManifestFp(m){                                                // EXACT fingerprint: full canonical projection of validated manifest
+  const perRow=(m.perRow||[]).map(r=>({tradeId:String(r.tradeId),status:r.status,updated_at:r.updated_at,
+    rawSha256:r.rawSha256,imageCount:r.imageCount,preImageCount:r.preImageCount,postImageCount:r.postImageCount,
+    base64StringBytes:r.base64StringBytes})).sort((a,b)=>a.tradeId<b.tradeId?-1:(a.tradeId>b.tradeId?1:0));
+  const norm={schema:(m.schema!==undefined?m.schema:m.schemaVersion),parseVerified:m.parseVerified,gitSafetyVerified:m.gitSafetyVerified,
+    affectedRowCount:m.affectedRowCount,affectedImageCount:m.affectedImageCount,preImageCount:m.preImageCount,postImageCount:m.postImageCount,
+    affectedRowIds:(m.affectedRowIds||[]).map(String).sort(),
+    backupSha256:(m.backupSha256!==undefined?m.backupSha256:null),backupByteSize:(m.backupByteSize!==undefined?m.backupByteSize:null),perRow};
+  return JSON.stringify(_p25dSortKeys(norm));   // stable across dryRun→apply for the same validated manifest
+}
+async function _p25dFetchAll(uid){                                          // read-only; ALL user rows, indexed by String(id)
+  const{data,error}=await SUPA.from("trades").select("id,status,updated_at,raw").eq("user_id",uid);
+  if(error)throw new Error("fetch failed");
+  const map=new Map();
+  for(const row of (data||[])){const raw=row.raw||{};map.set(String(row.id),{id:row.id,status:row.status,updated_at:row.updated_at,raw,stats:_p25dImgStats(raw)});}
+  return map;
+}
+const _p25dStoragePathCount=(raw)=>{                                        // count of externalized storage-path image refs
+  let n=0; for(const arr of ["preImages","postImages"]) for(const r of (raw[arr]||[])) if(typeof r==="string"&&isTradeImageStoragePath(r))n++; return n;
+};
+async function _p25dClassify(cur,mrow){                                     // classify one manifest row vs its live state (read-only)
+  if(!cur)return{cls:"missing",reason:"row_missing"};
+  if(cur.status!=="closed")return{cls:"blocked",reason:"status_not_closed"};
+  if(cur.stats.count>0){                                                    // still has data: refs → candidate; must be pristine
+    const g=await _p25dStaleGuard(cur,mrow);
+    return g.ok?{cls:"remaining"}:{cls:"blocked",reason:g.reason};
+  }
+  // no data: refs → already externalized. Do NOT compare rawSha256/byte count (changed by design).
+  const paths=_p25dStoragePathCount(cur.raw);
+  if(paths<mrow.imageCount)return{cls:"blocked",reason:"externalized_missing_paths"};   // detects empty/missing image arrays
+  return{cls:"externalized"};
 }
 async function _p25dStaleGuard(cand,mrow){                                  // fail-closed; STOP on any mismatch
   if(!mrow)return{ok:false,reason:"id_not_in_manifest"};
@@ -1100,21 +1128,31 @@ function _p25dVerifyDelta(before,after){                                    // a
   if(JSON.stringify(_p25dSortKeys(B))!==JSON.stringify(_p25dSortKeys(A)))return{ok:false,reason:"non_image_field_changed"};
   return{ok:true};
 }
-async function _p25dDryRun(opts){                                           // READ-ONLY
+async function _p25dDryRun(opts){                                           // READ-ONLY — accounts for ALL manifest rows (partial-safe)
   _p25dLastDryRun=null;                                                     // any early bail leaves apply blocked (fail-closed)
   const manifest=opts&&opts.manifest;
   const mv=_p25dValidateManifest(manifest);
   if(!mv.ok){console.warn("[p2-5-d] dryRun blocked: manifest "+mv.reason);return{ok:false,blocked:"manifest",reason:mv.reason};}
-  const midx=_p25dManifestIndex(manifest);
   const uid=await _p25dAuthUid(); if(!uid){console.warn("[p2-5-d] dryRun: no auth session.");return{ok:false,blocked:"auth"};}
-  let cands; try{cands=await _p25dFetchCandidates(uid);}catch(e){console.warn("[p2-5-d] dryRun STOP: candidate fetch failed");return{ok:false,stop:"fetch"};}
-  let wouldProcess=0; const mismatches=[];
-  for(const c of cands){const g=await _p25dStaleGuard(c,midx.get(String(c.id))); if(g.ok)wouldProcess++; else mismatches.push({rowId:String(c.id),reason:g.reason});}
-  const allClean=(cands.length===P25D_EXPECT_ROWS&&wouldProcess===P25D_EXPECT_ROWS&&mismatches.length===0);
-  _p25dLastDryRun={manifestFp:_p25dManifestFp(manifest),candidateRows:cands.length,wouldProcess,mismatchCount:mismatches.length,allClean,ts:Date.now()};
-  const out={ok:true,candidateRows:cands.length,manifestRows:midx.size,expectedRows:P25D_EXPECT_ROWS,expectedImages:P25D_EXPECT_IMAGES,
-             wouldProcess,mismatchCount:mismatches.length,mismatches,allClean,readyForApply:allClean,rowIds:cands.map(c=>String(c.id))};
-  console.warn("[p2-5-d] dryRun",{candidateRows:out.candidateRows,wouldProcess,mismatchCount:out.mismatchCount,readyForApply:allClean});
+  let all; try{all=await _p25dFetchAll(uid);}catch(e){console.warn("[p2-5-d] dryRun STOP: fetch failed");return{ok:false,stop:"fetch"};}
+  const manifestRows=manifest.perRow.length;
+  let accountedRows=0,alreadyExternalizedRows=0,remainingDataRows=0; const mismatches=[]; const remainingIds=[];
+  for(const mrow of manifest.perRow){
+    const id=String(mrow.tradeId);
+    const c=await _p25dClassify(all.get(id),mrow);
+    if(c.cls==="missing"){mismatches.push({rowId:id,reason:c.reason});continue;}   // missing → NOT accounted
+    accountedRows++;
+    if(c.cls==="remaining"){remainingDataRows++;remainingIds.push(id);}
+    else if(c.cls==="externalized"){alreadyExternalizedRows++;}
+    else{mismatches.push({rowId:id,reason:c.reason});}
+  }
+  const wouldProcess=remainingDataRows;
+  const allClean=(accountedRows===manifestRows&&mismatches.length===0);   // all 18 present & 0 blockers
+  _p25dLastDryRun={manifestFp:_p25dManifestFp(manifest),manifestRows,accountedRows,alreadyExternalizedRows,remainingDataRows,
+                   wouldProcess,mismatchCount:mismatches.length,allClean,remainingIds:remainingIds.slice(),ts:Date.now()};
+  const out={ok:true,manifestRows,accountedRows,alreadyExternalizedRows,remainingDataRows,expectedRows:P25D_EXPECT_ROWS,expectedImages:P25D_EXPECT_IMAGES,
+             wouldProcess,mismatchCount:mismatches.length,mismatches,allClean,readyForApply:(allClean&&remainingDataRows>0),rowIds:remainingIds.slice()};
+  console.warn("[p2-5-d] dryRun",{manifestRows,accountedRows,alreadyExternalizedRows,remainingDataRows,wouldProcess,mismatchCount:mismatches.length,allClean});
   return out;
 }
 async function _p25dApplyBatch(confirmString,opts){                         // WRITE-CAPABLE — fully gated; NOT auto-run
@@ -1128,14 +1166,24 @@ async function _p25dApplyBatch(confirmString,opts){                         // W
   const mv=_p25dValidateManifest(manifest);
   if(!mv.ok){console.warn("[p2-5-d] blocked: manifest "+mv.reason);return{ok:false,blocked:"manifest",reason:mv.reason};}
   const mfp=_p25dManifestFp(manifest);
-  if(!_p25dLastDryRun||!_p25dLastDryRun.allClean){console.warn("[p2-5-d] blocked: needs a fresh successful dryRun ("+P25D_EXPECT_ROWS+"/"+P25D_EXPECT_ROWS+"/0) this session.");return{ok:false,blocked:"needs_fresh_dryrun"};}
-  if(_p25dLastDryRun.manifestFp!==mfp){console.warn("[p2-5-d] blocked: latest dryRun used a different manifest — re-run dryRun with this manifest.");return{ok:false,blocked:"dryrun_manifest_mismatch"};}
+  const ld=_p25dLastDryRun;
+  // Fresh-dryRun gate: latest dryRun must have accounted for all 18 rows with 0 blockers (partial batches OK).
+  if(!ld||ld.manifestRows!==P25D_EXPECT_ROWS||ld.accountedRows!==P25D_EXPECT_ROWS||ld.mismatchCount!==0||!ld.allClean){
+    console.warn("[p2-5-d] blocked: needs a fresh successful dryRun (all "+P25D_EXPECT_ROWS+" accounted, 0 mismatches) this session.");return{ok:false,blocked:"needs_fresh_dryrun"};}
+  if(ld.manifestFp!==mfp){console.warn("[p2-5-d] blocked: latest dryRun used a different manifest — re-run dryRun with this manifest.");return{ok:false,blocked:"dryrun_manifest_mismatch"};}
+  if(ld.remainingDataRows===0){console.warn("[p2-5-d] nothing_remaining: all manifest rows already externalized (no-op).");return{ok:true,done:true,reason:"nothing_remaining",processed:0,remainingDataRows:0,alreadyExternalizedRows:ld.alreadyExternalizedRows};}
+  // Enforce first-apply limit:1 (nothing externalized yet AND all 18 still remaining).
+  if(ld.alreadyExternalizedRows===0&&ld.remainingDataRows===P25D_EXPECT_ROWS&&limit!==1){
+    console.warn("[p2-5-d] blocked: first apply must use limit:1.");return{ok:false,blocked:"first_apply_limit_must_be_1"};}
   const midx=_p25dManifestIndex(manifest);
   const uid=await _p25dAuthUid(); if(!uid){console.warn("[p2-5-d] blocked: no authenticated session.");return{ok:false,blocked:"auth"};}
   let cands; try{cands=await _p25dFetchCandidates(uid);}catch(e){console.warn("[p2-5-d] STOP: candidate fetch failed");return{ok:false,stop:"fetch"};}
+  const remainingSet=new Set((ld.remainingIds||[]).map(String));   // process ONLY rows the latest dryRun classified as remaining data candidates
+  const toProcess=cands.filter(c=>remainingSet.has(String(c.id)));
+  _p25dLastDryRun=null;   // consume the dryRun clearance up-front: any write invalidates it; next batch needs a fresh dryRun
   const report={processed:0,skipped:0,failed:0,uploadedPaths:0,remainingDataRefs:0,rowIds:[]};
   let done=0;
-  for(const cand of cands){
+  for(const cand of toProcess){
     if(done>=limit)break;
     const mrow=midx.get(String(cand.id));
     const g=await _p25dStaleGuard(cand,mrow);
@@ -1177,7 +1225,6 @@ async function _p25dApplyBatch(confirmString,opts){                         // W
     const dv=_p25dVerifyDelta(cand.raw,rr.raw);
     if(!dv.ok){console.warn("[p2-5-d] STOP row "+cand.id+": delta_"+dv.reason);return{ok:false,stop:"delta_"+dv.reason,rowId:String(cand.id),...report};}
     report.processed++;report.uploadedPaths+=newPaths;report.rowIds.push(String(cand.id));
-    _p25dLastDryRun=null;   // consume the dryRun clearance: force a fresh dryRun before the next batch
     console.warn("[p2-5-d] row ok "+cand.id+" (+"+newPaths+" paths)");
   }
   console.warn("[p2-5-d] batch complete",{processed:report.processed,uploadedPaths:report.uploadedPaths,rowIds:report.rowIds});
@@ -1185,10 +1232,12 @@ async function _p25dApplyBatch(confirmString,opts){                         // W
 }
 function _p25dStatus(){
   let flag=null; try{flag=localStorage.getItem(P25D_DEV_FLAG);}catch{}
-  const ld=_p25dLastDryRun?{candidateRows:_p25dLastDryRun.candidateRows,wouldProcess:_p25dLastDryRun.wouldProcess,mismatchCount:_p25dLastDryRun.mismatchCount,allClean:_p25dLastDryRun.allClean}:null;
+  const L=_p25dLastDryRun;
+  const ld=L?{manifestRows:L.manifestRows,accountedRows:L.accountedRows,alreadyExternalizedRows:L.alreadyExternalizedRows,remainingDataRows:L.remainingDataRows,wouldProcess:L.wouldProcess,mismatchCount:L.mismatchCount,allClean:L.allClean}:null;
+  const readyForApply=!!(L&&L.allClean&&L.accountedRows===P25D_EXPECT_ROWS&&L.remainingDataRows>0);
   const s={devFlagSet:flag==="1",writesGated:true,confirmStringExpected:P25D_CONFIRM,manifestRequired:true,
     maxLimit:P25D_MAX_LIMIT,firstApplyLimit:1,expectedRows:P25D_EXPECT_ROWS,expectedImages:P25D_EXPECT_IMAGES,
-    freshDryRunRequired:true,lastDryRun:ld,readyForApply:!!(ld&&ld.allClean),
+    freshDryRunRequired:true,lastDryRun:ld,readyForApply,
     usage:"READ-ONLY: status(), dryRun({manifest}). WRITE (gated): applyBatch('"+P25D_CONFIRM+"',{limit,manifest}). "+
           "Run a fresh dryRun that reports "+P25D_EXPECT_ROWS+"/"+P25D_EXPECT_ROWS+"/0 first; the FIRST apply must use limit:1, later batches up to limit:"+P25D_MAX_LIMIT+". Dev flag must be '1'."};
   console.warn("[p2-5-d] status",{devFlagSet:s.devFlagSet,writesGated:true,readyForApply:s.readyForApply});
