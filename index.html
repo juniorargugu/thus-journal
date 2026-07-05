@@ -3514,6 +3514,68 @@ function GroupCard({childTrades,products,livePrices}){
     </div>
   );
 }
+// ─── G2 grouping preview UI v0.1 (render-only, default-off via localStorage tj_trade_group_ui_v01) ──
+// READ-ONLY view-model ONLY: derives candidate open-trade groups for display. NEVER writes group_id,
+// NEVER mutates the trades array, NEVER calls a writer. Groups open trades by product family +
+// direction; a candidate needs >=2 open legs. Prefer false negatives over wrong grouping.
+const _g2SeriesToken=(t,prod)=>{                          // compact series token e.g. "M26"; null when not safely derivable
+  const s=((t&&t.series)||"").toString().trim();
+  if(s)return s.toUpperCase();
+  const code=((t&&t.contractCode)||"").toString().trim().toUpperCase();
+  const base=((prod&&prod.baseSymbol)||"").toString().trim().toUpperCase();
+  if(code&&base&&code.startsWith(base)){const tok=code.slice(base.length);return tok||null;}
+  return null;
+};
+const _g2Symbol=(t,prod)=>(((t&&t.contractCode)||(prod&&prod.currentContract)||(prod&&prod.baseSymbol)||(t&&t.productId)||"?")).toString();
+const buildGroupingPreview=(openTrades,products)=>{      // pure: [{key,label,familyName,direction,count,childIds,childSymbols,seriesTokens}] (count>=2)
+  const list=Array.isArray(openTrades)?openTrades.filter(t=>t&&t.status==="open"):[];
+  const buckets=new Map();
+  for(const t of list){
+    const dir=String((t&&t.direction)||"").trim();
+    if(!dir)continue;                                    // conservative: skip trades without a direction
+    const key=_groupFamilyKey(t)+"||"+dir;
+    if(!buckets.has(key))buckets.set(key,[]);
+    buckets.get(key).push(t);
+  }
+  const out=[];
+  for(const[key,kids] of buckets){
+    if(kids.length<2)continue;                           // singles are not groups (prefer false negatives)
+    const prod0=resolveProduct(products||[],kids[0]&&kids[0].productId);
+    const familyName=(prod0&&(prod0.baseSymbol||prod0.name))||_groupFamilyKey(kids[0]);
+    const dir=String(kids[0].direction||"");
+    const tokens=[]; const childSymbols=[];
+    for(const t of kids){const p=resolveProduct(products||[],t.productId);const tok=_g2SeriesToken(t,p);if(tok&&!tokens.includes(tok))tokens.push(tok);childSymbols.push(_g2Symbol(t,p));}
+    const label=familyName+" "+dir+(tokens.length?(" — "+tokens.join("+")):"");
+    out.push({key,label,familyName,direction:dir,count:kids.length,childIds:kids.map(t=>t.id),childSymbols,seriesTokens:tokens});
+  }
+  out.sort((a,b)=>a.label<b.label?-1:(a.label>b.label?1:0));   // deterministic order
+  return out;
+};
+function GroupingPreview({openTrades,products}){
+  const groups=useMemo(()=>buildGroupingPreview(openTrades,products),[openTrades,products]);
+  if(groups.length===0)
+    return <div className="mb-3 text-xs text-muted bg-card border border-dashed border-border rounded-lg px-3 py-2">🧩 Grouping preview (dev): No grouping candidates yet</div>;
+  return(
+    <div className="space-y-2 mb-3">
+      {groups.map(g=>(
+        <div key={g.key} className="bg-card border border-yellow/30 rounded-2xl p-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-[10px] uppercase tracking-wide text-yellow border border-yellow/40 rounded px-1.5 py-0.5">Grouping preview</span>
+              <span className="font-semibold text-txt truncate">{g.label}</span>
+            </div>
+            <span className="text-[10px] uppercase px-1.5 py-0.5 rounded border text-muted border-border">preview only</span>
+          </div>
+          <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
+            <div><div className="text-muted text-xs">Open legs</div><div className="text-txt font-medium">{g.count}</div></div>
+            <div><div className="text-muted text-xs">Contracts</div><div className="text-txt font-medium truncate">{g.childSymbols.join(" · ")}</div></div>
+          </div>
+          <div className="mt-1 text-[10px] text-muted">ids: {g.childIds.join(", ")} · read-only · no group is saved</div>
+        </div>
+      ))}
+    </div>
+  );
+}
 function PagePositions({trades,products,productRegistry,balance,portfolio,onCommitOpen,onCommitExecuteDraft,onCommitClose,onCommitUpdate,onCommitMerge,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
   const[showForm,setShowForm]=useState(false);
   const[editTrade,setEditTrade]=useState(null);
@@ -3533,6 +3595,8 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onComm
   // G2 render-only trade-group mock — READ-ONLY flag; no code writes tj_trade_group_mock. Default off.
   const mockGroupsOn=useMemo(()=>{try{return localStorage.getItem("tj_trade_group_mock")==="1";}catch{return false;}},[]);
   const mockGroups=useMemo(()=>mockGroupsOn?getTradeMockGroups(openTrades):[],[mockGroupsOn,openTrades]);
+  // G2 grouping preview UI v0.1 — READ-ONLY flag; no code writes tj_trade_group_ui_v01. Default off.
+  const groupUiV01On=useMemo(()=>{try{return localStorage.getItem("tj_trade_group_ui_v01")==="1";}catch{return false;}},[]);
 
   const livePrices=livePricesProp||{};
   const liveTimestamps=liveTimestampsProp||{};
@@ -3740,6 +3804,7 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onComm
           ?<div className="space-y-2 mb-3">{mockGroups.map(g=>{const kids=g.childIds.map(id=>openTrades.find(t=>t.id===id)).filter(Boolean);return<GroupCard key={g.groupId} childTrades={kids} products={products} livePrices={livePrices}/>;})}</div>
           :<div className="mb-3 text-xs text-muted bg-card border border-dashed border-border rounded-lg px-3 py-2">🧪 Trade-group mock (dev): ไม่มีกลุ่ม — ต้องมี open positions ≥2 ที่ product+direction เดียวกัน</div>
         )}
+        {groupUiV01On&&<GroupingPreview openTrades={openTrades} products={products}/>}
         {openTrades.length===0
           ?<div className="bg-card border border-border border-dashed rounded-2xl p-10 text-center space-y-3">
             <div className="text-4xl">📭</div>
