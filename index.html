@@ -3546,13 +3546,37 @@ const buildGroupingPreview=(openTrades,products)=>{      // pure: [{key,label,fa
     const tokens=[]; const childSymbols=[];
     for(const t of kids){const p=resolveProduct(products||[],t.productId);const tok=_g2SeriesToken(t,p);if(tok&&!tokens.includes(tok))tokens.push(tok);childSymbols.push(_g2Symbol(t,p));}
     const label=familyName+" "+dir+(tokens.length?(" — "+tokens.join("+")):"");
-    out.push({key,label,familyName,direction:dir,count:kids.length,childIds:kids.map(t=>t.id),childSymbols,seriesTokens:tokens});
+    out.push({key,familyKey:_groupFamilyKey(kids[0]),label,familyName,direction:dir,count:kids.length,childIds:kids.map(t=>t.id),childSymbols,seriesTokens:tokens});
   }
   out.sort((a,b)=>a.label<b.label?-1:(a.label>b.label?1:0));   // deterministic order
   return out;
 };
+// G2 propose-group v0.2 — PURE in-memory proposal payload. NO Supabase, NO writer, NO persistence.
+// The proposedGroupId is a LOCAL preview id only (never written to trades.group_id or trade_groups).
+const _g2ChildIdsHash=(childIds)=>{                       // deterministic FNV-1a over sorted string ids
+  const s=(childIds||[]).map(String).slice().sort().join(",");
+  let h=2166136261>>>0;
+  for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)>>>0;}
+  return h.toString(16);
+};
+const buildGroupProposal=(g)=>{                           // PURE view-model → proposal payload; nothing is saved
+  const childIds=((g&&g.childIds)||[]).slice();           // display order preserved for readability
+  return {
+    proposedGroupId:"preview:"+((g&&g.familyKey)||"?")+":"+((g&&g.direction)||"?")+":"+_g2ChildIdsHash(childIds),
+    label:(g&&g.label)||"",
+    familyKey:(g&&g.familyKey)||"",
+    familyName:(g&&g.familyName)||"",
+    direction:(g&&g.direction)||"",
+    childIds,
+    childSymbols:((g&&g.childSymbols)||[]).slice(),
+    seriesTokens:((g&&g.seriesTokens)||[]).slice(),
+    source:"g2_preview_v0_2",
+    mode:"preview_only",
+  };
+};
 function GroupingPreview({openTrades,products}){
   const groups=useMemo(()=>buildGroupingPreview(openTrades,products),[openTrades,products]);
+  const[proposal,setProposal]=useState(null);   // in-memory selected proposal for the review modal; NEVER persisted
   if(groups.length===0)
     return <div className="mb-3 text-xs text-muted bg-card border border-dashed border-border rounded-lg px-3 py-2">🧩 Grouping preview (dev): No grouping candidates yet</div>;
   return(
@@ -3570,9 +3594,40 @@ function GroupingPreview({openTrades,products}){
             <div><div className="text-muted text-xs">Open legs</div><div className="text-txt font-medium">{g.count}</div></div>
             <div><div className="text-muted text-xs">Contracts</div><div className="text-txt font-medium truncate">{g.childSymbols.join(" · ")}</div></div>
           </div>
-          <div className="mt-1 text-[10px] text-muted">ids: {g.childIds.join(", ")} · read-only · no group is saved</div>
+          <div className="mt-1 flex items-center justify-between gap-2">
+            <div className="text-[10px] text-muted truncate">ids: {g.childIds.join(", ")} · read-only · no group is saved</div>
+            <button type="button" onClick={()=>setProposal(buildGroupProposal(g))} className="shrink-0 text-[10px] uppercase tracking-wide text-yellow border border-yellow/40 rounded px-2 py-0.5 hover:bg-yellow/10 transition whitespace-nowrap">Review proposal</button>
+          </div>
         </div>
       ))}
+      {proposal&&(
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={()=>setProposal(null)}>
+          <div className="bg-card border border-yellow/40 rounded-2xl p-4 max-w-md w-full max-h-[85vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <span className="font-semibold text-txt">Group proposal — preview only</span>
+              <span className="text-[10px] uppercase px-1.5 py-0.5 rounded border text-muted border-border">{proposal.mode}</span>
+            </div>
+            <div className="text-xs text-orange bg-orange/10 border border-orange/30 rounded-lg px-3 py-2 mb-3">
+              ⚠ Preview only — nothing is saved. No group_id is written · trade_groups is not touched.
+            </div>
+            <div className="space-y-1.5 text-sm">
+              <div><div className="text-muted text-xs">Label</div><div className="text-txt font-medium">{proposal.label}</div></div>
+              <div><div className="text-muted text-xs">Proposed id (local preview)</div><div className="text-txt font-mono text-xs break-all">{proposal.proposedGroupId}</div></div>
+              <div className="grid grid-cols-2 gap-2">
+                <div><div className="text-muted text-xs">Family</div><div className="text-txt">{proposal.familyName} <span className="text-muted text-xs">({proposal.familyKey})</span></div></div>
+                <div><div className="text-muted text-xs">Direction</div><div className="text-txt">{proposal.direction}</div></div>
+              </div>
+              <div><div className="text-muted text-xs">Legs ({proposal.childIds.length})</div><div className="text-txt text-xs">{proposal.childSymbols.join(" · ")}</div></div>
+              <div><div className="text-muted text-xs">Child ids</div><div className="text-txt font-mono text-xs break-all">{proposal.childIds.join(", ")}</div></div>
+              <div><div className="text-muted text-xs">Series</div><div className="text-txt text-xs">{proposal.seriesTokens.join("+")||"—"}</div></div>
+              <div><div className="text-muted text-xs">Source</div><div className="text-txt text-xs">{proposal.source}</div></div>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button type="button" onClick={()=>setProposal(null)} className="text-sm px-3 py-1.5 rounded-lg bg-input hover:bg-[#363c45] text-txt border border-border transition">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
