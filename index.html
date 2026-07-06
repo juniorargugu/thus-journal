@@ -3574,9 +3574,56 @@ const buildGroupProposal=(g)=>{                           // PURE view-model →
     mode:"preview_only",
   };
 };
-function GroupingPreview({openTrades,products}){
-  const groups=useMemo(()=>buildGroupingPreview(openTrades,products),[openTrades,products]);
+// G2 create action v0.3 — write-gated (tj_trade_group_write_v01). Pure helpers (module-level → unit-testable).
+const _G2_CREATE_CONFIRM="CREATE GROUP";                 // exact typed-confirmation phrase
+const _g2CreateConfirmOk=(text)=>String(text==null?"":text).trim()===_G2_CREATE_CONFIRM;
+const _G2_TRANSPORT_ERR="เชื่อมต่อไม่สำเร็จ — ลองใหม่อีกครั้ง";
+const _G2_CREATE_ERR={                                   // create_trade_group_v1 error code → user-facing message
+  not_authenticated:"ยังไม่ได้เข้าสู่ระบบ",
+  invalid_child_ids:"รายการ trade ไม่ถูกต้อง",
+  duplicate_child_ids:"มี trade ซ้ำในรายการ",
+  too_few_children:"ต้องมีอย่างน้อย 2 legs ถึงจะจับกลุ่มได้",
+  child_not_found:"หา trade บางตัวไม่เจอ — reload แล้วลองใหม่",
+  not_open:"มี leg ที่ไม่ได้เปิดอยู่ — จับกลุ่มได้เฉพาะ open legs",
+  missing_product:"มี leg ที่ไม่มี product",
+  missing_direction:"มี leg ที่ไม่มี direction",
+  family_mismatch:"legs ต่าง product กัน — จับกลุ่มไม่ได้",
+  direction_mismatch:"legs คนละทิศ (Long/Short) — จับกลุ่มไม่ได้",
+  inconsistent_group_state:"สถานะกลุ่มไม่สอดคล้อง — reload แล้วตรวจสอบ",
+  already_grouped:"มี leg อยู่ในกลุ่มอื่นแล้ว — reload แล้วลองใหม่",
+  group_create_race_lost:"สร้างกลุ่มชนกัน — reload แล้วลองใหม่",
+};
+const _g2MapCreateError=(code)=>_G2_CREATE_ERR[code]||"สร้างกลุ่มไม่สำเร็จ — ลองใหม่อีกครั้ง";
+function GroupingPreview({openTrades,products,writeEnabled,showToast}){
+  const allGroups=useMemo(()=>buildGroupingPreview(openTrades,products),[openTrades,products]);
   const[proposal,setProposal]=useState(null);   // in-memory selected proposal for the review modal; NEVER persisted
+  const[groupedKeys,setGroupedKeys]=useState(()=>new Set());   // session-only: proposedGroupIds created this session (v0.3 suppression; NOT persisted)
+  const[confirmText,setConfirmText]=useState("");
+  const[creating,setCreating]=useState(false);
+  const[error,setError]=useState(null);         // inline modal error (mapped RPC code OR transport)
+  // Suppress candidates already created THIS SESSION. group_id is NOT loaded (db.loadAll reads only raw),
+  // so cross-reload the same candidate may re-appear — safe because create_trade_group_v1 is idempotent.
+  const groups=useMemo(()=>allGroups.filter(g=>!groupedKeys.has(buildGroupProposal(g).proposedGroupId)),[allGroups,groupedKeys]);
+  const closeModal=useCallback(()=>{setProposal(null);setConfirmText("");setError(null);},[]);
+  const openProposal=useCallback((g)=>{setError(null);setConfirmText("");setProposal(buildGroupProposal(g));},[]);
+  const confirmOk=_g2CreateConfirmOk(confirmText);
+  const onCreate=useCallback(async()=>{
+    if(creating||!proposal||!_g2CreateConfirmOk(confirmText))return;   // gate: in-flight OR not-confirmed → no-op (dup-click guard)
+    setCreating(true);setError(null);
+    try{
+      // The ONLY G2 write path — exactly one RPC, ids String()-normalized (trades.id is text), p_label null (server derives).
+      const{data,error:txErr}=await SUPA.rpc("create_trade_group_v1",{p_child_ids:proposal.childIds.map(String),p_label:null});
+      if(txErr){setError(_G2_TRANSPORT_ERR);setCreating(false);return;}                  // channel 1: transport error
+      if(data&&data.ok===false){setError(_g2MapCreateError(data.error));setCreating(false);return;}   // channel 2: RPC business error
+      if(data&&data.ok===true){                                                          // success (created OR idempotent already_exists)
+        const gid=proposal.proposedGroupId;
+        setGroupedKeys(prev=>{const n=new Set(prev);n.add(gid);return n;});
+        showToast&&showToast(data.already_exists?"กลุ่มนี้มีอยู่แล้ว":"จับกลุ่มแล้ว","success");
+        setCreating(false);closeModal();return;
+      }
+      setError(_g2MapCreateError("unknown"));setCreating(false);                          // unexpected shape
+    }catch(e){console.warn("[g2] create rpc error",e);setError(_G2_TRANSPORT_ERR);setCreating(false);}
+  },[creating,proposal,confirmText,showToast,closeModal]);
   if(groups.length===0)
     return <div className="mb-3 text-xs text-muted bg-card border border-dashed border-border rounded-lg px-3 py-2">🧩 Grouping preview (dev): No grouping candidates yet</div>;
   return(
@@ -3588,28 +3635,32 @@ function GroupingPreview({openTrades,products}){
               <span className="text-[10px] uppercase tracking-wide text-yellow border border-yellow/40 rounded px-1.5 py-0.5">Grouping preview</span>
               <span className="font-semibold text-txt truncate">{g.label}</span>
             </div>
-            <span className="text-[10px] uppercase px-1.5 py-0.5 rounded border text-muted border-border">preview only</span>
+            <span className="text-[10px] uppercase px-1.5 py-0.5 rounded border text-muted border-border">{writeEnabled?"write-gated":"preview only"}</span>
           </div>
           <div className="mt-2 grid grid-cols-2 gap-3 text-sm">
             <div><div className="text-muted text-xs">Open legs</div><div className="text-txt font-medium">{g.count}</div></div>
             <div><div className="text-muted text-xs">Contracts</div><div className="text-txt font-medium truncate">{g.childSymbols.join(" · ")}</div></div>
           </div>
           <div className="mt-1 flex items-center justify-between gap-2">
-            <div className="text-[10px] text-muted truncate">ids: {g.childIds.join(", ")} · read-only · no group is saved</div>
-            <button type="button" onClick={()=>setProposal(buildGroupProposal(g))} className="shrink-0 text-[10px] uppercase tracking-wide text-yellow border border-yellow/40 rounded px-2 py-0.5 hover:bg-yellow/10 transition whitespace-nowrap">Review proposal</button>
+            <div className="text-[10px] text-muted truncate">ids: {g.childIds.join(", ")}{writeEnabled?" · review to create group":" · read-only · no group is saved"}</div>
+            <button type="button" onClick={()=>openProposal(g)} className="shrink-0 text-[10px] uppercase tracking-wide text-yellow border border-yellow/40 rounded px-2 py-0.5 hover:bg-yellow/10 transition whitespace-nowrap">Review proposal</button>
           </div>
         </div>
       ))}
       {proposal&&(
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={()=>setProposal(null)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={()=>{if(!creating)closeModal();}}>
           <div className="bg-card border border-yellow/40 rounded-2xl p-4 max-w-md w-full max-h-[85vh] overflow-y-auto" onClick={e=>e.stopPropagation()}>
             <div className="flex items-center justify-between gap-2 mb-2">
-              <span className="font-semibold text-txt">Group proposal — preview only</span>
-              <span className="text-[10px] uppercase px-1.5 py-0.5 rounded border text-muted border-border">{proposal.mode}</span>
+              <span className="font-semibold text-txt">{writeEnabled?"Group proposal — create":"Group proposal — preview only"}</span>
+              <span className="text-[10px] uppercase px-1.5 py-0.5 rounded border text-muted border-border">{writeEnabled?"write-gated":proposal.mode}</span>
             </div>
-            <div className="text-xs text-orange bg-orange/10 border border-orange/30 rounded-lg px-3 py-2 mb-3">
-              ⚠ Preview only — nothing is saved. No group_id is written · trade_groups is not touched.
-            </div>
+            {writeEnabled
+              ?<div className="text-xs text-orange bg-orange/10 border border-orange/30 rounded-lg px-3 py-2 mb-3">
+                 ⚠ Write-gated — คลิก <span className="font-semibold">Create group</span> จะเขียน group_id ให้ทุก leg ผ่าน RPC (create_trade_group_v1). P/L ไม่เปลี่ยน · raw ไม่ถูกแตะ.
+               </div>
+              :<div className="text-xs text-orange bg-orange/10 border border-orange/30 rounded-lg px-3 py-2 mb-3">
+                 ⚠ Preview only — nothing is saved. No group_id is written · trade_groups is not touched.
+               </div>}
             <div className="space-y-1.5 text-sm">
               <div><div className="text-muted text-xs">Label</div><div className="text-txt font-medium">{proposal.label}</div></div>
               <div><div className="text-muted text-xs">Proposed id (local preview)</div><div className="text-txt font-mono text-xs break-all">{proposal.proposedGroupId}</div></div>
@@ -3622,8 +3673,19 @@ function GroupingPreview({openTrades,products}){
               <div><div className="text-muted text-xs">Series</div><div className="text-txt text-xs">{proposal.seriesTokens.join("+")||"—"}</div></div>
               <div><div className="text-muted text-xs">Source</div><div className="text-txt text-xs">{proposal.source}</div></div>
             </div>
-            <div className="mt-4 flex justify-end">
-              <button type="button" onClick={()=>setProposal(null)} className="text-sm px-3 py-1.5 rounded-lg bg-input hover:bg-[#363c45] text-txt border border-border transition">Close</button>
+            {writeEnabled&&(
+              <div className="mt-3 space-y-2">
+                <div className="text-xs text-muted">พิมพ์ <span className="font-mono text-txt">CREATE GROUP</span> เพื่อยืนยันการเขียน group_id</div>
+                <input type="text" value={confirmText} onChange={e=>setConfirmText(e.target.value)} disabled={creating} placeholder="CREATE GROUP"
+                  className="w-full bg-input border border-border rounded-lg px-3 py-2 text-sm text-txt font-mono outline-none focus:border-yellow/50 disabled:opacity-50"/>
+                {error&&<div className="text-xs text-red bg-red/10 border border-red/30 rounded-lg px-3 py-2">{error}</div>}
+              </div>
+            )}
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={closeModal} disabled={creating} className="text-sm px-3 py-1.5 rounded-lg bg-input hover:bg-[#363c45] text-txt border border-border transition disabled:opacity-50 disabled:cursor-not-allowed">Close</button>
+              {writeEnabled&&(
+                <button type="button" onClick={onCreate} disabled={creating||!confirmOk} className="text-sm px-3 py-1.5 rounded-lg bg-yellow hover:bg-yellow/90 text-black font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed">{creating?"กำลังสร้าง…":"Create group"}</button>
+              )}
             </div>
           </div>
         </div>
@@ -3652,6 +3714,8 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onComm
   const mockGroups=useMemo(()=>mockGroupsOn?getTradeMockGroups(openTrades):[],[mockGroupsOn,openTrades]);
   // G2 grouping preview UI v0.1 — READ-ONLY flag; no code writes tj_trade_group_ui_v01. Default off.
   const groupUiV01On=useMemo(()=>{try{return localStorage.getItem("tj_trade_group_ui_v01")==="1";}catch{return false;}},[]);
+  // G2 create write-gate v0.3 — INDEPENDENT of the UI flag; enables the write path only. READ-ONLY flag, default off.
+  const groupWriteV01On=useMemo(()=>{try{return localStorage.getItem("tj_trade_group_write_v01")==="1";}catch{return false;}},[]);
 
   const livePrices=livePricesProp||{};
   const liveTimestamps=liveTimestampsProp||{};
@@ -3859,7 +3923,7 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onComm
           ?<div className="space-y-2 mb-3">{mockGroups.map(g=>{const kids=g.childIds.map(id=>openTrades.find(t=>t.id===id)).filter(Boolean);return<GroupCard key={g.groupId} childTrades={kids} products={products} livePrices={livePrices}/>;})}</div>
           :<div className="mb-3 text-xs text-muted bg-card border border-dashed border-border rounded-lg px-3 py-2">🧪 Trade-group mock (dev): ไม่มีกลุ่ม — ต้องมี open positions ≥2 ที่ product+direction เดียวกัน</div>
         )}
-        {groupUiV01On&&<GroupingPreview openTrades={openTrades} products={products}/>}
+        {groupUiV01On&&<GroupingPreview openTrades={openTrades} products={products} writeEnabled={groupWriteV01On} showToast={showToast}/>}
         {openTrades.length===0
           ?<div className="bg-card border border-border border-dashed rounded-2xl p-10 text-center space-y-3">
             <div className="text-4xl">📭</div>
