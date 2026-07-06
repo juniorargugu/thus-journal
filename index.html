@@ -3608,6 +3608,7 @@ function GroupingPreview({openTrades,products,writeEnabled,showToast}){
   const openProposal=useCallback((g)=>{setError(null);setConfirmText("");setProposal(buildGroupProposal(g));},[]);
   const confirmOk=_g2CreateConfirmOk(confirmText);
   const onCreate=useCallback(async()=>{
+    if(!writeEnabled)return;                                           // defense-in-depth: never reach the RPC when the write gate is off
     if(creating||!proposal||!_g2CreateConfirmOk(confirmText))return;   // gate: in-flight OR not-confirmed → no-op (dup-click guard)
     setCreating(true);setError(null);
     try{
@@ -3623,7 +3624,7 @@ function GroupingPreview({openTrades,products,writeEnabled,showToast}){
       }
       setError(_g2MapCreateError("unknown"));setCreating(false);                          // unexpected shape
     }catch(e){console.warn("[g2] create rpc error",e);setError(_G2_TRANSPORT_ERR);setCreating(false);}
-  },[creating,proposal,confirmText,showToast,closeModal]);
+  },[writeEnabled,creating,proposal,confirmText,showToast,closeModal]);
   if(groups.length===0)
     return <div className="mb-3 text-xs text-muted bg-card border border-dashed border-border rounded-lg px-3 py-2">🧩 Grouping preview (dev): No grouping candidates yet</div>;
   return(
