@@ -23,7 +23,7 @@ When the user is ready, in order (each separately gated — do NOT auto-do):
 - **(b) User-approved v0.4 deploy prompt:** bump `APP_VERSION` `3.22.0`→`3.23.0` (first step), push the
   committed stack, monitor Netlify, verify the served bundle is byte-identical to HEAD. Push/deploy = user approval.
 - **(c) Post-deploy default-off smoke:** app mounts, grouping UI absent, 0 create RPC on load, no ⛓ badge
-  without flags/groups. Read-only.
+  without flags/groups. Read-only. **Runbook prepared:** [`../g2_grouping/g2_v04_post_deploy_smoke_runbook.md`](../g2_grouping/g2_v04_post_deploy_smoke_runbook.md).
 - **(d) Later, separately gated:** enable `tj_trade_group_write_v01` / keep a real group persistently /
   **implement G2 v0.5 ungroup UI**. Each needs explicit approval + its own reviewed plan. **The v0.5 ungroup
   implementation is NOT part of the current v0.4 deploy batch** (new write path; IMPLEMENT_AFTER_CURRENT_DEPLOY).
