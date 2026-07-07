@@ -1,36 +1,32 @@
 # Next Safe Task
 
 **Updated (local):** 2026-07-07
-**Current HEAD:** `3a0b258`
+**Current HEAD:** merge/grouping boundary audit commit (this commit); ahead of `origin/main` ~11.
 
-**Just completed:** Lane C — trade-open product picker card contract-size display
-(`3a0b258`, display-only `_csizeFrag`, `productId`/persistence unchanged). Lane C is now
-DONE for both surfaces (MT5 Inbox preview + trade-open picker cards).
+**Just completed:** Merge ↔ grouping boundary audit (read-only) →
+[`../g2_grouping/merge_grouping_boundary_audit.md`](../g2_grouping/merge_grouping_boundary_audit.md).
+Verdict **CLEAR_FOR_BATCH_DEPLOY_AS_IS**: legacy Merge is disabled/unreachable (sole `🔗`
+entry `disabled`, no onClick), G2 grouping is default-off + write-gated, no merge path writes
+`group_id`, durable paths preserve `group_id` by omission. One data-safe gap (F7) is a
+**pre-write-gate** stop-gate, not a deploy blocker.
 
 ---
 
 ## Recommended next safe task
 
-**Option A — Merge/grouping boundary audit (read-only, docs only).**
-Audit and document the boundary between the legacy **destructive Merge** (double-counted
-P/L historically; now disabled) and the new **non-destructive G2 grouping** (`group_id`,
-reducers ignore it), so the two are not confused when the G2 stack ships.
+**Option D — Hold and line up the batch deploy (user-gated).**
+The boundary audit confirms the stack is deploy-safe, and the ahead stack is now ~11 commits.
+The highest-value next move is the **batch deploy itself**, which only you can trigger. Until
+then autopilot holds — no more feature commits that grow the unpushed stack.
 
-Rationale (why A now):
-- **Pre-deploy clarity + highest leverage** — the 9-commit ahead stack includes the G2
-  grouping UI; documenting how grouping differs from the old Merge *before* that batch
-  deploys reduces the risk of user/reviewer confusion at deploy time.
-- **Safest framing** — read-only audit (code + git history + prior docs); no code, no DB,
-  no stop-list touch. Produces a reviewable boundary note.
-- **B (GUGU market-aware cadence)** stays behind the **cognition freeze** (Lane E) — lower
-  urgency (bot is capture-only), heavier review.
-- **C (review-summary "Contract Size" row)** is polish only — selection-time visibility is
-  already solved by `3a0b258`; low leverage.
-- **D (hold until batch deploy)** is reasonable if you'd rather pause — the ahead stack is
-  at 9. Say the word and autopilot holds.
+Rationale:
+- The audit removed the last "is the boundary safe to ship?" question → **CLEAR_FOR_BATCH_DEPLOY_AS_IS**.
+- Growing the ahead stack further raises deploy risk without adding deploy value.
+- The natural pre-write-gate follow-up (`isMerged` exclusion, below) is best done **after**
+  deploy, alongside the other Lane B write-gate gates.
 
-Deliverable: a short boundary note (what Merge did vs what grouping does, current disabled
-state of Merge, where each lives in code, migration/UI implications) → route for review.
+If you'd rather keep moving locally instead of holding: the next safe docs/design task is a
+design packet for the **`isMerged`-exclusion** guard (ROADMAP #184) — design only, no code.
 
 ---
 
@@ -54,6 +50,9 @@ Before the write gate is enabled in any real (non-rollback) context, ALL must ho
 3. Post-deploy browser flag-matrix smoke on the live bundle.
 4. Reducers/P&L re-confirmed to ignore `group_id`.
 5. Adversarial review of any follow-up code.
+6. **`isMerged` exclusion (ROADMAP #184)** — `buildGroupingPreview` (and the create path)
+   must exclude legacy merged rows; add a `raw->>'isMerged'` reject in `create_trade_group_v1`.
+   From the merge/grouping boundary audit (data-safe gap, pre-write-gate).
 
 ---
 
