@@ -9012,6 +9012,10 @@ function App({session,onSignOut}){
   const lastSummaryHashRef=useRef(null);
   // Supabase-first load: fetch all data then render
   useEffect(()=>{
+    // G2 v0.4 — reset stale group membership on EVERY hydration transition (mount, authUid change
+    // or absence, retry) BEFORE any load. A successful load repopulates it below; logout, absence,
+    // or a critical failure leaves it empty. Render-only: never touches trades[]/LS/persistence.
+    setTradeGroupIds({});
     if(!authUid)return;
     let retryTimer=null;
     db.loadAll(authUid).then(data=>{
@@ -9023,6 +9027,7 @@ function App({session,onSignOut}){
         }else{
           console.error("[hydrate] permanent load failure after 3 attempts — user must refresh");
         }
+        setTradeGroupIds({});   // G2 v0.4 — critical load failure clears any stale group map (explicit; already reset at effect top)
         return;
       }
       if(data.partial)console.warn("[hydrate] partial load — proceeding with available tables",data.errors);
@@ -9095,6 +9100,7 @@ function App({session,onSignOut}){
       // Should not be reached — loadAll handles its own errors and returns ok:false instead.
       // LS fallback removed: stale/empty LS could clobber server once dbReady flips.
       console.warn("[hydrate] unexpected exception in load handler — keeping dbReady=false",e);
+      setTradeGroupIds({});   // G2 v0.4 — unexpected failure clears any stale group map (explicit; already reset at effect top)
       if(loadAttempt<2){
         retryTimer=setTimeout(()=>setLoadAttempt(a=>a+1),5000*Math.pow(2,loadAttempt));
       }
