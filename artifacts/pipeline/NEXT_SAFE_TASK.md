@@ -1,32 +1,32 @@
 # Next Safe Task
 
 **Updated (local):** 2026-07-07
-**Current HEAD / prod:** `71283c3` — `origin/main` == HEAD, **deployed** to thus999.com (v3.22.0).
+**Prod:** `71283c3` (v3.22.0) on thus999.com. **Local** ahead of prod by docs-only commits
+(pipeline/closeout records; not served).
 
-**Just completed:** **Batch deploy + version hotfix.** Pushed `f5290f7..b1f8e7d` (12-commit G2
-stack) then `b1f8e7d..71283c3` (version fix 3.21.0 → **3.22.0** via single-source `APP_VERSION`).
-Prod serves index.html byte-identical to `71283c3`; boot smoke PASS (app mounts, grouping UI
-absent by default, flags null, 0 create RPC on load). G2 flags remain **default-off**; write gate
-NOT enabled. Signed-in footer visual confirm is user-side (hard-refresh to bust cache).
+**Just completed:** **G2 write-gate live browser smoke — PASS WITH ROLLBACK**
+([`../g2_grouping/g2_write_gate_browser_smoke_closeout.md`](../g2_grouping/g2_write_gate_browser_smoke_closeout.md)).
+Real UI create (group `f49056fa`, label `gold Long`) → one `create_trade_group_v1` call, no direct
+table writes, both children grouped, `raw` byte-identical (P/L invariant held live) → ungrouped.
+DB now safe: 0 active groups / 0 grouped trades; one **archived** group row by design. Flags cleared;
+grouping UI absent again; write gate NOT enabled.
 
 ---
 
 ## Recommended next safe task
 
-**Draft the Lane B post-deploy write-gate browser-smoke PLAN (docs/design only — NOT execution).**
-Write a reviewable test + rollback plan for the eventual live grouping test, without running it.
+**G2 group-aware loader/render design (design only — no code, no DB).**
+Design how `group_id` gets loaded and grouped state rendered, so a **kept** real group is actually
+visible in the app — the prerequisite before anyone keeps a group persistently (decision A).
 
 Rationale:
-- The deploy is complete and the G2 SQL/RPC rollback smoke already PASSED; UI create-only is live
-  default-off. The remaining unknown is the **live** create — which is a real DB write, so it needs
-  an explicit, reviewed test plan **before** anyone enables `tj_trade_group_write_v01`.
-- A plan is docs-only (no flag enable, no write, no deploy) → safely inside the MAY list.
+- The write path is proven end-to-end (create + ungroup), but `db.loadAll` selects only `raw`, so
+  `group_id` is not loaded and a kept group would be invisible. That's the real next gap.
+- Design-only: no `loadAll` change, no reducer change, no flag/DB touch → inside the MAY list.
 
-Plan should cover: enabling `tj_trade_group_ui_v01`+`tj_trade_group_write_v01` in one browser only;
-picking a real ≥2-leg non-merged candidate; the exact confirm-string create; expected `data.ok`/
-`created`; post-create verification (group row + attach + `raw` untouched + P/L byte-identical);
-then `ungroup`/cleanup or a documented rollback; and the abort conditions. Route for review before
-execution.
+Must preserve the P/L invariant: reducers keep walking `raw` and ignoring `group_id`; `raw` stays the
+reducer input; grouped state is render-time only (a projected `group_id` read kept separate from `raw`).
+Route the design for review before any loader/render code.
 
 ---
 
@@ -47,8 +47,8 @@ execution.
 Before the write gate is enabled in any real (non-rollback) context, ALL must hold:
 1. Batch deploy shipped + user go. — ✅ DONE (`71283c3` live).
 2. Explicit approval to enable `tj_trade_group_write_v01`. — pending.
-3. Post-deploy browser flag-matrix smoke on the live bundle. — plan first (recommended task above), then run on approval.
-4. Reducers/P&L re-confirmed to ignore `group_id`. — pending (part of the smoke).
+3. Post-deploy browser flag-matrix smoke on the live bundle. — ✅ DONE 2026-07-07, PASS WITH ROLLBACK.
+4. Reducers/P&L re-confirmed to ignore `group_id`. — ✅ confirmed live (`raw` byte-identical across create).
 5. Adversarial review of any follow-up code. — pending.
 6. **`isMerged` exclusion (ROADMAP #184).** — UI/candidate layer ✅ DONE + deployed (`b1f8e7d`).
    Remaining: defense-in-depth `raw->>'isMerged'` reject in `create_trade_group_v1` (separate
