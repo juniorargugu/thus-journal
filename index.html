@@ -63,6 +63,9 @@ tailwind.config={theme:{extend:{colors:{
 <script type="text/babel">
 const{useState,useEffect,useMemo,useCallback,useRef}=React;
 
+// ⚠ RELEASE: bump this on EVERY production deploy — it is the ONE source of the footer version badge.
+const APP_VERSION="3.22.0";
+
 const getNextSeries=(code)=>{
   const CYCLE=["H","M","U","Z"];
   const m=code.match(/^([A-Za-z0-9]+?)([HMUZ])(\d{2})$/);
@@ -9799,7 +9802,7 @@ function App({session,onSignOut}){
                   </span>
                 )}
               </button>
-              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v3.21.0</span>
+              <span style={{fontSize:"10px",color:"#848E9C",fontFamily:"monospace",userSelect:"none"}}>v{APP_VERSION}</span>
             </div>
             {/* Desktop nav */}
             <div className="hidden md:flex gap-0.5">
