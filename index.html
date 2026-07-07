@@ -6486,23 +6486,33 @@ function _mt5RowKey(r){
 
 // Local-only product mapping PREVIEW (0D-3): NOT real mapping. localStorage only — no DB/RPC/draft/materialize.
 const MT5_PREVIEW_KEY="tj_mt5_inbox_product_preview";
-// "current / next" contract pair for a product (or single / baseSymbol / "—").
+// Explicit "Current <cur> · Next <nxt>" contract pair for a product (or single / baseSymbol / "—").
 function _mt5ContractPair(p){
   if(!p)return"—";
   const cur=p.currentContract||"",nxt=p.nextContract||"";
-  if(cur&&nxt)return`${cur} / ${nxt}`;
-  return cur||nxt||p.baseSymbol||"—";
+  if(cur&&nxt)return`Current ${cur} · Next ${nxt}`;
+  if(cur)return`Current ${cur}`;
+  if(nxt)return`Next ${nxt}`;
+  return p.baseSymbol||"—";
 }
 // Consistent product-family label for the preview dropdown (no query):
-//   "<Name> — <cur> / <nxt> · csize <n>"  + " · matches row: <sym> (current|next)" when the row matches.
-// All options share this shape so Gold isn't shown U-only while others show M/U. product_id is unchanged.
+//   "<Name> — <base> · Current <cur> · Next <nxt> · csize <n>"  + " · matches row: <sym> (current|next)".
+// Every option shares this shape (family name + base symbol + explicit current/next series + contract
+// size) so Gold isn't shown next-only while others show a pair, and current vs next is never ambiguous.
+// product_id is unchanged — only the display string differs.
 function _mt5PreviewLabel(p,rowSym){
   if(!p)return"";
   const name=p.name||p.baseSymbol||p.id||"";
+  const base=(p.baseSymbol||"").toString().trim();
   const cur=p.currentContract||"",nxt=p.nextContract||"";
   const csize=(p.contractSize===null||p.contractSize===undefined||p.contractSize==="")?"—":String(p.contractSize);
-  const contracts=(cur&&nxt)?`${cur} / ${nxt}`:(cur||nxt||"");
-  let label=contracts?`${name} — ${contracts} · csize ${csize}`:`${name} · csize ${csize}`;
+  const parts=[];
+  if(base&&base!==name)parts.push(base);   // skip when name already fell back to the base symbol (avoids "GO — GO")
+  if(cur&&nxt)parts.push(`Current ${cur}`,`Next ${nxt}`);
+  else if(cur)parts.push(`Current ${cur}`);
+  else if(nxt)parts.push(`Next ${nxt}`);
+  parts.push(`csize ${csize}`);
+  let label=name?`${name} — ${parts.join(" · ")}`:parts.join(" · ");
   const rs=(rowSym||"").toString().toUpperCase();
   if(cur&&rs&&rs===cur.toUpperCase())label+=` · matches row: ${rowSym} (current)`;
   else if(nxt&&rs&&rs===nxt.toUpperCase())label+=` · matches row: ${rowSym} (next)`;
