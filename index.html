@@ -3534,7 +3534,7 @@ const _g2SeriesToken=(t,prod)=>{                          // compact series toke
 };
 const _g2Symbol=(t,prod)=>(((t&&t.contractCode)||(prod&&prod.currentContract)||(prod&&prod.baseSymbol)||(t&&t.productId)||"?")).toString();
 const buildGroupingPreview=(openTrades,products)=>{      // pure: [{key,label,familyName,direction,count,childIds,childSymbols,seriesTokens}] (count>=2)
-  const list=Array.isArray(openTrades)?openTrades.filter(t=>t&&t.status==="open"):[];
+  const list=Array.isArray(openTrades)?openTrades.filter(t=>t&&t.status==="open"&&!t.isMerged):[];   // exclude legacy merged rows (ROADMAP #184); display/close of isMerged rows unaffected
   const buckets=new Map();
   for(const t of list){
     const dir=String((t&&t.direction)||"").trim();
