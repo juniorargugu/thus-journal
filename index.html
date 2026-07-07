@@ -234,7 +234,7 @@ const db={
   async loadAll(uid){
     try{
       const[t,p,pr,n,ud]=await Promise.all([
-        SUPA.from("trades").select("raw").eq("user_id",uid),
+        SUPA.from("trades").select("raw,group_id").eq("user_id",uid),
         SUPA.from("portfolio").select("data,updated_at").eq("user_id",uid).maybeSingle(),
         SUPA.from("products").select("data,updated_at").eq("user_id",uid).maybeSingle(),
         SUPA.from("notes").select("freeform,daily,updated_at").eq("user_id",uid).maybeSingle(),
@@ -255,11 +255,22 @@ const db={
         try{udMap[r.key]=JSON.parse(r.value);}catch{udMap[r.key]=r.value;}
         udMeta[r.key]=r.updated_at||null;
       });
+      // G2 v0.4 — projected trades.group_id read as a SEPARATE id→group_id map. It is NEVER merged
+      // into `raw` or onto the trade object: toTradeRow does raw:t, so attaching group_id to the trade
+      // would persist it back into `raw` on the next save and contaminate the reducer input. Reducers
+      // keep walking `raw` and ignore group membership entirely; this map is render-only.
+      const tradeGroupIds={};
+      (t.data||[]).forEach(r=>{
+        const gid=r&&r.group_id;
+        const rid=r&&r.raw&&r.raw.id;
+        if(gid!=null&&rid!=null)tradeGroupIds[String(rid)]=gid;
+      });
       return{
         ok:true,
         partial:failedAny,
         errors,
         trades:        t.data?.map(r=>r.raw)||null,
+        tradeGroupIds,
         portfolio:     p.data?.data||null,
         portfolioMeta: p.data?.updated_at||null,
         products:      pr.data?.data||null,
@@ -2908,7 +2919,7 @@ function AssetAllocationBar({allocs,cash,total}){
 }
 
 function PositionCard({trade,product,isDraft,balance,mergeMode,mergeSym,isChecked,onCheck,
-  onClose,onEdit,onDelete,onExecute,onUpdatePrice,onMergeStart,onDuplicate,livePrice,liveTimestamp,liveError,priceStatus,onShowDetail}){
+  onClose,onEdit,onDelete,onExecute,onUpdatePrice,onMergeStart,onDuplicate,livePrice,liveTimestamp,liveError,priceStatus,onShowDetail,isGrouped=false}){
   const contracts=trade.contracts||0;
   const activeContracts=trade.remainingContracts??contracts;
   const pv=calcPositionValue(product,activeContracts,trade.entryPrice);
@@ -2946,6 +2957,7 @@ function PositionCard({trade,product,isDraft,balance,mergeMode,mergeSym,isChecke
             {isDraft&&<StatusBadge status="draft"/>}
             {trade.isMerged&&!hasPartial&&<span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-yellow/10 text-yellow border border-yellow/20">⊕M</span>}
             {hasPartial&&<span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-orange/10 text-orange border border-orange/20">⊕ {closedContracts}/{contracts}c</span>}
+            {isGrouped&&<span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-green/10 text-green border border-green/20">⛓ Grouped</span>}
           </div>
           <div className="flex items-center gap-0.5 flex-shrink-0">
             <button onClick={onEdit} className="text-muted hover:text-txt transition text-sm px-2.5 py-1.5 min-w-[36px] min-h-[36px] rounded hover:bg-input">✏️</button>
@@ -3536,8 +3548,9 @@ const _g2SeriesToken=(t,prod)=>{                          // compact series toke
   return null;
 };
 const _g2Symbol=(t,prod)=>(((t&&t.contractCode)||(prod&&prod.currentContract)||(prod&&prod.baseSymbol)||(t&&t.productId)||"?")).toString();
-const buildGroupingPreview=(openTrades,products)=>{      // pure: [{key,label,familyName,direction,count,childIds,childSymbols,seriesTokens}] (count>=2)
-  const list=Array.isArray(openTrades)?openTrades.filter(t=>t&&t.status==="open"&&!t.isMerged):[];   // exclude legacy merged rows (ROADMAP #184); display/close of isMerged rows unaffected
+const buildGroupingPreview=(openTrades,products,groupIdMap={})=>{      // pure: [{key,label,familyName,direction,count,childIds,childSymbols,seriesTokens}] (count>=2)
+  const gmap=groupIdMap||{};
+  const list=Array.isArray(openTrades)?openTrades.filter(t=>t&&t.status==="open"&&!t.isMerged&&!gmap[String(t.id)]):[];   // exclude legacy merged rows (ROADMAP #184) + rows already in a persisted group (G2 v0.4); display/close of those rows unaffected
   const buckets=new Map();
   for(const t of list){
     const dir=String((t&&t.direction)||"").trim();
@@ -3603,15 +3616,16 @@ const _G2_CREATE_ERR={                                   // create_trade_group_v
   group_create_race_lost:"สร้างกลุ่มชนกัน — reload แล้วลองใหม่",
 };
 const _g2MapCreateError=(code)=>_G2_CREATE_ERR[code]||"สร้างกลุ่มไม่สำเร็จ — ลองใหม่อีกครั้ง";
-function GroupingPreview({openTrades,products,writeEnabled,showToast}){
-  const allGroups=useMemo(()=>buildGroupingPreview(openTrades,products),[openTrades,products]);
+function GroupingPreview({openTrades,products,writeEnabled,showToast,groupIdMap}){
+  const allGroups=useMemo(()=>buildGroupingPreview(openTrades,products,groupIdMap||{}),[openTrades,products,groupIdMap]);
   const[proposal,setProposal]=useState(null);   // in-memory selected proposal for the review modal; NEVER persisted
   const[groupedKeys,setGroupedKeys]=useState(()=>new Set());   // session-only: proposedGroupIds created this session (v0.3 suppression; NOT persisted)
   const[confirmText,setConfirmText]=useState("");
   const[creating,setCreating]=useState(false);
   const[error,setError]=useState(null);         // inline modal error (mapped RPC code OR transport)
-  // Suppress candidates already created THIS SESSION. group_id is NOT loaded (db.loadAll reads only raw),
-  // so cross-reload the same candidate may re-appear — safe because create_trade_group_v1 is idempotent.
+  // Suppress candidates already created THIS SESSION (fast path). Persisted membership is also excluded
+  // upstream in buildGroupingPreview via groupIdMap (G2 v0.4: db.loadAll now reads group_id into a
+  // separate map), so a kept group no longer re-appears cross-reload. Session set stays as belt-and-suspenders.
   const groups=useMemo(()=>allGroups.filter(g=>!groupedKeys.has(buildGroupProposal(g).proposedGroupId)),[allGroups,groupedKeys]);
   const closeModal=useCallback(()=>{setProposal(null);setConfirmText("");setError(null);},[]);
   const openProposal=useCallback((g)=>{setError(null);setConfirmText("");setProposal(buildGroupProposal(g));},[]);
@@ -3703,7 +3717,8 @@ function GroupingPreview({openTrades,products,writeEnabled,showToast}){
     </div>
   );
 }
-function PagePositions({trades,products,productRegistry,balance,portfolio,onCommitOpen,onCommitExecuteDraft,onCommitClose,onCommitUpdate,onCommitMerge,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
+function PagePositions({trades,products,productRegistry,balance,portfolio,groupIdMap,onCommitOpen,onCommitExecuteDraft,onCommitClose,onCommitUpdate,onCommitMerge,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
+  const gmap=groupIdMap||{};   // G2 v0.4 render-only id→group_id (default {})
   const[showForm,setShowForm]=useState(false);
   const[editTrade,setEditTrade]=useState(null);
   const[closingTrade,setClosingTrade]=useState(null);
@@ -3933,7 +3948,7 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onComm
           ?<div className="space-y-2 mb-3">{mockGroups.map(g=>{const kids=g.childIds.map(id=>openTrades.find(t=>t.id===id)).filter(Boolean);return<GroupCard key={g.groupId} childTrades={kids} products={products} livePrices={livePrices}/>;})}</div>
           :<div className="mb-3 text-xs text-muted bg-card border border-dashed border-border rounded-lg px-3 py-2">🧪 Trade-group mock (dev): ไม่มีกลุ่ม — ต้องมี open positions ≥2 ที่ product+direction เดียวกัน</div>
         )}
-        {groupUiV01On&&<GroupingPreview openTrades={openTrades} products={products} writeEnabled={groupWriteV01On} showToast={showToast}/>}
+        {groupUiV01On&&<GroupingPreview openTrades={openTrades} products={products} writeEnabled={groupWriteV01On} showToast={showToast} groupIdMap={gmap}/>}
         {openTrades.length===0
           ?<div className="bg-card border border-border border-dashed rounded-2xl p-10 text-center space-y-3">
             <div className="text-4xl">📭</div>
@@ -3947,6 +3962,7 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,onComm
                 const tradeKey=`${t.productId}_${t.direction}`;
                 return(
                   <PositionCard key={t.id} trade={t} product={p} isDraft={false} balance={balance}
+                    isGrouped={!!gmap[String(t.id)]}
                     mergeMode={mergeMode} mergeSym={mergeSym}
                     isChecked={mergeIds.includes(t.id)}
                     onCheck={id=>setMergeIds(prev=>prev.includes(id)?prev.filter(x=>x!==id):[...prev,id])}
@@ -8644,6 +8660,7 @@ function App({session,onSignOut}){
   const[dbReady,  setDbReady]  =useState(false); // true after Supabase load completes
   const[loadAttempt,setLoadAttempt]=useState(0); // bump to retry hydration after critical failure
   const[trades,   setTrades]   =useState([]);
+  const[tradeGroupIds,setTradeGroupIds]=useState({});   // G2 v0.4: id→group_id (render-only; NEVER merged into raw/trade objects)
   const[portfolio,setPortfolio]=useState({transactions:[],stepBaseMode:"first_deposit"});
   const[products, setProducts] =useState(DEFAULT_PRODUCTS);
   // Phase 1 ProductRegistry facade (runtime-only; no behavior or persistence change).
@@ -9016,6 +9033,8 @@ function App({session,onSignOut}){
       }else{
         console.warn("[trades][hydrate] data.trades==null — keeping initial state");
       }
+      // G2 v0.4 — group membership map (id→group_id), render-only; default {} on absence. Not persisted to LS.
+      setTradeGroupIds(data.tradeGroupIds||{});
       // Portfolio — merge remote + backfill stepHistory if empty
       {
         const base=data.portfolio||ls.get("tj_portfolio",{transactions:[],stepBaseMode:"first_deposit"});
@@ -9878,7 +9897,7 @@ function App({session,onSignOut}){
       )}
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
-        {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onCommitMerge={commitMerge} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
+        {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} groupIdMap={tradeGroupIds} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onCommitMerge={commitMerge} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
         {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onCommitImport={commitImportTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio}/>}
