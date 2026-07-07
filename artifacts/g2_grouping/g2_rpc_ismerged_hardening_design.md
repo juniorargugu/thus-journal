@@ -1,7 +1,7 @@
 # G2 RPC-side `isMerged` Hardening — Design (audit-only)
 
 **Date (local):** 2026-07-07
-**Status:** **DESIGN ONLY — no SQL applied, no code changed.** A future gated DB/RPC migration.
+**Status:** **DESIGN REVIEWED + APPROVED (ChatGPT PASS) — no SQL applied, no code changed.** A future gated DB/RPC migration, sequenced **AFTER_V04_DEPLOY, before write-gate enable for real use**.
 **Scope:** add one defense-in-depth business error to `create_trade_group_v1` so it rejects legacy
 merged rows (`raw->>'isMerged'` truthy). `ungroup_trade_group_v1` unchanged. UI already excludes merged
 rows at the candidate layer (`b1f8e7d`, ROADMAP #184) — this closes the gap at the server.
@@ -10,6 +10,46 @@ rows at the candidate layer (`b1f8e7d`, ROADMAP #184) — this closes the gap at
 > Defense-in-depth only. The write gate is off in production and the UI already filters `isMerged`
 > candidates, so nothing merged can reach this RPC today. This guard makes the invariant hold at the
 > data layer regardless of caller.
+
+---
+
+## Review verdict (ChatGPT)
+
+**PASS — APPROVED DESIGN.** Recommended sequencing **AFTER_V04_DEPLOY, before the write gate is enabled for
+real use**. Approved as designed:
+- Future **function-body-only** `CREATE OR REPLACE FUNCTION create_trade_group_v1(text[],text)` — add `v_merged int`.
+- In the locked-row aggregate (§2), count children where `lower(btrim(coalesce(raw->>'isMerged','')))='true'`.
+- In the unconditional validation section (§3), return `{ok:false, error:'merged_child_not_allowed'}`.
+- Missing `raw` / missing key / `null` / `false` remain **allowed**; boolean `true` and string `"true"` **rejected**.
+- **No change** to `ungroup_trade_group_v1`; **no** signature / grant / schema / table / data change.
+- UI error mapping for `merged_child_not_allowed` is a **deferred optional micro-edit**; the generic
+  `_g2MapCreateError` fallback is acceptable until then (no ordering dependency).
+- **SQL apply stays a separate user-gated migration task** (SQL Editor, `BEGIN … ROLLBACK` tested).
+
+Sequence: **(1)** deploy v0.4 → **(2)** default-off smoke → **(3)** later gated RPC hardening migration →
+**(4)** only after that, consider write-gate enable / real-group flow. This is **not** the immediate next task.
+
+## Pre-apply precheck (MANDATORY before the migration is ever applied)
+
+Because the merged check is **unconditional (runs before idempotency/`already_grouped`)**, a merged row that is
+already an active grouped child would, after this change, make its group's re-click return
+`merged_child_not_allowed` instead of `already_exists`. Before applying the migration, run a **read-only**
+precheck confirming there are **0 active grouped children with `raw->>'isMerged'` truthy**:
+
+```sql
+-- READ-ONLY precheck — expect count = 0 before applying the hardening.
+SELECT count(*) AS active_merged_grouped_children
+  FROM public.trades t
+  JOIN public.trade_groups g
+    ON g.id = t.group_id AND g.archived_at IS NULL
+ WHERE t.group_id IS NOT NULL
+   AND lower(btrim(coalesce(t.raw->>'isMerged',''))) = 'true';
+```
+
+- **Expected: 0.** Current known DB state (after the write-gate rollback smoke) is **0 active groups / 0 grouped
+  trades**, so this precheck is expected to pass trivially.
+- **If it ever returns > 0: STOP and review before applying** — decide how to handle the pre-existing merged
+  grouped child (e.g. ungroup it first, or scope the guard) rather than silently changing its re-click behavior.
 
 ---
 
@@ -106,8 +146,8 @@ rejected as weaker; noted for completeness.)
 - No production urgency: write gate is off + UI already excludes merged rows, so no merged create can occur until
   the write flag is enabled (itself gated, post-deploy).
 - **Land it before the write gate is enabled for real use** (it is a pre-write-gate guard). Order:
-  v0.4 deploy → default-off smoke → **apply this RPC hardening (gated SQL Editor, BEGIN/ROLLBACK tested)** →
-  write-flag enable + keep a real group.
+  v0.4 deploy → default-off smoke → **read-only pre-apply precheck (expect 0, see above)** → **apply this RPC
+  hardening (gated SQL Editor, BEGIN/ROLLBACK tested)** → write-flag enable + keep a real group.
 
 ## 8. Explicit non-goals
 No UI/index.html change in this task (the `_G2_CREATE_ERR` mapping is a separate future micro-edit); no
@@ -119,8 +159,8 @@ This task created one docs file only (no other edits). No code changes. No SQL a
 writes. No flags enabled. No push/deploy. Prod unchanged at `71283c3` / v3.22.0.
 
 ## 10. Next step routing
-**SEND_TO_CHATGPT_REVIEW** — review this RPC hardening design before it becomes a migration. Confirm: (a)
-crash-safe `lower(btrim(coalesce(raw->>'isMerged','')))='true'` detection (false/null/absent all allowed); (b)
-unconditional §3 placement is safe given 0 active groups today; (c) one new `merged_child_not_allowed` code, no
-other contract change; (d) function-body-only replace with git-preserved rollback; (e) sequence AFTER_V04_DEPLOY,
-before write-gate enable. On approval, package as a gated migration + BEGIN/ROLLBACK test run (Junior's SQL Editor).
+**REVIEWED — ChatGPT PASS / APPROVED (2026-07-07).** See "Review verdict" above. This design is **not** the
+immediate next task; it is queued as a gated migration **AFTER_V04_DEPLOY, before write-gate enable**. When that
+point is reached, the future implementation task will: (1) run the read-only pre-apply precheck (expect 0);
+(2) package the function-body-only `CREATE OR REPLACE` as a new migration + commented rollback; (3) apply in the
+SQL Editor under `BEGIN … ROLLBACK` with the §5 tests, `COMMIT` only on all-pass. SQL apply stays user-run.

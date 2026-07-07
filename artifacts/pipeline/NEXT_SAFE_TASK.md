@@ -41,6 +41,7 @@ Rationale:
 - **Any new production deploy** — the current batch is live; a further deploy is a fresh user-gated batch (now includes the unpushed G2 v0.4 loader/render code `ba9e780`+`9a07fdc`).
 - **Keep a real group persistently** (Lane B) — needs deploy + flag-enable approval; first real exercise of the v0.4 loader.
 - **G2 v0.5 ungroup UI implementation** (Lane B) — design reviewed + approved-deferred (ChatGPT PASS → IMPLEMENT_AFTER_CURRENT_DEPLOY); a new write path, **NOT part of the current v0.4 batch**. Code only after v0.4 deploys + default-off smoke passes; its code needs its own adversarial review.
+- **G2 RPC `isMerged` hardening migration** (Lane F) — design reviewed + approved (ChatGPT PASS; [`../g2_grouping/g2_rpc_ismerged_hardening_design.md`](../g2_grouping/g2_rpc_ismerged_hardening_design.md)). A gated DB/RPC migration (function-body-only `create_trade_group_v1` replace), **sequenced AFTER_V04_DEPLOY, before write-gate enable**. Run the read-only pre-apply precheck (expect 0) first; SQL apply is user-run in the SQL Editor. Not the immediate next task.
 - **MT5 auto draft import** (Lane D) — touches import/durable paths.
 - **GUGU cadence/cognition** (Lane E) — frozen.
 - **RLS/security hardening** (Lane G) — fresh read-only audit first.
