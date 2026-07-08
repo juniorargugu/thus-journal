@@ -1,36 +1,38 @@
 # Next Safe Task
 
-**Updated (local):** 2026-07-07
-**Prod:** `71283c3` (v3.22.0) on thus999.com. **Local** ahead of prod by docs-only commits
-(pipeline/closeout records; not served).
+**Updated (local):** 2026-07-08
+**Prod:** **`f01eb33` (v3.23.0)** on thus999.com — **DEPLOYED, in sync** (origin/main == HEAD). Served bundle
+byte-identical to HEAD:index.html.
 
-**Just completed:** **G2 v0.5 ungroup UI design — reviewed + APPROVED-DEFERRED (ChatGPT PASS → IMPLEMENT_AFTER_CURRENT_DEPLOY)**
-([`../g2_grouping/g2_v05_ungroup_design_closeout.md`](../g2_grouping/g2_v05_ungroup_design_closeout.md)). Prior in this stack:
-v0.4 loader/render implemented + Codex PASS (`ba9e780`+`9a07fdc`, OK_FOR_FUTURE_BATCH), and the v0.4
-deploy-batch **preflight** returned **READY_FOR_DEPLOY_PROMPT** (index.html byte-clean, esbuild EXIT 0, flags
-read-only/default-off, 10/10 candidate harness) — pending user go + a version bump `3.22.0`→`3.23.0`.
-**Unpushed; prod still `71283c3` / v3.22.0; batch ON HOLD; G2 flags default-off, write gate NOT enabled.**
+**Just completed:** **G2 v0.4 + MT5 dry-run harness — DEPLOYED to prod (`f01eb33` / v3.23.0)**
+([`../g2_grouping/g2_v04_mt5_harness_deploy_closeout.md`](../g2_grouping/g2_v04_mt5_harness_deploy_closeout.md)).
+Pushed `71283c3..f01eb33` (13 commits: G2 v0.4 loader/render/reset + MT5 harness merge `3f4a67d` + version bump
+`f01eb33`); Netlify published byte-identical. **No-auth default-off smoke PASS** (app mounts; flags null; 0
+`create_trade_group_v1`; 0 `/rest/v1/trades` + 0 `/rest/v1/trade_groups` writes on load; grouping UI absent; no
+⛓ badge). MT5 harness is offline-only (no Supabase/MT5/network; tests PASS). **G2 flags default-off; write gate
+NOT enabled.**
 
 ---
 
 ## Recommended next safe task
 
-**(a) Hold / wait — no autopilot-eligible task is pending.** The v0.4 loader/render code is implemented,
-Codex-PASSed, and preflighted (**READY_FOR_DEPLOY_PROMPT**); the v0.5 ungroup design is reviewed and
-**approved-deferred**. Every remaining step is user-gated.
+**(a) Authenticated post-deploy visual smoke — user browser (signed in).** The only pending verification: with
+a real session, confirm Positions/Journal render normally, P/L + portfolio visually unchanged, footer shows
+**v3.23.0** after hard-refresh, and **no ⛓ Grouped badge** (DB has 0 grouped trades). Read-only — do NOT set any
+flag. Runbook §4–5: [`../g2_grouping/g2_v04_post_deploy_smoke_runbook.md`](../g2_grouping/g2_v04_post_deploy_smoke_runbook.md).
+(The no-auth default-off half of the runbook already PASSED headlessly.)
 
-When the user is ready, in order (each separately gated — do NOT auto-do):
-- **(b) User-approved v0.4 deploy prompt:** bump `APP_VERSION` `3.22.0`→`3.23.0` (first step), push the
-  committed stack, monitor Netlify, verify the served bundle is byte-identical to HEAD. Push/deploy = user approval.
-- **(c) Post-deploy default-off smoke:** app mounts, grouping UI absent, 0 create RPC on load, no ⛓ badge
-  without flags/groups. Read-only. **Runbook prepared:** [`../g2_grouping/g2_v04_post_deploy_smoke_runbook.md`](../g2_grouping/g2_v04_post_deploy_smoke_runbook.md).
-- **(d) Later, separately gated:** enable `tj_trade_group_write_v01` / keep a real group persistently /
-  **implement G2 v0.5 ungroup UI**. Each needs explicit approval + its own reviewed plan. **The v0.5 ungroup
-  implementation is NOT part of the current v0.4 deploy batch** (new write path; IMPLEMENT_AFTER_CURRENT_DEPLOY).
+Then, only if the user approves, each **separately gated** (do NOT auto-do):
+- **(b)** Enable `tj_trade_group_write_v01` / keep a real group persistently — needs flag-enable approval + a
+  reviewed test/rollback plan.
+- **(c)** Apply the RPC `isMerged` hardening migration (function-body replace) — run the read-only precheck
+  (expect 0) first; SQL apply is user-run. Sequenced before write-gate enable.
+- **(d)** Implement G2 v0.5 ungroup UI — approved-deferred; a new write path, its own review + reviewed plan.
+- **(e)** MT5 real staging writer — gated behind reviewed schema/RLS + explicit DB-write approval.
 
 Rationale:
-- Everything design/preflight-able is done; shipping is the user's call. The v0.5 ungroup UI only has a real
-  group to act on after deploy + write-flag enable, so it is deliberately last and kept out of this batch.
+- The deploy is live and headless-verified; the remaining verification needs a signed-in session (user-side).
+  Everything past the visual smoke is a gated write path or migration — no autopilot-eligible work pending.
 
 ---
 
@@ -38,8 +40,8 @@ Rationale:
 
 - **Enable `tj_trade_group_write_v01`** or run a live (non-rollback) create (Lane B) — needs explicit flag-enable approval + a reviewed test/rollback plan.
 - **Execute** the G2 write-gate live smoke (Lane B) — planning is safe; running it (a real write) needs approval.
-- **Any new production deploy** — the current batch is live; a further deploy is a fresh user-gated batch (now includes the unpushed G2 v0.4 loader/render code `ba9e780`+`9a07fdc`).
-- **Keep a real group persistently** (Lane B) — needs deploy + flag-enable approval; first real exercise of the v0.4 loader.
+- **Any new production deploy** — prod is `f01eb33` / v3.23.0 (G2 v0.4 + MT5 harness live); a further deploy is a fresh user-gated batch.
+- **Keep a real group persistently** (Lane B) — v0.4 loader now deployed; needs flag-enable approval; first real exercise of the loader.
 - **G2 v0.5 ungroup UI implementation** (Lane B) — design reviewed + approved-deferred (ChatGPT PASS → IMPLEMENT_AFTER_CURRENT_DEPLOY); a new write path, **NOT part of the current v0.4 batch**. Code only after v0.4 deploys + default-off smoke passes; its code needs its own adversarial review.
 - **G2 RPC `isMerged` hardening migration** (Lane F) — design reviewed + approved (ChatGPT PASS; [`../g2_grouping/g2_rpc_ismerged_hardening_design.md`](../g2_grouping/g2_rpc_ismerged_hardening_design.md)). A gated DB/RPC migration (function-body-only `create_trade_group_v1` replace), **sequenced AFTER_V04_DEPLOY, before write-gate enable**. Run the read-only pre-apply precheck (expect 0) first; SQL apply is user-run in the SQL Editor. Not the immediate next task.
 - **MT5 auto draft import** (Lane D) — touches import/durable paths.
@@ -51,9 +53,9 @@ Rationale:
 ## Standing gate for Lane B (G2)
 
 Before the write gate is enabled in any real (non-rollback) context, ALL must hold:
-1. Batch deploy shipped + user go. — ✅ DONE (`71283c3` live).
+1. Batch deploy shipped + user go. — ✅ DONE (`f01eb33` / v3.23.0 live, byte-identical).
 2. Explicit approval to enable `tj_trade_group_write_v01`. — pending.
-3. Post-deploy browser flag-matrix smoke on the live bundle. — ✅ DONE 2026-07-07, PASS WITH ROLLBACK.
+3. Post-deploy browser smoke on the live bundle. — ✅ no-auth default-off smoke on `f01eb33` PASS (2026-07-08); **authenticated visual smoke PENDING** (user browser). Prior write-gate live smoke on `71283c3` PASS WITH ROLLBACK (2026-07-07).
 4. Reducers/P&L re-confirmed to ignore `group_id`. — ✅ confirmed live (`raw` byte-identical across create).
 5. Adversarial review of any follow-up code. — ✅ DONE for the v0.4 loader/render (`ba9e780`+`9a07fdc`, Codex **PASS → OK_FOR_FUTURE_BATCH**). v0.5 ungroup **design** reviewed (ChatGPT **PASS**, approved-deferred) — its **code** review is still pending (write it only after v0.4 deploys). RPC `raw->>'isMerged'` guard still needs its own review.
 6. **`isMerged` exclusion (ROADMAP #184).** — UI/candidate layer ✅ DONE + deployed (`b1f8e7d`).
