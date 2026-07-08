@@ -22,9 +22,12 @@ write path or migration; pick one to open when ready (each needs explicit approv
 - **(a) G2 write-gate / real-group path** (Lane B) — enable `tj_trade_group_write_v01` and keep one real group
   to exercise the deployed v0.4 loader end-to-end. **Prereq:** apply the RPC `isMerged` hardening migration
   first (below), and a reviewed enable + rollback plan. Flag enable = user approval.
-- **(b) RPC `isMerged` hardening migration** (Lane F) — approved design ([`../g2_grouping/g2_rpc_ismerged_hardening_design.md`](../g2_grouping/g2_rpc_ismerged_hardening_design.md));
-  function-body-only `create_trade_group_v1` replace. Run the read-only pre-apply precheck (expect 0) first;
-  SQL apply is user-run in the SQL Editor under BEGIN/ROLLBACK. Sequenced before write-gate enable.
+- **(b) RPC `isMerged` hardening migration** (Lane F) — **PACKAGED, NOT applied**: migration
+  [`../../migrations/20260708_g2_create_group_reject_ismerged.sql`](../../migrations/20260708_g2_create_group_reject_ismerged.sql)
+  + validation runbook [`../g2_grouping/g2_rpc_ismerged_hardening_validation.sql`](../g2_grouping/g2_rpc_ismerged_hardening_validation.sql)
+  (design ChatGPT PASS). **Next gated step:** user-run read-only precheck (expect 0) → review the migration →
+  apply in the Supabase SQL Editor (BEGIN/ROLLBACK dry-run via the validation runbook, then COMMIT). SQL apply
+  is user-run. Sequenced before write-gate enable.
 - **(c) MT5 real staging writer planning** (Lane D) — the dry-run harness is merged/verified; a real writer is
   gated behind reviewed schema/RLS + explicit DB-write approval + role decision + Supabase write tests +
   rollback plan. Design/planning is safe; any DB write is user-gated.
