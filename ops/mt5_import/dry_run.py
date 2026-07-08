@@ -430,17 +430,20 @@ def main(argv):
     mapping = _load_json(args.mapping, "mapping fixture")
     report, fatal = process(fixture, mapping)
 
-    if report is not None:
-        if args.out:
-            _write(args.out, json.dumps(report, indent=2, ensure_ascii=False, default=str))
-        if args.summary:
-            _write(args.summary, render_markdown(report))
-        _print_console(report)
+    # Malformed fixture STRUCTURE: process() built no report -> exit 2 (same class as bad/missing JSON).
+    # This MUST be checked before the collision branch, whose fatal always comes WITH a report.
+    if report is None:
+        common.stop(fatal or "could not build a report from the input fixture.", code=2)
+
+    # A report exists — emit it (a collision report is still worth saving), then classify fatals.
+    if args.out:
+        _write(args.out, json.dumps(report, indent=2, ensure_ascii=False, default=str))
+    if args.summary:
+        _write(args.summary, render_markdown(report))
+    _print_console(report)
 
     if fatal:
-        common.stop(fatal, code=4)          # e.g. idempotency collision
-    if report is None:
-        common.stop("could not build report (see message above).", code=2)
+        common.stop(fatal, code=4)          # idempotency_key collision (report built, but unsafe to accept)
 
     rj = report["rejected_rows"]
     n_rej = len(rj["structural"]) + len(rj["mapping"])

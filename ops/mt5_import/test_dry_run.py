@@ -15,9 +15,19 @@ import copy
 import json
 import os
 import sys
+import tempfile
 
 import tz
 import dry_run
+
+
+def _main_exit(argv):
+    """Invoke dry_run.main(argv) and return the process exit code (catching SystemExit from common.stop)."""
+    try:
+        rc = dry_run.main(argv)
+        return rc if rc is not None else 0
+    except SystemExit as e:
+        return e.code if isinstance(e.code, int) else 1
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
@@ -139,6 +149,26 @@ def run():
     }
     rep5, fat5 = dry_run.process(collide_fx, mapping)
     check(fat5 is not None and rep5["idempotency"]["collisions"], "collision (same key, diff raw_sha) was not fatal")
+
+    # (11) CLI exit-code contract: invalid JSON -> 2, malformed fixture STRUCTURE -> 2, collision -> 4
+    with tempfile.TemporaryDirectory() as td:
+        bad_json = os.path.join(td, "notjson.json")
+        with open(bad_json, "w", encoding="utf-8") as f:
+            f.write("{ not json")
+        check(_main_exit(["--input", bad_json, "--mapping", FIX_MAP]) == 2,
+              "invalid JSON must exit 2")
+
+        malformed = os.path.join(td, "malformed.json")
+        with open(malformed, "w", encoding="utf-8") as f:
+            json.dump({"account": 123, "positions": [], "deals": []}, f)  # account not an object
+        code_bad = _main_exit(["--input", malformed, "--mapping", FIX_MAP])
+        check(code_bad == 2, f"malformed fixture structure must exit 2 (not 4), got {code_bad}")
+
+        collide = os.path.join(td, "collide.json")
+        with open(collide, "w", encoding="utf-8") as f:
+            json.dump(collide_fx, f)
+        code_coll = _main_exit(["--input", collide, "--mapping", FIX_MAP])
+        check(code_coll == 4, f"idempotency collision must exit 4, got {code_coll}")
 
     # (10) no Supabase / MT5 / writer imports or network in the harness
     with open(os.path.join(_HERE, "dry_run.py"), "r", encoding="utf-8") as f:
