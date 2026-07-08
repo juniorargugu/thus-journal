@@ -4,35 +4,35 @@
 **Prod:** **`f01eb33` (v3.23.0)** on thus999.com — **DEPLOYED, in sync** (origin/main == HEAD). Served bundle
 byte-identical to HEAD:index.html.
 
-**Just completed:** **G2 v0.4 + MT5 dry-run harness — DEPLOYED to prod (`f01eb33` / v3.23.0)**
+**Just completed:** **v3.23.0 deploy VERIFIED — authenticated visual smoke PASS (2026-07-08)**
 ([`../g2_grouping/g2_v04_mt5_harness_deploy_closeout.md`](../g2_grouping/g2_v04_mt5_harness_deploy_closeout.md)).
-Pushed `71283c3..f01eb33` (13 commits: G2 v0.4 loader/render/reset + MT5 harness merge `3f4a67d` + version bump
-`f01eb33`); Netlify published byte-identical. **No-auth default-off smoke PASS** (app mounts; flags null; 0
-`create_trade_group_v1`; 0 `/rest/v1/trades` + 0 `/rest/v1/trade_groups` writes on load; grouping UI absent; no
-⛓ badge). MT5 harness is offline-only (no Supabase/MT5/network; tests PASS). **G2 flags default-off; write gate
-NOT enabled.**
+G2 v0.4 + MT5 dry-run harness are live at `f01eb33` / v3.23.0 (byte-identical). Both smoke halves PASS: no-auth
+default-off (flags null; 0 `create_trade_group_v1`; 0 `/rest/v1/trades` + 0 `/rest/v1/trade_groups` writes on
+load; grouping UI absent; no ⛓ badge) **and** authenticated (Positions/Journal render, P/L + portfolio
+unchanged, footer v3.23.0, no ⛓ badge at 0 grouped trades). MT5 harness offline-only. **G2 flags default-off;
+write gate NOT enabled.**
 
 ---
 
 ## Recommended next safe task
 
-**(a) Authenticated post-deploy visual smoke — user browser (signed in).** The only pending verification: with
-a real session, confirm Positions/Journal render normally, P/L + portfolio visually unchanged, footer shows
-**v3.23.0** after hard-refresh, and **no ⛓ Grouped badge** (DB has 0 grouped trades). Read-only — do NOT set any
-flag. Runbook §4–5: [`../g2_grouping/g2_v04_post_deploy_smoke_runbook.md`](../g2_grouping/g2_v04_post_deploy_smoke_runbook.md).
-(The no-auth default-off half of the runbook already PASSED headlessly.)
+**No autopilot-eligible task is pending — the deploy is fully verified.** Every remaining track is a gated
+write path or migration; pick one to open when ready (each needs explicit approval + its own reviewed plan):
 
-Then, only if the user approves, each **separately gated** (do NOT auto-do):
-- **(b)** Enable `tj_trade_group_write_v01` / keep a real group persistently — needs flag-enable approval + a
-  reviewed test/rollback plan.
-- **(c)** Apply the RPC `isMerged` hardening migration (function-body replace) — run the read-only precheck
-  (expect 0) first; SQL apply is user-run. Sequenced before write-gate enable.
-- **(d)** Implement G2 v0.5 ungroup UI — approved-deferred; a new write path, its own review + reviewed plan.
-- **(e)** MT5 real staging writer — gated behind reviewed schema/RLS + explicit DB-write approval.
+- **(a) G2 write-gate / real-group path** (Lane B) — enable `tj_trade_group_write_v01` and keep one real group
+  to exercise the deployed v0.4 loader end-to-end. **Prereq:** apply the RPC `isMerged` hardening migration
+  first (below), and a reviewed enable + rollback plan. Flag enable = user approval.
+- **(b) RPC `isMerged` hardening migration** (Lane F) — approved design ([`../g2_grouping/g2_rpc_ismerged_hardening_design.md`](../g2_grouping/g2_rpc_ismerged_hardening_design.md));
+  function-body-only `create_trade_group_v1` replace. Run the read-only pre-apply precheck (expect 0) first;
+  SQL apply is user-run in the SQL Editor under BEGIN/ROLLBACK. Sequenced before write-gate enable.
+- **(c) MT5 real staging writer planning** (Lane D) — the dry-run harness is merged/verified; a real writer is
+  gated behind reviewed schema/RLS + explicit DB-write approval + role decision + Supabase write tests +
+  rollback plan. Design/planning is safe; any DB write is user-gated.
+- **(d) G2 v0.5 ungroup UI** (Lane B) — approved-deferred; a new write path, its own adversarial review.
 
 Rationale:
-- The deploy is live and headless-verified; the remaining verification needs a signed-in session (user-side).
-  Everything past the visual smoke is a gated write path or migration — no autopilot-eligible work pending.
+- v3.23.0 is deployed and both smoke halves pass, so there is nothing left to verify. What remains is
+  DB/RPC/write-gate work — all user-gated. Design/planning for any of the above is autopilot-safe; execution is not.
 
 ---
 

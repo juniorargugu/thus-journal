@@ -1,7 +1,7 @@
 # G2 v0.4 + MT5 Dry-Run Harness — Deploy Closeout
 
 **Date (local):** 2026-07-08
-**Result:** **DEPLOYED** to production. Prod `thus999.com` = **`f01eb33` / v3.23.0**, byte-identical served bundle.
+**Result:** **DEPLOYED + VERIFIED** in production. Prod `thus999.com` = **`f01eb33` / v3.23.0**, byte-identical served bundle. No-auth default-off smoke PASS + authenticated visual smoke PASS (2026-07-08).
 **Deployed by:** assistant (user pre-approved Netlify deploys at agent discretion).
 
 > Ships the G2 v0.4 group-aware loader/render (default-off) and merges the offline MT5 dry-run harness
@@ -56,10 +56,11 @@ reducer/P&L/portfolio/durable hunks.
   contract); CLI output **deterministic** (regeneration content-identical to the committed sample report).
 - **Never** imports `staging_db`/`writer`/`MetaTrader5`/`supabase`; no DB/SQL/RPC/network. Not the writer.
 
-## Pending
+## Authenticated visual smoke — **PASS** (user browser, 2026-07-08)
 
-- **Authenticated Positions/Journal/P&L visual smoke** in a signed-in browser (runbook §4–5): Positions/Journal
-  render normally, P/L + portfolio visually unchanged, footer v3.23.0, no ⛓ badge (DB has 0 grouped trades).
+Signed-in verification (runbook §4–5) confirmed by the user: Positions/Journal render normally, P/L + portfolio
+visually unchanged, footer shows **v3.23.0** after hard-refresh, and **no ⛓ Grouped badge** (DB has 0 grouped
+trades). Combined with the no-auth default-off smoke above, **v3.23.0 deploy verification is COMPLETE.**
 
 ## Gated remaining work (each needs explicit approval)
 
