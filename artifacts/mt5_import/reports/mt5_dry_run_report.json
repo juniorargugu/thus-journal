@@ -1,0 +1,516 @@
+{
+  "metadata": {
+    "harness": "mt5 fixture-driven dry-run",
+    "version": "v0.1",
+    "dry_run": true,
+    "wrote_to_db": false,
+    "source_system": "mt5",
+    "reused_mappers": "ops/mt5_import/build_rows.py (map_open_position, map_deal, delta_guard)"
+  },
+  "account": {
+    "login_masked": "70*****56",
+    "account_fingerprint": "mt5:b10289f3c6a59115",
+    "margin_mode": 2,
+    "retail_hedging": true
+  },
+  "summary": {
+    "positions_and_deals_mapped": 7,
+    "distinct_rows": 6,
+    "accepted_mapped": 4,
+    "needs_mapping": 2,
+    "rejected_mapping": 0,
+    "rejected_structural": 0,
+    "duplicates_collapsed": 1,
+    "distinct_idempotency_keys": 6,
+    "idempotency_collisions": 0,
+    "by_kind": {
+      "open": 4,
+      "close": 1,
+      "balance": 1
+    },
+    "by_mapping_status": {
+      "mapped": 4,
+      "needs_mapping": 2
+    },
+    "by_state": {
+      "new": 4,
+      "needs_mapping": 2
+    },
+    "symbols": [
+      "DELTA",
+      "DELTAU26",
+      "GOM26",
+      "GOU26"
+    ],
+    "contract_sizes": {
+      "DELTA": 1,
+      "DELTAU26": 1000,
+      "GOM26": 300,
+      "GOU26": 300
+    }
+  },
+  "mapping_decisions": [
+    {
+      "symbol": "GOU26",
+      "kind": "open",
+      "position_id": 700000001,
+      "deal_id": null,
+      "mapping_status": "mapped",
+      "product_id": "gold_next",
+      "instrument_class": "futures",
+      "contract_size": 300,
+      "reason": "explicit_symbol_mapping",
+      "idempotency_key": "mt5:700123456:pos:700000001",
+      "raw_sha": "1ce943ca0197b68bbb71f2770d7f847f6372b874db3a7acaf22848d709142757"
+    },
+    {
+      "symbol": "GOU26",
+      "kind": "open",
+      "position_id": 700000002,
+      "deal_id": null,
+      "mapping_status": "mapped",
+      "product_id": "gold_next",
+      "instrument_class": "futures",
+      "contract_size": 300,
+      "reason": "explicit_symbol_mapping",
+      "idempotency_key": "mt5:700123456:pos:700000002",
+      "raw_sha": "c1839ef80302e78327b012673afdb80c6f4874552f64607092e7b44fb67aeed4"
+    },
+    {
+      "symbol": "GOU26",
+      "kind": "open",
+      "position_id": 700000003,
+      "deal_id": null,
+      "mapping_status": "mapped",
+      "product_id": "gold_next",
+      "instrument_class": "futures",
+      "contract_size": 300,
+      "reason": "explicit_symbol_mapping",
+      "idempotency_key": "mt5:700123456:pos:700000003",
+      "raw_sha": "f54c2f9c5c62f48913867bb0776b6da30209948a4dfd0fa952445f2f1de115c2"
+    },
+    {
+      "symbol": "GOU26",
+      "kind": "close",
+      "position_id": 700000001,
+      "deal_id": 800000001,
+      "mapping_status": "mapped",
+      "product_id": "gold_next",
+      "instrument_class": "futures",
+      "contract_size": 300,
+      "reason": "explicit_symbol_mapping",
+      "idempotency_key": "mt5:700123456:deal:800000001",
+      "raw_sha": "7affaf61b992e85a544b4df157c159b123e9127d399e11fa17b373125d3a24d3"
+    },
+    {
+      "symbol": "DELTAU26",
+      "kind": "open",
+      "position_id": 700000010,
+      "deal_id": null,
+      "mapping_status": "needs_mapping",
+      "product_id": null,
+      "instrument_class": "ssf",
+      "contract_size": 1000,
+      "reason": "no_reviewed_ssf_product_yet",
+      "idempotency_key": "mt5:700123456:pos:700000010",
+      "raw_sha": "408c57b58a53464393824207dd7dc13399e3ea39416d261d6098b55086e8b564"
+    },
+    {
+      "symbol": null,
+      "kind": "balance",
+      "position_id": 0,
+      "deal_id": 800000002,
+      "mapping_status": "needs_mapping",
+      "product_id": null,
+      "instrument_class": "unknown",
+      "contract_size": null,
+      "reason": "no_mapping_entry_for_symbol",
+      "idempotency_key": "mt5:700123456:deal:800000002",
+      "raw_sha": "0ff3cf5756fc64af88e56c4d0e03e17801524a322b5b47b30e86973172809894"
+    }
+  ],
+  "idempotency": {
+    "keys": {
+      "mt5:700123456:deal:800000001": {
+        "raw_shas": [
+          "7affaf61b992e85a544b4df157c159b123e9127d399e11fa17b373125d3a24d3"
+        ],
+        "distinct_raw_sha": 1
+      },
+      "mt5:700123456:deal:800000002": {
+        "raw_shas": [
+          "0ff3cf5756fc64af88e56c4d0e03e17801524a322b5b47b30e86973172809894"
+        ],
+        "distinct_raw_sha": 1
+      },
+      "mt5:700123456:pos:700000001": {
+        "raw_shas": [
+          "1ce943ca0197b68bbb71f2770d7f847f6372b874db3a7acaf22848d709142757"
+        ],
+        "distinct_raw_sha": 1
+      },
+      "mt5:700123456:pos:700000002": {
+        "raw_shas": [
+          "c1839ef80302e78327b012673afdb80c6f4874552f64607092e7b44fb67aeed4"
+        ],
+        "distinct_raw_sha": 1
+      },
+      "mt5:700123456:pos:700000003": {
+        "raw_shas": [
+          "f54c2f9c5c62f48913867bb0776b6da30209948a4dfd0fa952445f2f1de115c2"
+        ],
+        "distinct_raw_sha": 1
+      },
+      "mt5:700123456:pos:700000010": {
+        "raw_shas": [
+          "408c57b58a53464393824207dd7dc13399e3ea39416d261d6098b55086e8b564"
+        ],
+        "distinct_raw_sha": 1
+      }
+    },
+    "duplicates_collapsed": 1,
+    "collisions": []
+  },
+  "timezone": {
+    "server_tz": "Asia/Bangkok",
+    "note": "MT5 epochs are Asia/Bangkok wall-clock (+7, no DST); rows store true UTC (wall-7h) and preserve mt5_time_raw_epoch + mt5_time_msc.",
+    "samples": [
+      {
+        "raw_epoch": 1783348200,
+        "raw_wallclock_bkk": "2026-07-06 14:30:00",
+        "utc": "2026-07-06T07:30:00Z"
+      },
+      {
+        "raw_epoch": 1783350300,
+        "raw_wallclock_bkk": "2026-07-06 15:05:00",
+        "utc": "2026-07-06T08:05:00Z"
+      },
+      {
+        "raw_epoch": 1783354800,
+        "raw_wallclock_bkk": "2026-07-06 16:20:00",
+        "utc": "2026-07-06T09:20:00Z"
+      },
+      {
+        "raw_epoch": 1783332900,
+        "raw_wallclock_bkk": "2026-07-06 10:15:00",
+        "utc": "2026-07-06T03:15:00Z"
+      },
+      {
+        "raw_epoch": 1783424700,
+        "raw_wallclock_bkk": "2026-07-07 11:45:00",
+        "utc": "2026-07-07T04:45:00Z"
+      }
+    ]
+  },
+  "delta_guard": {
+    "observed": true,
+    "contract_size": 1000,
+    "class_hint": "ssf",
+    "csize_1000": true,
+    "class_ok": true,
+    "state_needs_mapping": true,
+    "no_product_hint": true,
+    "passed": true
+  },
+  "warnings": [],
+  "accepted_rows": [
+    {
+      "user_id": "123e4567-e89b-12d3-a456-426614174000",
+      "source_account": "700123456",
+      "kind": "open",
+      "symbol_raw": "GOU26",
+      "normalized_symbol": "GOU26",
+      "instrument_path": "TFEX\\Gold Futures\\GOU26",
+      "instrument_class": "futures",
+      "contract_size": 300,
+      "digits": 2,
+      "product_id_candidate": "gold_next",
+      "side": "buy",
+      "volume": 1.0,
+      "price": 4200.0,
+      "open_time": "2026-07-06T07:30:00Z",
+      "mt5_time": "2026-07-06T07:30:00Z",
+      "mt5_time_msc": 1783348200000,
+      "mt5_time_raw_epoch": 1783348200,
+      "server_tz": "Asia/Bangkok",
+      "position_id": 700000001,
+      "ticket": 700000001,
+      "position_state": "open",
+      "first_seen_open_at": "2026-07-07T17:00:00Z",
+      "last_seen_open_at": "2026-07-07T17:00:00Z",
+      "state": "new",
+      "raw": {
+        "symbol": "GOU26",
+        "identifier": 700000001,
+        "ticket": 700000001,
+        "type": 0,
+        "volume": 1.0,
+        "price_open": 4200.0,
+        "time": 1783348200,
+        "time_msc": 1783348200000
+      },
+      "writer_eligible": true,
+      "writer_skip_reason": null,
+      "source_system": "mt5",
+      "account_fingerprint": "mt5:b10289f3c6a59115",
+      "direction": "Long",
+      "raw_sha": "1ce943ca0197b68bbb71f2770d7f847f6372b874db3a7acaf22848d709142757",
+      "mapping_status": "mapped",
+      "mapping_reason": "explicit_symbol_mapping",
+      "idempotency_key": "mt5:700123456:pos:700000001"
+    },
+    {
+      "user_id": "123e4567-e89b-12d3-a456-426614174000",
+      "source_account": "700123456",
+      "kind": "open",
+      "symbol_raw": "GOU26",
+      "normalized_symbol": "GOU26",
+      "instrument_path": "TFEX\\Gold Futures\\GOU26",
+      "instrument_class": "futures",
+      "contract_size": 300,
+      "digits": 2,
+      "product_id_candidate": "gold_next",
+      "side": "buy",
+      "volume": 2.0,
+      "price": 4205.5,
+      "open_time": "2026-07-06T08:05:00Z",
+      "mt5_time": "2026-07-06T08:05:00Z",
+      "mt5_time_msc": 1783350300000,
+      "mt5_time_raw_epoch": 1783350300,
+      "server_tz": "Asia/Bangkok",
+      "position_id": 700000002,
+      "ticket": 700000002,
+      "position_state": "open",
+      "first_seen_open_at": "2026-07-07T17:00:00Z",
+      "last_seen_open_at": "2026-07-07T17:00:00Z",
+      "state": "new",
+      "raw": {
+        "symbol": "GOU26",
+        "identifier": 700000002,
+        "ticket": 700000002,
+        "type": 0,
+        "volume": 2.0,
+        "price_open": 4205.5,
+        "time": 1783350300,
+        "time_msc": 1783350300000
+      },
+      "writer_eligible": true,
+      "writer_skip_reason": null,
+      "source_system": "mt5",
+      "account_fingerprint": "mt5:b10289f3c6a59115",
+      "direction": "Long",
+      "raw_sha": "c1839ef80302e78327b012673afdb80c6f4874552f64607092e7b44fb67aeed4",
+      "mapping_status": "mapped",
+      "mapping_reason": "explicit_symbol_mapping",
+      "idempotency_key": "mt5:700123456:pos:700000002"
+    },
+    {
+      "user_id": "123e4567-e89b-12d3-a456-426614174000",
+      "source_account": "700123456",
+      "kind": "open",
+      "symbol_raw": "GOU26",
+      "normalized_symbol": "GOU26",
+      "instrument_path": "TFEX\\Gold Futures\\GOU26",
+      "instrument_class": "futures",
+      "contract_size": 300,
+      "digits": 2,
+      "product_id_candidate": "gold_next",
+      "side": "buy",
+      "volume": 1.0,
+      "price": 4198.0,
+      "open_time": "2026-07-06T09:20:00Z",
+      "mt5_time": "2026-07-06T09:20:00Z",
+      "mt5_time_msc": 1783354800000,
+      "mt5_time_raw_epoch": 1783354800,
+      "server_tz": "Asia/Bangkok",
+      "position_id": 700000003,
+      "ticket": 700000003,
+      "position_state": "open",
+      "first_seen_open_at": "2026-07-07T17:00:00Z",
+      "last_seen_open_at": "2026-07-07T17:00:00Z",
+      "state": "new",
+      "raw": {
+        "symbol": "GOU26",
+        "identifier": 700000003,
+        "ticket": 700000003,
+        "type": 0,
+        "volume": 1.0,
+        "price_open": 4198.0,
+        "time": 1783354800,
+        "time_msc": 1783354800000
+      },
+      "writer_eligible": true,
+      "writer_skip_reason": null,
+      "source_system": "mt5",
+      "account_fingerprint": "mt5:b10289f3c6a59115",
+      "direction": "Long",
+      "raw_sha": "f54c2f9c5c62f48913867bb0776b6da30209948a4dfd0fa952445f2f1de115c2",
+      "mapping_status": "mapped",
+      "mapping_reason": "explicit_symbol_mapping",
+      "idempotency_key": "mt5:700123456:pos:700000003"
+    },
+    {
+      "user_id": "123e4567-e89b-12d3-a456-426614174000",
+      "source_account": "700123456",
+      "kind": "close",
+      "symbol_raw": "GOU26",
+      "normalized_symbol": "GOU26",
+      "instrument_path": "TFEX\\Gold Futures\\GOU26",
+      "instrument_class": "futures",
+      "contract_size": 300,
+      "digits": 2,
+      "product_id_candidate": "gold_next",
+      "side": "sell",
+      "volume": 1.0,
+      "price": 4230.0,
+      "close_time": "2026-07-07T04:45:00Z",
+      "mt5_time": "2026-07-07T04:45:00Z",
+      "mt5_time_msc": 1783424700000,
+      "mt5_time_raw_epoch": 1783424700,
+      "server_tz": "Asia/Bangkok",
+      "position_id": 700000001,
+      "deal_id": 800000001,
+      "order_id": 810000001,
+      "ticket": 800000001,
+      "external_id": null,
+      "commission": -20.0,
+      "swap": 0.0,
+      "fee": 0.0,
+      "broker_profit": 9000.0,
+      "state": "new",
+      "raw": {
+        "symbol": "GOU26",
+        "ticket": 800000001,
+        "type": 1,
+        "entry": 1,
+        "position_id": 700000001,
+        "order": 810000001,
+        "volume": 1.0,
+        "price": 4230.0,
+        "time": 1783424700,
+        "time_msc": 1783424700000,
+        "commission": -20.0,
+        "swap": 0.0,
+        "fee": 0.0,
+        "profit": 9000.0
+      },
+      "writer_eligible": true,
+      "writer_skip_reason": null,
+      "source_system": "mt5",
+      "account_fingerprint": "mt5:b10289f3c6a59115",
+      "direction": "Short",
+      "raw_sha": "7affaf61b992e85a544b4df157c159b123e9127d399e11fa17b373125d3a24d3",
+      "mapping_status": "mapped",
+      "mapping_reason": "explicit_symbol_mapping",
+      "position_state": "closed",
+      "idempotency_key": "mt5:700123456:deal:800000001"
+    }
+  ],
+  "needs_mapping_rows": [
+    {
+      "user_id": "123e4567-e89b-12d3-a456-426614174000",
+      "source_account": "700123456",
+      "kind": "open",
+      "symbol_raw": "DELTAU26",
+      "normalized_symbol": "DELTAU26",
+      "instrument_path": "TFEX\\Single Stock Futures\\DELTAU26",
+      "instrument_class": "ssf",
+      "contract_size": 1000,
+      "digits": 2,
+      "product_id_candidate": null,
+      "side": "buy",
+      "volume": 5.0,
+      "price": 336.5,
+      "open_time": "2026-07-06T03:15:00Z",
+      "mt5_time": "2026-07-06T03:15:00Z",
+      "mt5_time_msc": 1783332900000,
+      "mt5_time_raw_epoch": 1783332900,
+      "server_tz": "Asia/Bangkok",
+      "position_id": 700000010,
+      "ticket": 700000010,
+      "position_state": "open",
+      "first_seen_open_at": "2026-07-07T17:00:00Z",
+      "last_seen_open_at": "2026-07-07T17:00:00Z",
+      "state": "needs_mapping",
+      "raw": {
+        "symbol": "DELTAU26",
+        "identifier": 700000010,
+        "ticket": 700000010,
+        "type": 0,
+        "volume": 5.0,
+        "price_open": 336.5,
+        "time": 1783332900,
+        "time_msc": 1783332900000
+      },
+      "writer_eligible": true,
+      "writer_skip_reason": null,
+      "source_system": "mt5",
+      "account_fingerprint": "mt5:b10289f3c6a59115",
+      "direction": "Long",
+      "raw_sha": "408c57b58a53464393824207dd7dc13399e3ea39416d261d6098b55086e8b564",
+      "mapping_status": "needs_mapping",
+      "mapping_reason": "no_reviewed_ssf_product_yet",
+      "idempotency_key": "mt5:700123456:pos:700000010"
+    },
+    {
+      "user_id": "123e4567-e89b-12d3-a456-426614174000",
+      "source_account": "700123456",
+      "kind": "balance",
+      "symbol_raw": null,
+      "normalized_symbol": null,
+      "instrument_path": null,
+      "instrument_class": "unknown",
+      "contract_size": null,
+      "digits": null,
+      "product_id_candidate": null,
+      "side": null,
+      "volume": 0.0,
+      "price": 0.0,
+      "close_time": "2026-07-07T16:59:00Z",
+      "mt5_time": "2026-07-07T16:59:00Z",
+      "mt5_time_msc": 1783468740000,
+      "mt5_time_raw_epoch": 1783468740,
+      "server_tz": "Asia/Bangkok",
+      "position_id": 0,
+      "deal_id": 800000002,
+      "order_id": 0,
+      "ticket": 800000002,
+      "external_id": null,
+      "commission": 0.0,
+      "swap": 0.0,
+      "fee": 0.0,
+      "broker_profit": -0.57,
+      "state": "needs_mapping",
+      "raw": {
+        "symbol": null,
+        "ticket": 800000002,
+        "type": 2,
+        "entry": 0,
+        "position_id": 0,
+        "order": 0,
+        "volume": 0.0,
+        "price": 0.0,
+        "time": 1783468740,
+        "time_msc": 1783468740000,
+        "commission": 0.0,
+        "swap": 0.0,
+        "fee": 0.0,
+        "profit": -0.57
+      },
+      "writer_eligible": true,
+      "writer_skip_reason": null,
+      "source_system": "mt5",
+      "account_fingerprint": "mt5:b10289f3c6a59115",
+      "direction": null,
+      "raw_sha": "0ff3cf5756fc64af88e56c4d0e03e17801524a322b5b47b30e86973172809894",
+      "mapping_status": "needs_mapping",
+      "mapping_reason": "no_mapping_entry_for_symbol",
+      "position_state": "n/a",
+      "idempotency_key": "mt5:700123456:deal:800000002"
+    }
+  ],
+  "rejected_rows": {
+    "mapping": [],
+    "structural": []
+  }
+}

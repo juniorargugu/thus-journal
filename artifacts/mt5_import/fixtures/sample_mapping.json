@@ -1,0 +1,46 @@
+{
+  "_comment": "Class-aware mapping fixture for the dry-run harness. Keyed by EXACT mt5 symbol — the harness NEVER infers a product from a symbol prefix. A symbol maps to a product ONLY via an explicit entry with a non-null product_id whose product_contract_size matches the instrument contract_size. DELTAU26 (SSF, csize 1000) has no reviewed product -> needs_mapping, and can never collapse onto the DELTA stock preset (csize 1).",
+  "version": "mt5-mapping-fixture-v01",
+  "instruments": {
+    "GOU26": {
+      "instrument_class": "futures",
+      "contract_size": 300,
+      "product_contract_size": 300,
+      "product_id": "gold_next",
+      "family": "GO",
+      "series": "next",
+      "path": "TFEX\\Gold Futures\\GOU26",
+      "digits": 2
+    },
+    "GOM26": {
+      "instrument_class": "futures",
+      "contract_size": 300,
+      "product_contract_size": 300,
+      "product_id": "gold",
+      "family": "GO",
+      "series": "current",
+      "path": "TFEX\\Gold Futures\\GOM26",
+      "digits": 2
+    },
+    "DELTAU26": {
+      "instrument_class": "ssf",
+      "contract_size": 1000,
+      "product_id": null,
+      "family": "DELTA",
+      "series": "next",
+      "path": "TFEX\\Single Stock Futures\\DELTAU26",
+      "digits": 2,
+      "note": "no_reviewed_ssf_product_yet"
+    },
+    "DELTA": {
+      "instrument_class": "stock",
+      "contract_size": 1,
+      "product_contract_size": 1,
+      "product_id": "delta_stock",
+      "family": "DELTA",
+      "series": null,
+      "path": "SET\\DELTA",
+      "digits": 2
+    }
+  }
+}

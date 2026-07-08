@@ -1,0 +1,22 @@
+{
+  "_comment": "SYNTHETIC MT5 probe-style fixture for the offline dry-run harness. No real account/secret. MT5 epochs encode Asia/Bangkok wall-clock (UTC+7, no DST); the harness converts to true UTC (wall-7h). See artifacts/mt5_import/README.md.",
+  "user_id": "123e4567-e89b-12d3-a456-426614174000",
+  "observed_at_utc": "2026-07-07T17:00:00Z",
+  "account": {
+    "login": "700123456",
+    "margin_mode": 2,
+    "margin_mode_name": "RETAIL_HEDGING",
+    "currency": "USD"
+  },
+  "positions": [
+    {"_note": "GOU26 open long #1 (wall 2026-07-06 14:30 -> 07:30Z)", "symbol": "GOU26", "identifier": 700000001, "ticket": 700000001, "type": 0, "volume": 1.0, "price_open": 4200.0, "time": 1783348200, "time_msc": 1783348200000},
+    {"_note": "GOU26 open long #2 (wall 15:05 -> 08:05Z)", "symbol": "GOU26", "identifier": 700000002, "ticket": 700000002, "type": 0, "volume": 2.0, "price_open": 4205.5, "time": 1783350300, "time_msc": 1783350300000},
+    {"_note": "GOU26 open long #3 (wall 16:20 -> 09:20Z)", "symbol": "GOU26", "identifier": 700000003, "ticket": 700000003, "type": 0, "volume": 1.0, "price_open": 4198.0, "time": 1783354800, "time_msc": 1783354800000},
+    {"_note": "DELTAU26 TFEX SSF open (wall 10:15 -> 03:15Z). MUST stay needs_mapping, contract_size 1000, never stock DELTA.", "symbol": "DELTAU26", "identifier": 700000010, "ticket": 700000010, "type": 0, "volume": 5.0, "price_open": 336.5, "time": 1783332900, "time_msc": 1783332900000},
+    {"_note": "DUPLICATE of GOU26 #1 (identical raw) -> proves idempotent collapse on re-run", "symbol": "GOU26", "identifier": 700000001, "ticket": 700000001, "type": 0, "volume": 1.0, "price_open": 4200.0, "time": 1783348200, "time_msc": 1783348200000}
+  ],
+  "deals": [
+    {"_note": "GOU26 close deal WITH deal_id + position_id (wall 2026-07-07 11:45 -> 04:45Z)", "symbol": "GOU26", "ticket": 800000001, "type": 1, "entry": 1, "position_id": 700000001, "order": 810000001, "volume": 1.0, "price": 4230.0, "time": 1783424700, "time_msc": 1783424700000, "commission": -20.0, "swap": 0.0, "fee": 0.0, "profit": 9000.0},
+    {"_note": "balance deal keyed by deal_id, position_id 0 is legitimate (wall 23:59 -> 16:59Z)", "symbol": null, "ticket": 800000002, "type": 2, "entry": 0, "position_id": 0, "order": 0, "volume": 0.0, "price": 0.0, "time": 1783468740, "time_msc": 1783468740000, "commission": 0.0, "swap": 0.0, "fee": 0.0, "profit": -0.57}
+  ]
+}
