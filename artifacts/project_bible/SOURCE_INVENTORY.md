@@ -181,6 +181,14 @@ Cross-account gate (terminal `301102520`), `needs_mapping`, idempotency via
   [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) (which cites `file:line`).
   Items still lacking primary evidence (VPS provider/pricing, Days 6–8, Market Pattern
   Library / S50) remain **NEEDS VERIFICATION** — likely THUS Journal notes / user memory.
+- **User-memory capture (Portfolio / Mentor / Pattern / S50).**
+  [`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md)
+  captures these four blockers from **user/project memory** — **not** repo- or
+  market-data-verified. Per-topic confidence: Portfolio roadmap = user-memory /
+  `NEEDS_REPO_SOURCE`; Mentor design = user-memory / design seed; Pattern Library =
+  user-memory / design seed; corrected S50 gap-down rule = user-memory /
+  `NEEDS_MARKET_DATA_SOURCE`; cancelled S50 false rule = `REJECTED` (formalize only with a
+  market-data source). Ground these before they become authoritative.
 - **`RESOURCE_AUDIT.md` is untracked** (working-tree only) — usable as a source, but **do
   not stage it** as part of Bible work.
 
@@ -200,14 +208,14 @@ NEEDS VERIFICATION and capture deliberately.**
 | **GUGU cost / economics** | ✅ Ceiling **VERIFIED LIVE** (`gugu/cost_ceiling.py`: 1.5M tok/day ≈$5/day Sonnet, 60k/cycle, 25 calls/cycle, fail-closed). v1 leak was **~$3/day** (not $5). Residual: no human-facing per-cycle cost line yet. See `GUGU_V2_RECONCILIATION.md` §5. | `thus-trading-bot/gugu/cost_ceiling.py` (High). |
 | **Existing knowledge corpus** | Partly corrected: verified `bot_knowledge` keyword store (**7** categories) + **78-row** cold-start into `gugu_memory` (not ~70/17). **NOT FOUND** in the bot repo: NotebookLM/mentor-PDF pipeline, Wyckoff/candlestick curriculum — **NEEDS VERIFICATION** (likely Journal notes / user memory). See `GUGU_V2_RECONCILIATION.md` §9. | `thus-trading-bot/knowledge.py`, `gugu/cold_start.py` + user. |
 | **GUGU VPS / operations** | Verified in-repo: IP `168.144.35.127` + systemd deploy (`gugu/DEPLOY.md`, `gugu-telegram.service`, `/opt/gugu`, polling). **NEEDS VERIFICATION:** DigitalOcean, Ubuntu 24.04, $6→$12 pricing. **Flask-on-deploy REFUTED** (v2 = polling); crontab is v1-only. See `GUGU_V2_RECONCILIATION.md` §6. | `thus-trading-bot/gugu/DEPLOY.md` + user. |
-| **Market Pattern Library / S50 rules** | **NOT FOUND** in `thus-trading-bot`: no "Market Pattern Library" (trigger+lesson+action); closest shipped = **Note Activation v0.1** (6 during-trade reminders). The cancelled "gap up 2 days → sell-off" rule (→ ch16) and the corrected S50 gap-down / `S50H26` 1029→942 case (→ ch11) are in neither repo. **NEEDS VERIFICATION** (Journal notes / user memory). See `GUGU_V2_RECONCILIATION.md` §10. | user memory + THUS Journal notes. |
-| **Mentor system** | No forward design in-repo; the old AI-mentor-note route was deprecated. | User memory; future design session. |
+| **Market Pattern Library / S50 rules** | Design seed + S50 rules now **captured from user memory** in `USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md` §4–5 (trigger+lesson+action; corrected S50 gap-down; rejected "gap up 2 days → sell-off"). Still **NOT** in either repo — `NEEDS_MARKET_DATA_SOURCE` before formalizing. Bot repo's closest shipped = Note Activation v0.1 (`GUGU_V2_RECONCILIATION.md` §10). | `USER_MEMORY_CAPTURE_...md`; user memory + THUS Journal notes. |
+| **Mentor system** | Now **captured from user memory** (design seed) in `USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md` §3 (Mentor View structure, hypothesis lifecycle, pre/during/post capture). `DESIGNED` / `NEEDS_REPO_SOURCE`. Old AI-mentor-note route was deprecated. | `USER_MEMORY_CAPTURE_...md`; future design session. |
 | **Notes / Knowledge engine** | Taxonomy exists; the *retrieval/activation* design is deferred until real content exists. | `docs/notes_taxonomy.md` + a future "Session B". |
-| **Pattern / Lesson engine** | Not implemented or designed in-repo; only conceptual (GUGU v2 "connect dots"/"self-correct"). | User; GUGU v2 vision. |
+| **Pattern / Lesson engine** | Design seed now **captured from user memory** in `USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md` §4 (pattern entry structure, statuses, auto-warn). Not implemented in-repo. `DESIGNED` / `VISION`. | `USER_MEMORY_CAPTURE_...md`; GUGU v2 vision. |
 | **Merge history (full)** | Rationale is in `ROADMAP.md` + audits, but the complete evolution (v1 merge → disable → grouping) is spread across many docs + memory. | ROADMAP + `artifacts/merge_grouping/*` + memory index. |
 | **Durable persistence history (full)** | Spread across P0/P1/P2 closeouts + a long memory-index trail; needs consolidation into chapter 13. | `artifacts/close_position_journal_bug/*`, `p2_*`, memory index. |
 | **Bot capabilities (Capture Bot)** | Command set + schema partly in ROADMAP; full capability set lives in the trading-bot repo. | `thus-trading-bot` repo; user. |
-| **Portfolio roadmap** | One of the thinnest areas: only patched cost issues + hidden HWM/style cards. No forward roadmap. | User memory; RESOURCE_AUDIT; ROADMAP. |
+| **Portfolio roadmap** | Roadmap now **captured from user memory** in `USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md` §2 (state/risk layer: exposure, drawdown/HWM, sizing, attribution, GUGU-facing context). `VISION` / `NEEDS_REPO_SOURCE`. Live pieces: patched cost issues + hidden HWM/style cards. | `USER_MEMORY_CAPTURE_...md`; RESOURCE_AUDIT; ROADMAP. |
 | **Product registry roadmap** | Foundation shipped; forward plan (FX/CFD/crypto kinds, spot routing to `trades_capture`) not consolidated. | Foundation closeout + user. |
 | **MT5 full roadmap** | Through-materialization plan (0C-3c/0C-3d, 0D-1 write actions, Phase 1) partly in docs; end-state not fully specified. | `artifacts/mt5_auto_draft_import/*` + user. |
 | **AI automation roadmap** | The autopilot *engineering* rules exist; the GUGU *product* automation roadmap does not live here. | `AUTOPILOT_RULES.md` (eng) + GUGU v2 vision (product). |

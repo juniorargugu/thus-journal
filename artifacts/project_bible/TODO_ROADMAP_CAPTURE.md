@@ -23,28 +23,34 @@ GATED · RESEARCH · VISION · NEEDS VERIFICATION** (VERIFIED is a pairing, e.g.
 - ✅ `TODO_ROADMAP_CAPTURE.md` (this file)
 - ✅ `GLOSSARY.md`
 - ✅ `GUGU_V2_RECONCILIATION.md` (cross-repo capture, 2026-07-10)
+- ✅ `USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md` (user-memory capture, 2026-07-10)
 
 ---
 
 ## Remaining chapters to write
 
-### `04_COMPLETE_ROADMAP.md` — **GUGU side unblocked; Portfolio/Mentor/Pattern still pending**
+### `04_COMPLETE_ROADMAP.md` — **capture complete; ready to draft (tags must be preserved)**
 The single consolidated, tagged roadmap across all subsystems — the master list so no
-track is lost.
+track is lost. **(Not written in this task.)**
 
-**Status update (2026-07-10):** the cross-repo GUGU v2 reconciliation is **DONE**
-([`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md)), so the **GUGU side is now
-substantially unblocked** (architecture, freeze, cost ceiling, observation cycle, Capture
-Bot, deploy). **Still BLOCKED_BY user-memory capture:** **Portfolio** roadmap, **Mentor**
-design, and the **Pattern-Library / S50** rules (not found in either repo — see reconciliation
-§10). VPS provider/pricing details also remain NEEDS VERIFICATION.
+**Status update (2026-07-10):** both capture prerequisites are now **DONE** — the cross-repo
+GUGU v2 reconciliation ([`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md)) **and**
+the Portfolio / Mentor / Pattern-Library / S50 user-memory capture
+([`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md)).
+Chapter 04 is **no longer blocked by a lack of capture** and is ready to draft.
 
-**Preferred sequencing (Approach A):** capture Portfolio/Mentor/Pattern from user memory
-*first*, then write chapter 04 whole. **If** chapter 04 is written now, it **must be
-explicitly partial** — GUGU/Journal/MT5 sections sourced, but Portfolio / Mentor /
-Pattern-Library sections carry a "pending user-memory capture / NEEDS VERIFICATION" banner
-(or split into `04A_JOURNAL_SIDE_ROADMAP.md` + `04B_GUGU_SIDE_ROADMAP.md`, with 04A clearly
-labeled as *not* the whole roadmap).
+**Constraints when drafting (do not lose these):** every item must carry its confidence
+tag. The captured layers are **not** repo-verified: Portfolio = `VISION` / `NEEDS_REPO_SOURCE`;
+Mentor = `DESIGNED` / `VISION`; Pattern Library = `DESIGNED` / `VISION`; corrected S50
+gap-down rule = `CONFIRMED_FROM_USER_MEMORY` / `NEEDS_MARKET_DATA_SOURCE`; cancelled S50
+false rule = `REJECTED`. If market-data grounding for S50 is unavailable, keep it
+user-memory + `NEEDS_MARKET_DATA_SOURCE` — do not upgrade to fact. Residual NEEDS
+VERIFICATION (VPS provider/pricing, Days 6–8) stays tagged.
+
+Must fold in: ROADMAP.md deferred items, PIPELINE_STATE Lanes A–I, the G0–G6 grouping
+phases, the MT5 0A→materializer phases, the Notes activation trigger, the GUGU v2 sprint +
+cost-ceiling lane, and every GATED/DEFERRED item from chapter 03. Cross-reference each to
+its subsystem and status tag. *Sources:* `ROADMAP.md`, `artifacts/pipeline/*`, chapter 03,
 
 Must fold in: ROADMAP.md deferred items, PIPELINE_STATE Lanes A–I, the G0–G6 grouping
 phases, the MT5 0A→materializer phases, the Notes activation trigger, the GUGU v2 sprint +
@@ -104,9 +110,13 @@ forbidden. **Now partly sourced:** the bot-side `bot_knowledge` keyword store (7
 + **78-row** cold-start into `gugu_memory`, and the real shipped **Note Activation v0.1**
 (6 deterministic, no-LLM during-trade mentor reminders) — see
 [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) §9–10. Residual NEEDS
-VERIFICATION: the NotebookLM/mentor-PDF pipeline, Wyckoff/candlestick curriculum, and the
-Market Pattern Library / S50 rules (likely THUS Journal notes / user memory). *Sources:*
-`docs/notes_taxonomy.md`, `ROADMAP.md` (Notes §), `GUGU_V2_RECONCILIATION.md`, user.
+VERIFICATION: the NotebookLM/mentor-PDF pipeline, Wyckoff/candlestick curriculum (likely
+THUS Journal notes / user memory). The **Mentor View** structure, **Market Pattern Library**
+design, and **S50 rules** are captured (user-memory, tags preserved) in
+[`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md)
+§3–5 — `NEEDS_REPO_SOURCE` / `NEEDS_MARKET_DATA_SOURCE`. *Sources:* `docs/notes_taxonomy.md`,
+`ROADMAP.md` (Notes §), `GUGU_V2_RECONCILIATION.md`,
+`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`, user.
 
 ### `12_MAJOR_DECISIONS_ADR.md`
 Architecture Decision Records: disable-Merge-not-repair; grouping-as-metadata (Option B);
@@ -142,18 +152,23 @@ What was considered and rejected, with reasons — so they aren't re-litigated: 
 merge replacement; visual-only `_hiddenByMerge` flag; full-array writer; Mem0 fact-
 extraction; pre-adding embedding columns to Notes; auto-importing check-ins into Notes;
 outcome-based Trader Style Profiler; GUGU v1 hardcoded-gate architecture; **the cancelled
-S50 "gap up 2 days → sell-off" rule** (explicitly retired as a false pattern — record it
-here so it is not re-derived; **NEEDS VERIFICATION**). *Sources:* `ROADMAP.md`, audits,
-GUGU v2 vision, user memory.
+S50 "gap up 2 days → sell-off" rule** (`REJECTED` false pattern — captured in
+[`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md)
+§5.3; record here as searchable rejected knowledge so it is not re-derived;
+`NEEDS_MARKET_DATA_SOURCE` if formalized). *Sources:* `ROADMAP.md`, audits, GUGU v2 vision,
+`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`, user memory.
 
 ### `17_RISKS_AND_TECH_DEBT.md`
 The live risk register: silent data-loss (residual non-durable writers), silent double-
 count regression, single-file SPA scale + `57014`, GUGU echo-chamber / premature unfreeze,
 **GUGU economic runaway (v1 ~$3/day monitor-cycle leak; mitigated in v2 by the live
-fail-closed cost ceiling)**, docs
+fail-closed cost ceiling)**, **false-pattern re-derivation / overfitting from one historical
+case** (GUGU treating a candidate pattern as a confirmed rule; a cancelled pattern being
+re-derived — see `USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md` §4.6/5.3), Portfolio
+roadmap thinness, mentor hypothesis lifecycle not yet implemented, docs
 drift, backup-retention of sensitive data, RLS gaps pending audit, `[DIAG]`/deferred
 cleanups. Each with severity + mitigation + owner-gate. *Sources:* chapters 01/03,
-closeouts, `RESOURCE_AUDIT.md`.
+closeouts, `RESOURCE_AUDIT.md`, `USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`.
 
 ### `18_FUTURE_VISION.md`
 The long-horizon (3-year) picture: GUGU as mature co-trader (track record, self-
@@ -180,8 +195,14 @@ guardrails that must survive (human-in-control, no auto-execution, no silent unf
    write.)
 3. **Consolidate the memory index** (`.claude/.../memory/MEMORY.md` in the trading-bot
    project) into the history/ADR chapters; it holds dozens of milestone pointers.
-4. **Portfolio + Pattern/Lesson + Mentor** are the thinnest-sourced areas — schedule
-   explicit user-memory capture sessions before writing chapters 03-expansion/11.
+4. **Portfolio + Mentor + Pattern-Library + S50 — user-memory capture DONE (2026-07-10).**
+   Captured in
+   [`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md).
+   Carry its confidence tags into every chapter that consumes it; still **ground against
+   repo / market-data source** before treating as authoritative. Placement: Portfolio +
+   Mentor + Pattern + S50 → **ch04** roadmap; Mentor/Pattern/Knowledge detail → **ch11**;
+   cancelled S50 false rule → **ch16**; false-pattern re-derivation + overfitting risks →
+   **ch17**.
 5. **Keep `14_CURRENT_STATE.md` and `PIPELINE_STATE.md` in sync** — one is the durable
    Bible snapshot, the other the working glance.
 6. **GUGU cost/economics guardrail — largely VERIFIED (2026-07-10).** The hard, fail-closed

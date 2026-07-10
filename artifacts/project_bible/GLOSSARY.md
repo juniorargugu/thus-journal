@@ -133,6 +133,33 @@ confirmed against source, it is marked **NEEDS VERIFICATION**.
   per-cycle usage persisted to `logs/gugu_usage_ledger.json`. (v1's separate leak was
   ~$3/day; a human-facing per-cycle cost line is not yet implemented.)
 
+## Mentor / patterns / trading concepts
+
+Design seeds captured from user memory (not repo-verified) — see
+[`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md).
+
+- **Mentor View** — a captured market **hypothesis** (symbol, view, horizon, anchor, what
+  to observe, invalidation, review status) from mentor/forward-testing. Kept as a
+  hypothesis until confirmed/invalidated; never auto-promoted to a permanent rule.
+- **Market Pattern Library** — the planned layer that turns repeated observations into
+  structured, reviewable patterns (`trigger` / `lesson` / `action` + invalidation, example,
+  status). Design seed only; not built. Feeds GUGU + Note Activation for pre/during-trade
+  warnings.
+- **Pattern status** — a pattern's lifecycle state: `candidate` · `watch` · `confirmed` ·
+  `invalidated` · `cancelled` · `rejected` · `needs more samples`.
+- **cancelled pattern** — a pattern explicitly retired as false; must stay **searchable as
+  rejected knowledge** so it is not re-derived (e.g. the S50 "gap up 2 days → sell-off"
+  rule).
+- **S50 gap-down rule** — corrected S50 risk rule: in an uptrend, if S50 gaps down and
+  **does not recover intraday**, exit immediately (next day can gap down again → cascade).
+  A specific case of "no falling knife." Worked example `S50H26` 1029→942 (Mar 2026).
+  `NEEDS_MARKET_DATA_SOURCE`.
+- **no falling knife** — the base risk rule: a strong drop is not a buy — do not catch the
+  falling knife (wait for confirmation).
+- **epistemic status** — the required label on any captured knowledge: hypothesis /
+  observation / rule / lesson / confirmed pattern / rejected pattern. GUGU and the Bible
+  must preserve it and never silently upgrade a hypothesis to a rule.
+
 ## Status tags
 
 See [`README.md`](./README.md) → "Status vocabulary" for the authoritative table.
