@@ -73,10 +73,13 @@ When in doubt, prefer **NEEDS VERIFICATION** over asserting a fact.
 
 ---
 
-## Repo state at authoring
+## Repo state
 
 - **Repo:** `thus-journal` (`c:\Users\Junior\Desktop\thus-journal`)
-- **HEAD == origin/main:** `042aeed` (in sync at authoring time)
-- **Production bundle:** `f01eb33` / **v3.23.0** on thus999.com (`index.html` byte-identical
-  through `042aeed`; docs/migration commits after `f01eb33` do not touch `index.html`)
-- **Bible created:** 2026-07-10, docs-only
+- **`origin/main`:** `b94f7fd` — "docs: record G2 isMerged RPC migration applied + verified"
+- **Local `main`:** ahead of origin by the Project Bible commits (local-only, not pushed)
+- **Production bundle:** `f01eb33` / **v3.23.0** on thus999.com — unchanged (`index.html`
+  byte-identical; docs/migration commits after `f01eb33` do not touch it)
+- **G2 status:** RPC `isMerged` hardening **applied + verified** (2026-07-10); write gate
+  **not enabled**; **no real group kept**
+- **Bible created / last synced:** 2026-07-10, docs-only

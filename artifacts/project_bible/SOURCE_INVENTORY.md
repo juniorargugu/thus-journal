@@ -6,14 +6,17 @@ contains**, **which subsystem** it belongs to, a **confidence** level, and wheth
 areas where the repo has *no* good source and future search or user-memory capture is
 required (see [§7 Gaps](#7-gaps--areas-with-no-good-in-repo-source)).
 
-- **Repo:** `thus-journal`, HEAD `042aeed` == origin/main at authoring (2026-07-10).
+- **Repo:** `thus-journal`. `origin/main` = `b94f7fd` ("docs: record G2 isMerged RPC
+  migration applied + verified"); the Project Bible sits on top as a local-only commit.
+  Authored/synced 2026-07-10.
 - **Confidence** = the inventory author's confidence that the summary reflects the file's
   actual content, *not* a claim that the file's own assertions are verified against live
   systems.
-- **Important cross-check:** several dated closeouts predate the 2026-07-10
-  `PIPELINE_STATE.md` update. Where they disagree (e.g. the `20260708` isMerged migration
-  is "pending" in older closeouts but "APPLIED + VERIFIED in prod" per PIPELINE_STATE),
-  **treat PIPELINE_STATE.md as authoritative** and flag the discrepancy.
+- **Closeouts are point-in-time.** Several dated closeouts predate later state changes;
+  when a closeout and the latest pipeline state differ, **the latest state wins.** For
+  example, the `20260708` isMerged RPC hardening reads "apply pending" in the older
+  design/validation closeouts but is now **APPLIED + VERIFIED in prod (2026-07-10, commit
+  `b94f7fd`)** — that applied state is settled and authoritative, not uncertain.
 
 ---
 
@@ -46,7 +49,7 @@ active / 1 archived). GUGU tie-in is the designed **G5 `[Insert GUGU summary]`**
 |---|---|---|---|---|
 | `artifacts/g2_grouping/g2_lean_rpc_packet_20260705.README.md` | Tombstone: the reviewed G2 SQL was applied 2026-07-05 and promoted to `migrations/20260705_...`; duplicate removed. | DONE | High | ref only |
 | `artifacts/g2_grouping/g2_rpc_ismerged_hardening_design.md` | Design (ChatGPT PASS) for the `merged_child_not_allowed` reject; crash-safe text compare; precheck-expect-0; sequencing. | DESIGNED | High | 08, 12 |
-| `artifacts/g2_grouping/g2_rpc_ismerged_hardening_validation.sql` | Runbook SQL: read-only precheck (A) + BEGIN/ROLLBACK behavior tests (B, T1–T6). | REVIEWED | High | 15 |
+| `artifacts/g2_grouping/g2_rpc_ismerged_hardening_validation.sql` | Runbook SQL: read-only precheck (A, **returned 0**) + BEGIN/ROLLBACK behavior tests (B, T1–T6) — **executed + PASSED** (jsonb true/false/null/missing-key handled, ungroup normal, final grouped count 0, merged child → `merged_child_not_allowed`; no data persisted). | VERIFIED | High | 15 |
 | `artifacts/g2_grouping/g2_schema_apply_closeout.md` | Closeout of 2026-07-05 DB-only apply of G2 RPCs/schema; V1–V5 PASS; happy-path not exercised at apply. | DONE/LIVE | High | 15 |
 | `artifacts/g2_grouping/g2_v03_ui_and_rpc_smoke_closeout.md` | v0.3 create-only UI: two default-off flags, rollback smoke PASS (2026-07-06). Local-only. | DONE (local) | High | 08 |
 | `artifacts/g2_grouping/g2_v04_loader_render_closeout.md` | v0.4 group-aware loader/render: `loadAll` selects `raw,group_id`; separate `tradeGroupIds` map; ⛓ badge; Codex PASS. | DONE (reviewed) | High | 08 |
@@ -65,7 +68,7 @@ active / 1 archived). GUGU tie-in is the designed **G5 `[Insert GUGU summary]`**
 | `artifacts/merge_grouping/merge_grouping_reentry_audit.md` | Foundational re-entry audit (2026-06-03): confirms locked G0 design, inventories dead merge code, 4 data-model options (B locked), full v0.1 design, phase plan, risks. | RESEARCH/REVIEWED | High | 12, 08 |
 | `migrations/20260607_g1_trade_groups_schema.sql` | Applied G1 migration: `trade_groups` table, dormant `trades.group_id` FK ON DELETE SET NULL, 3 indexes, RLS + 4 policies, grants, V1–V9 verification, commented rollback. | LIVE (2026-06-08) | High | 15 (schema of record) |
 | `migrations/20260705_g2_trade_group_rpcs.sql` | Applied G2 migration (source of truth): `idempotency_key` + unique active index, ownership trigger, two SECURITY DEFINER RPCs (create/ungroup) writing only `group_id`+`updated_at`. | LIVE (2026-07-05) | High | 15 (schema of record) |
-| `migrations/20260708_g2_create_group_reject_ismerged.sql` | Function-body-only replace of `create_trade_group_v1` adding `merged_child_not_allowed`. **Applied + verified in prod 2026-07-10 (per PIPELINE_STATE)** — older closeouts say "apply pending." | LIVE (per PIPELINE_STATE) | High | 15, 12 |
+| `migrations/20260708_g2_create_group_reject_ismerged.sql` | Function-body-only replace of `create_trade_group_v1` adding `merged_child_not_allowed`. **APPLIED + VERIFIED in prod 2026-07-10** (precheck 0; new function installed; BEGIN/ROLLBACK validation passed; merged child → `{"ok":false,"error":"merged_child_not_allowed"}`; no test data persisted; recorded in `b94f7fd`). | LIVE (applied) | High | 15, 12 |
 | `artifacts/pipeline/g2_candidate_check.sql` | Read-only diagnostics (autopilot must NOT run): eligible-candidate query, raw-vs-projected invariant check, baseline 0/0 sanity. | DONE (tooling) | High | 15 |
 | `artifacts/merge_grouping/g2_baseline_20260702.json` *(6.4 KB)* | P/L baseline snapshot data (not deeply read). | data | Med | ref only |
 | `artifacts/merge_grouping/g2_baseline_20260702_v3.json` *(8.2 KB)* | P/L baseline snapshot data, v3 (not deeply read). | data | Med | ref only |
@@ -152,7 +155,7 @@ smokes (first open + first close-deal writes, idempotent) → 0D-0/0D-1 read-onl
 | `migrations/20260512_archive_trade_events_v1_lockdown.sql` | Lock down legacy GUGU v1 `trade_events`. | **NEEDS VERIFICATION** (manual-run; not confirmed here) |
 | `migrations/20260607_g1_trade_groups_schema.sql` | G1: `trade_groups` + `trades.group_id` + RLS. | Applied 2026-06-08 (run report) |
 | `migrations/20260705_g2_trade_group_rpcs.sql` | G2: idempotency key, ownership trigger, create/ungroup RPCs. | Applied 2026-07-05 (schema apply closeout) |
-| `migrations/20260708_g2_create_group_reject_ismerged.sql` | Defense-in-depth `merged_child_not_allowed`. | Applied + verified in prod 2026-07-10 (per PIPELINE_STATE) |
+| `migrations/20260708_g2_create_group_reject_ismerged.sql` | Defense-in-depth `merged_child_not_allowed`. | **APPLIED + VERIFIED in prod 2026-07-10** (precheck 0; BEGIN/ROLLBACK PASS; recorded `b94f7fd`) |
 
 ---
 

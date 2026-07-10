@@ -86,8 +86,11 @@ roadmap · Gates / risks · Source docs · Missing context.** Status tags per
 - **Current state.** **LIVE (default-off).** G1 schema+RLS applied (2026-06-08); G2 RPCs
   + ownership trigger applied (2026-07-05); v0.3 create-only UI + v0.4 group-aware
   loader/render deployed default-off at v3.23.0; RPC `isMerged` defense-in-depth guard
-  (`20260708`) applied + verified in prod (2026-07-10). DB clean: 0 active groups (1
-  archived by design from a rollback smoke). Write gate **not enabled**.
+  (`20260708`) **APPLIED + VERIFIED in prod (2026-07-10, `b94f7fd`)** — precheck 0,
+  new `create_trade_group_v1` installed, BEGIN/ROLLBACK validation passed (merged child →
+  `merged_child_not_allowed`), nothing persisted. DB clean: 0 active groups, **no real
+  group kept** (1 archived by design from the earlier rollback smoke). Write gate **not
+  enabled**.
 - **Relationship to GUGU.** Gives GUGU a natural unit ("one trade idea") to analyze, and
   a designed hook — **G5 `[Insert GUGU summary]`** reading `checkin_events` — to attach
   its analysis. Grouping protects the P/L GUGU learns from against double-counting.
@@ -103,7 +106,8 @@ roadmap · Gates / risks · Source docs · Missing context.** Status tags per
   `artifacts/merge_grouping/*`; `migrations/20260607`, `20260705`, `20260708`;
   `artifacts/pipeline/g2_candidate_check.sql`.
 - **Missing context.** G5/GUGU readiness depends on Capture Bot Day 4 — re-confirm.
-  Older closeouts predate the 2026-07-10 migration apply; trust `PIPELINE_STATE.md`.
+  (The `20260708` isMerged migration is settled: applied + verified 2026-07-10; older
+  design/validation closeouts that read "apply pending" are superseded.)
 
 ## 5. MT5 Import
 

@@ -61,8 +61,10 @@ See chapter 02.
 - **Trade grouping (G1/G2), default-off.** Non-destructive replacement for the old
   Merge: schema + RLS applied, SECURITY DEFINER RPCs applied, group-aware loader/render
   shipped default-off at **v3.23.0** (`f01eb33`). RPC `isMerged` defense-in-depth guard
-  (`20260708`) **applied + verified in prod (2026-07-10)**. The **write gate is not
-  enabled**; DB holds 0 active groups. **LIVE (default-off).**
+  (`20260708`) **APPLIED + VERIFIED in prod (2026-07-10, `b94f7fd`)** — precheck 0,
+  BEGIN/ROLLBACK validation passed (merged child → `merged_child_not_allowed`). The
+  **write gate is not enabled** and **no real group is kept** (DB holds 0 active groups).
+  **LIVE (default-off).**
 - **MT5 read-only Inbox.** A Settings-embedded, read-only view of staged MT5 rows behind
   default-off flag `tj_mt5_inbox` (`7088473`). Staging schema + local writer exist. The
   offline dry-run harness is merged. **LIVE (read-only, default-off).**

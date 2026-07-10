@@ -134,8 +134,11 @@ guardrails that must survive (human-in-control, no auto-execution, no silent unf
    stream architecture are documented there, not here. A dedicated pass should pull the
    current (not just v2-era) design into chapters 10/11/13. **NEEDS VERIFICATION.**
 2. **Confirm migration apply-state against live Supabase** (read-only): `20260512`
-   trade_events lockdown especially; grouping + MT5 migrations already reported applied.
-   (Read-only SELECTs only — never write.)
+   trade_events lockdown especially. Grouping migrations are settled — G1 (`20260607`)
+   and G2 RPCs (`20260705`) applied, and the G2 RPC `isMerged` hardening (`20260708`) is
+   **DONE / APPLIED + VERIFIED** in prod (2026-07-10, precheck 0, BEGIN/ROLLBACK PASS,
+   recorded `b94f7fd`). MT5 migrations reported applied. (Read-only SELECTs only — never
+   write.)
 3. **Consolidate the memory index** (`.claude/.../memory/MEMORY.md` in the trading-bot
    project) into the history/ADR chapters; it holds dozens of milestone pointers.
 4. **Portfolio + Pattern/Lesson + Mentor** are the thinnest-sourced areas — schedule
