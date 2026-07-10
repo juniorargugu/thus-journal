@@ -5,8 +5,9 @@ SOURCE_INVENTORY). This file lists the remaining chapters and, for each, what mu
 captured — so nothing disappears just because it is not implemented yet.
 
 **Rule:** roadmap items are tagged, never dropped. Use the status vocabulary from
-[`README.md`](./README.md): **DONE · LIVE · DESIGNED · REVIEWED · DEFERRED · GATED ·
-RESEARCH · VISION · NEEDS VERIFICATION.** When a source is missing, capture the item as
+[`README.md`](./README.md): **DONE · LIVE · APPLIED · DESIGNED · REVIEWED · DEFERRED ·
+GATED · RESEARCH · VISION · NEEDS VERIFICATION** (VERIFIED is a pairing, e.g.
+*APPLIED + VERIFIED*; README is authoritative for the set/order). When a source is missing, capture the item as
 **NEEDS VERIFICATION** rather than inventing detail.
 
 ---
@@ -117,15 +118,20 @@ open smoke/verification status, DB cleanliness. Essentially a durable expansion 
 How to operate safely: the gate model, deploy/smoke discipline, migrations-by-human,
 review chain, backup handling (sensitive image/base64 backups outside git), resource/cost
 hygiene, RLS/security-hardening (Lane G, needs read-only audit first), the MT5 operator
-runbooks, `pipeline_snapshot.ps1`. *Sources:* `AUTOPILOT_RULES.md`, `RESOURCE_AUDIT.md`,
-`ops/*`, runbooks.
+runbooks, `pipeline_snapshot.ps1`. **Also capture the GUGU VPS host** (reported, **NEEDS
+VERIFICATION**: DigitalOcean Ubuntu 24.04, IP `168.144.35.127`, resized to $6/mo while the
+bot is offline, expected resize to $12/mo + restore crontab/Flask on deploy) — only after
+verification against `thus-trading-bot` + user memory. *Sources:* `AUTOPILOT_RULES.md`,
+`RESOURCE_AUDIT.md`, `ops/*`, runbooks, `thus-trading-bot`.
 
 ### `16_REJECTED_IDEAS.md`
 What was considered and rejected, with reasons — so they aren't re-litigated: destructive
 merge replacement; visual-only `_hiddenByMerge` flag; full-array writer; Mem0 fact-
 extraction; pre-adding embedding columns to Notes; auto-importing check-ins into Notes;
-outcome-based Trader Style Profiler; GUGU v1 hardcoded-gate architecture. *Sources:*
-`ROADMAP.md`, audits, GUGU v2 vision.
+outcome-based Trader Style Profiler; GUGU v1 hardcoded-gate architecture; **the cancelled
+S50 "gap up 2 days → sell-off" rule** (explicitly retired as a false pattern — record it
+here so it is not re-derived; **NEEDS VERIFICATION**). *Sources:* `ROADMAP.md`, audits,
+GUGU v2 vision, user memory.
 
 ### `17_RISKS_AND_TECH_DEBT.md`
 The live risk register: silent data-loss (residual non-durable writers), silent double-
@@ -161,9 +167,10 @@ guardrails that must survive (human-in-control, no auto-execution, no silent unf
 5. **Keep `14_CURRENT_STATE.md` and `PIPELINE_STATE.md` in sync** — one is the durable
    Bible snapshot, the other the working glance.
 6. **Capture the GUGU cost/economics guardrail as a first-class lane.** A hard cost
-   ceiling + per-cycle token/cost logging are release-gating for v2 (v1 reportedly leaked
-   ~$5/day on a Haiku daemon; **NEEDS VERIFICATION**). Track it alongside the safety gates
-   and in `17_RISKS_AND_TECH_DEBT.md`, not as an afterthought.
+   ceiling + per-cycle token/cost logging are release-gating for v2 — specifically a
+   **Day-5 deployment precondition** (a scheduled gate, not just a general principle); v1
+   reportedly leaked ~$5/day on a Haiku daemon (**NEEDS VERIFICATION**). Track it alongside
+   the safety gates and in `17_RISKS_AND_TECH_DEBT.md`, not as an afterthought.
 7. **Capture the existing knowledge corpus.** The knowledge layer is not zero-start:
    reported mentor-PDF → NotebookLM → `bot_knowledge` pipeline, ~70 items / 17 categories,
    candlestick / Wyckoff artifacts, codified rules (range boundaries, no-falling-knife,
@@ -172,6 +179,20 @@ guardrails that must survive (human-in-control, no auto-execution, no silent unf
 8. **Cross-repo GUGU v2 reconciliation is a prerequisite for chapter 04** (see the 04
    entry's BLOCKED_BY). Do not let chapter 04 ship as a single authoritative roadmap
    before it.
+9. **Capture the GUGU VPS host** for chapter 15 (reported, **NEEDS VERIFICATION**):
+   DigitalOcean Ubuntu 24.04, IP `168.144.35.127`, resized to $6/mo while the bot is
+   offline, expected resize to $12/mo + restore crontab/Flask on deploy. Verify against
+   `thus-trading-bot` + user memory before treating as authoritative.
+10. **Capture the cancelled S50 false pattern** for chapter 16: the old S50 "gap up 2 days
+    → sell-off" rule was **explicitly cancelled as a false pattern** — record it in Rejected
+    Ideas so it is not re-derived. The **corrected** S50 gap-down rule (Mar 2026 `S50H26`
+    1029→942 case) belongs in the Pattern/Lesson capture (chapter 11 / §9), not here.
+    **NEEDS VERIFICATION.**
+
+> **Provenance note (applies to tasks 1, 6, 7, 9, 10):** GUGU v2 sprint, cost, VPS,
+> knowledge-corpus, and S50 details currently come from the Fable/ChatGPT review + user-
+> memory attestation — **temporary provenance.** The cross-repo capture must replace them
+> with primary `thus-trading-bot` sources; do not assert them as verified until then.
 
 ---
 

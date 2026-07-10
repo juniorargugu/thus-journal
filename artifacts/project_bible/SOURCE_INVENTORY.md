@@ -176,6 +176,10 @@ Cross-account gate (terminal `301102520`), `needs_mapping`, idempotency via
 - **Every closeout is point-in-time and self-reported.** They assert PASS against the
   author's environment at that date; none is a live re-verification. For money-/data-
   bearing claims, re-confirm against live systems or the latest `PIPELINE_STATE.md`.
+- **GUGU v2 provenance is temporary.** Sprint (Days 1–8), cost/economics, VPS host, and
+  knowledge-corpus details in this Bible come from the Fable/ChatGPT review + user-memory
+  attestation — **not** yet from primary `thus-trading-bot` sources. Replace with primary
+  sources during the cross-repo capture; treat as **NEEDS VERIFICATION** until then.
 - **`RESOURCE_AUDIT.md` is untracked** (working-tree only) — usable as a source, but **do
   not stage it** as part of Bible work.
 
@@ -192,8 +196,10 @@ NEEDS VERIFICATION and capture deliberately.**
 | Gap area | Why it's a gap | Where to look |
 |---|---|---|
 | **GUGU roadmap / capabilities** | GUGU v2 is an **active build** in `thus-trading-bot` (reported Days 1–8 sprint: memory → agent+tools → Telegram → observation cycle → cost monitoring → VPS at Day 8, **NEEDS VERIFICATION**). Its architecture, phases, and live runtime live there + in user memory, not here. Only the freeze policy + G5 hook appear in `thus-journal`. | `thus-trading-bot` CLAUDE.md + memory index; user. |
-| **GUGU cost / economics** | v2 needs a **hard cost ceiling + per-cycle token/cost logging** before any autonomous run; v1 reportedly leaked ~$5/day on a Haiku monitor daemon. A first-class safety rule (rank of "no silent unfreeze"). **NEEDS VERIFICATION.** | `thus-trading-bot` + user memory. |
+| **GUGU cost / economics** | v2 needs a **hard cost ceiling + per-cycle token/cost logging** before any autonomous run — a **Day-5 deployment precondition**, not just a general principle; v1 reportedly leaked ~$5/day on a Haiku monitor daemon. First-class safety rule (rank of "no silent unfreeze"). **NEEDS VERIFICATION.** | `thus-trading-bot` + user memory. |
 | **Existing knowledge corpus** | The knowledge layer does **not** start from zero. Reported external corpus: mentor-PDF → NotebookLM → `bot_knowledge` pipeline; ~70 items across 17 categories; candlestick / Wyckoff curriculum artifacts; codified rules (range boundaries, no-falling-knife, S50 gap rule). **NEEDS VERIFICATION.** | `thus-trading-bot` + user memory. |
+| **GUGU VPS / operations** | Reported host: DigitalOcean Ubuntu 24.04, IP `168.144.35.127`; resized to $6/mo while the bot is offline; expected $12/mo + restore crontab/Flask on deploy. For chapter 15 after verification. **NEEDS VERIFICATION.** | `thus-trading-bot` + user memory. |
+| **S50 pattern cancellation** | The old S50 "gap up 2 days → sell-off" rule was **explicitly cancelled as a false pattern** (→ chapter 16 Rejected Ideas). The corrected S50 gap-down rule (Mar 2026 `S50H26` 1029→942) → Pattern/Lesson capture (chapter 11 / §9). **NEEDS VERIFICATION.** | user memory + `thus-trading-bot`. |
 | **Mentor system** | No forward design in-repo; the old AI-mentor-note route was deprecated. | User memory; future design session. |
 | **Notes / Knowledge engine** | Taxonomy exists; the *retrieval/activation* design is deferred until real content exists. | `docs/notes_taxonomy.md` + a future "Session B". |
 | **Pattern / Lesson engine** | Not implemented or designed in-repo; only conceptual (GUGU v2 "connect dots"/"self-correct"). | User; GUGU v2 vision. |

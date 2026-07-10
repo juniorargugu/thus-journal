@@ -43,7 +43,7 @@ must not blur.
 | Layer | Role | Status posture |
 |---|---|---|
 | **Journal** | **Memory / data layer.** The canonical, lossless, durable record of trades, notes, and portfolio state. Source of truth for all P/L. | Actively hardened; mostly LIVE. |
-| **MT5** | **Execution / source layer.** Mirrors real broker executions (fills, prices, contract sizes) into the system as trustworthy source facts. Never writes Journal trades directly. | Read-only + gated staging; writer GATED. |
+| **MT5** | **Execution / source layer.** Mirrors real broker executions (fills, prices, contract sizes) into the system as trustworthy source facts. Never writes Journal trades directly. | MT5→staging writer exists (per-run gated); staging→trades materializer not started, GATED. |
 | **Portfolio** | **State / risk layer.** Account balance, equity, high-water mark, exposure — the current risk picture derived from executions. | Partially LIVE; roadmap thin (NEEDS VERIFICATION). |
 | **Knowledge / Notes** | **Learning / retrieval layer.** Curated rules, lessons, quotes, hypotheses — the durable, human-shaped knowledge GUGU retrieves and reasons with. | Schema LIVE; activation DEFERRED. |
 | **Mentor** | **Reasoning / hypothesis layer.** The layer that forms and tests hypotheses about the trader's framework and performance — the bridge between raw memory and useful judgment. | VISION / backlog (NEEDS VERIFICATION). |

@@ -65,6 +65,12 @@ The freeze governs *autonomous production cognition*, not reviewed v2 developmen
 [`00_AI_BOOTSTRAP.md`](./00_AI_BOOTSTRAP.md) §5.2). Do not describe v2 as stale or
 "inherited from an old vision" — it is the current build.
 
+> **Provenance is temporary.** These sprint details come from the Fable/ChatGPT review and
+> user-memory attestation — **not yet** from primary sources. During the cross-repo GUGU
+> capture, replace this provenance with primary sources from `thus-trading-bot` docs, repo
+> files, and the runtime handoff. Until then treat them as unverified; the primary sources
+> have **not** been read.
+
 ## What is currently live
 
 - **Journal persistence, hardened.** Every trade mutation (open/add, close, edit,
@@ -144,6 +150,8 @@ See [`00_AI_BOOTSTRAP.md`](./00_AI_BOOTSTRAP.md) §5 for the full gate list.
   [`SOURCE_INVENTORY.md`](./SOURCE_INVENTORY.md) §7). **DEFERRED.**
 - **Cross-repo GUGU v2 reconciliation / roadmap capture** — pull `thus-trading-bot`'s live
   build state + user memory into this Bible. Needed **before** the chapter 04 master
-  roadmap can be authoritative. This is a *documentation-capture* task, **not** a runtime
-  unfreeze. **NEEDS VERIFICATION / GATED (as capture).**
+  roadmap can be authoritative. Reading that repo's docs and reconciling with user memory
+  is **safe documentation work — RESEARCH / NEEDS VERIFICATION, not GATED.** (Only the
+  runtime unfreeze / production cognition / deploy / bot-behavior change stays **GATED** —
+  and this task does none of those.)
 - **Building out the Bible itself** — see [`TODO_ROADMAP_CAPTURE.md`](./TODO_ROADMAP_CAPTURE.md).
