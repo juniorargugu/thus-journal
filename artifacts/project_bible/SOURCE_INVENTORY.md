@@ -176,10 +176,11 @@ Cross-account gate (terminal `301102520`), `needs_mapping`, idempotency via
 - **Every closeout is point-in-time and self-reported.** They assert PASS against the
   author's environment at that date; none is a live re-verification. For money-/data-
   bearing claims, re-confirm against live systems or the latest `PIPELINE_STATE.md`.
-- **GUGU v2 provenance is temporary.** Sprint (Days 1–8), cost/economics, VPS host, and
-  knowledge-corpus details in this Bible come from the Fable/ChatGPT review + user-memory
-  attestation — **not** yet from primary `thus-trading-bot` sources. Replace with primary
-  sources during the cross-repo capture; treat as **NEEDS VERIFICATION** until then.
+- **GUGU v2 provenance — reconciled 2026-07-10.** Much of the sprint / cost / freeze /
+  architecture provenance has been **replaced with primary `thus-trading-bot` sources** in
+  [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) (which cites `file:line`).
+  Items still lacking primary evidence (VPS provider/pricing, Days 6–8, Market Pattern
+  Library / S50) remain **NEEDS VERIFICATION** — likely THUS Journal notes / user memory.
 - **`RESOURCE_AUDIT.md` is untracked** (working-tree only) — usable as a source, but **do
   not stage it** as part of Bible work.
 
@@ -195,11 +196,11 @@ NEEDS VERIFICATION and capture deliberately.**
 
 | Gap area | Why it's a gap | Where to look |
 |---|---|---|
-| **GUGU roadmap / capabilities** | GUGU v2 is an **active build** in `thus-trading-bot` (reported Days 1–8 sprint: memory → agent+tools → Telegram → observation cycle → cost monitoring → VPS at Day 8, **NEEDS VERIFICATION**). Its architecture, phases, and live runtime live there + in user memory, not here. Only the freeze policy + G5 hook appear in `thus-journal`. | `thus-trading-bot` CLAUDE.md + memory index; user. |
-| **GUGU cost / economics** | v2 needs a **hard cost ceiling + per-cycle token/cost logging** before any autonomous run — a **Day-5 deployment precondition**, not just a general principle; v1 reportedly leaked ~$5/day on a Haiku monitor daemon. First-class safety rule (rank of "no silent unfreeze"). **NEEDS VERIFICATION.** | `thus-trading-bot` + user memory. |
-| **Existing knowledge corpus** | The knowledge layer does **not** start from zero. Reported external corpus: mentor-PDF → NotebookLM → `bot_knowledge` pipeline; ~70 items across 17 categories; candlestick / Wyckoff curriculum artifacts; codified rules (range boundaries, no-falling-knife, S50 gap rule). **NEEDS VERIFICATION.** | `thus-trading-bot` + user memory. |
-| **GUGU VPS / operations** | Reported host: DigitalOcean Ubuntu 24.04, IP `168.144.35.127`; resized to $6/mo while the bot is offline; expected $12/mo + restore crontab/Flask on deploy. For chapter 15 after verification. **NEEDS VERIFICATION.** | `thus-trading-bot` + user memory. |
-| **S50 pattern cancellation** | The old S50 "gap up 2 days → sell-off" rule was **explicitly cancelled as a false pattern** (→ chapter 16 Rejected Ideas). The corrected S50 gap-down rule (Mar 2026 `S50H26` 1029→942) → Pattern/Lesson capture (chapter 11 / §9). **NEEDS VERIFICATION.** | user memory + `thus-trading-bot`. |
+| **GUGU roadmap / capabilities** | ✅ Architecture, freeze, cost ceiling, observation cycle, Capture Bot now **captured** in [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) (built in-repo, runtime-frozen). Residual **NEEDS VERIFICATION**: Days 6–8, "adversarial testing" wording, forward roadmap phases, live corpus count. | `GUGU_V2_RECONCILIATION.md`; `thus-trading-bot/gugu/*`; user. |
+| **GUGU cost / economics** | ✅ Ceiling **VERIFIED LIVE** (`gugu/cost_ceiling.py`: 1.5M tok/day ≈$5/day Sonnet, 60k/cycle, 25 calls/cycle, fail-closed). v1 leak was **~$3/day** (not $5). Residual: no human-facing per-cycle cost line yet. See `GUGU_V2_RECONCILIATION.md` §5. | `thus-trading-bot/gugu/cost_ceiling.py` (High). |
+| **Existing knowledge corpus** | Partly corrected: verified `bot_knowledge` keyword store (**7** categories) + **78-row** cold-start into `gugu_memory` (not ~70/17). **NOT FOUND** in the bot repo: NotebookLM/mentor-PDF pipeline, Wyckoff/candlestick curriculum — **NEEDS VERIFICATION** (likely Journal notes / user memory). See `GUGU_V2_RECONCILIATION.md` §9. | `thus-trading-bot/knowledge.py`, `gugu/cold_start.py` + user. |
+| **GUGU VPS / operations** | Verified in-repo: IP `168.144.35.127` + systemd deploy (`gugu/DEPLOY.md`, `gugu-telegram.service`, `/opt/gugu`, polling). **NEEDS VERIFICATION:** DigitalOcean, Ubuntu 24.04, $6→$12 pricing. **Flask-on-deploy REFUTED** (v2 = polling); crontab is v1-only. See `GUGU_V2_RECONCILIATION.md` §6. | `thus-trading-bot/gugu/DEPLOY.md` + user. |
+| **Market Pattern Library / S50 rules** | **NOT FOUND** in `thus-trading-bot`: no "Market Pattern Library" (trigger+lesson+action); closest shipped = **Note Activation v0.1** (6 during-trade reminders). The cancelled "gap up 2 days → sell-off" rule (→ ch16) and the corrected S50 gap-down / `S50H26` 1029→942 case (→ ch11) are in neither repo. **NEEDS VERIFICATION** (Journal notes / user memory). See `GUGU_V2_RECONCILIATION.md` §10. | user memory + THUS Journal notes. |
 | **Mentor system** | No forward design in-repo; the old AI-mentor-note route was deprecated. | User memory; future design session. |
 | **Notes / Knowledge engine** | Taxonomy exists; the *retrieval/activation* design is deferred until real content exists. | `docs/notes_taxonomy.md` + a future "Session B". |
 | **Pattern / Lesson engine** | Not implemented or designed in-repo; only conceptual (GUGU v2 "connect dots"/"self-correct"). | User; GUGU v2 vision. |
@@ -213,3 +214,30 @@ NEEDS VERIFICATION and capture deliberately.**
 
 See [`TODO_ROADMAP_CAPTURE.md`](./TODO_ROADMAP_CAPTURE.md) for how these map to the
 remaining chapters.
+
+---
+
+## 8. `thus-trading-bot` (GUGU v2) — primary sources (captured 2026-07-10)
+
+Read-only capture from the sibling repo at `b03758a`. Full analysis with `file:line`
+evidence is in [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md). These are
+**cross-repo** sources — not in `thus-journal`; cite them via the reconciliation doc.
+
+| path (in `thus-trading-bot`) | what it establishes | conf. |
+|---|---|---|
+| `CLAUDE.md` | The GUGU V2 handoff; v1 archive (2026-04-26) + $3/day monitor-leak; cold-start 78 rows. | High |
+| `gugu/agent.py`, `gugu/agent_tools.py`, `gugu/real_tools.py` | PydanticAI + Claude Sonnet 4.6; the 3 chat tools (`search_memories`/`append_memory`/`get_price`). | High |
+| `gugu/memory.py`, `gugu/cold_start.py`, `gugu/README.md` | pgvector memory-stream (`embed`/`append`/`recall`); cold-start from `bot_knowledge` (~78). | High |
+| `gugu/cycle_agent.py`, `gugu/cycle_prompt.py`, `gugu/shadow_cycle.py`, `gugu/models.py` | Observation/shadow cycle: falsifiable findings, no memory-write, no recommendation. | High |
+| `gugu/manual_run_guard.py` + `artifacts/gugu_freeze_inventory/*` | Fail-closed freeze; `CAPTURE_ONLY_MODE` default + `YES_I_UNDERSTAND` override. | High |
+| `gugu/cost_ceiling.py`, `gugu/test_cost_ceiling.py` | Live fail-closed cost ceiling (1.5M tok/day ≈$5/day Sonnet, 60k/cycle, 25 calls/cycle). | High |
+| `gugu/tg_bot.py` (1158 lines) | Capture Bot (Py 3.14 async + SIGTERM); capture-only commands; cognition handlers gated. | High |
+| `gugu/note_activation.py` + `artifacts/note_activation/*` | Note Activation v0.1: 6 deterministic no-LLM during-trade mentor reminders. | High |
+| `gugu/DEPLOY.md`, `gugu/RUNBOOK.md`, `gugu/gugu-telegram.service` | VPS deploy: systemd on `/opt/gugu`, IP `168.144.35.127`, polling (not Flask). | High |
+| `knowledge.py`, `knowledge_audit.py` | v1 `bot_knowledge` keyword store; **7** categories (not 17). | High |
+| `behavior_scanner.py`, `gap_followup_store.py`, `indicators.py` | v1 gap detection (`gap_up`/`gap_down` tags); no lesson/action library. | High |
+
+**Not found in `thus-trading-bot` (→ THUS Journal notes / user memory):** NotebookLM /
+mentor-PDF pipeline; "17 categories"/"~70 items"; Wyckoff/candlestick curriculum; a
+"Market Pattern Library"; the corrected S50 gap-down rule; `S50H26` 1029→942; the cancelled
+"gap up 2 days → sell-off" pattern; DigitalOcean/Ubuntu-24.04/$6→$12 VPS details.

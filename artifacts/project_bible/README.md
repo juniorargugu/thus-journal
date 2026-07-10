@@ -39,10 +39,12 @@ THUS spans **two repositories** plus a runtime host. Always know which one you a
 - `thus-journal` facts (Journal, persistence, grouping, MT5 staging, product registry).
 - Cross-system gates *as documented here*.
 
-**It is NOT yet fully authoritative for the current GUGU build state.** GUGU v2 is an
-active build in `thus-trading-bot`; until a cross-repo capture pass reconciles that repo's
-live state into this Bible (see [`TODO_ROADMAP_CAPTURE.md`](./TODO_ROADMAP_CAPTURE.md)),
-GUGU details here are directional, not a live status report.
+**Authority for the GUGU build state (updated 2026-07-10):** a read-only cross-repo capture
+has been done — see [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) for the
+primary-sourced GUGU v2 state (built in-repo but **runtime-frozen**). GUGU v2 is an active
+build in `thus-trading-bot`, not vision-ware. Items still lacking primary evidence (VPS
+provider/pricing, Days 6–8, the Market Pattern Library / S50 rules) remain NEEDS
+VERIFICATION — likely THUS Journal notes / user memory.
 
 **Rule for agents working in `thus-trading-bot`:** read *that* repo's own CLAUDE.md /
 handoff / current-state first, then reconcile back to this Bible. Do not assume this Bible
@@ -69,6 +71,9 @@ New agents and contributors should read in this order:
 7. [`GLOSSARY.md`](./GLOSSARY.md) — quick definitions for the acronyms and status tags
    used throughout (G0–G6, MT5 0A–0D, Lanes, `raw`/`group_id`, GUGU v1/v2, etc.). Keep it
    open as a reference while reading the rest.
+8. [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) *(appendix)* — the read-only
+   cross-repo capture of GUGU v2's primary-sourced state from `thus-trading-bot`. Read it
+   alongside chapters 10/11 when they are written.
 
 ---
 

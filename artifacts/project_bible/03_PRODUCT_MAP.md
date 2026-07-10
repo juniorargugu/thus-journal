@@ -160,8 +160,10 @@ roadmap · Gates / risks · Source docs · Missing context.** Status tags per
 - **Source docs.** `ROADMAP.md` (GUGU cognition freeze §; Capture Bot Day 4 prep);
   `PIPELINE_STATE.md` (Lane E). Most detail lives **outside this repo** (the trading-bot
   repo).
-- **Missing context.** **Full Capture Bot capabilities + GUGU cognition roadmap live in a
-  separate repo / user memory — NEEDS VERIFICATION and capture in chapter 10.**
+- **Missing context.** Capture Bot capabilities + GUGU cognition are now **captured** from
+  the primary repo — see [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) (the
+  frozen agent, `CAPTURE_ONLY_MODE`, capture-only command set). Residual roadmap phases
+  (Days 6–8) remain NEEDS VERIFICATION → chapter 10.
 
 ## 7. Mentor System
 
@@ -222,8 +224,11 @@ roadmap · Gates / risks · Source docs · Missing context.** Status tags per
   second-pass is the intended defense).
 - **Source docs.** `docs/notes_taxonomy.md` (idea/lesson types); GUGU v2 build + user
   memory (`thus-trading-bot`).
-- **Missing context.** **Largely NEEDS VERIFICATION / capture from user memory** (the
-  Market Pattern Library structure + rule corpus).
+- **Missing context.** **NEEDS VERIFICATION / capture from user memory** — the Market
+  Pattern Library + S50 rules were **NOT found** in `thus-trading-bot`
+  ([`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) §10); the closest shipped
+  feature is **Note Activation v0.1** (6 deterministic during-trade reminders). The
+  library / corrected-S50 rules likely live in THUS Journal notes / user memory.
 
 ## 10. Review / Analytics
 
@@ -245,13 +250,15 @@ roadmap · Gates / risks · Source docs · Missing context.** Status tags per
 - **Purpose.** The AI/automation surface: GUGU cognition/runtime, the multi-model review
   chain, and any autonomous cadence.
 - **Current state.** GUGU autonomous cognition/runtime **FROZEN/GATED for production**;
-  capture-only in prod. **But GUGU v2 is an active build** in `thus-trading-bot` — reported
-  sprint (Fable review, **NEEDS VERIFICATION**): Days 1–4 complete (memory, cold start,
-  agent+tools, Telegram bot, locally verified); Days 5–8 in progress (observation cycle,
-  adversarial testing, cost monitoring with hard cost ceiling); VPS deploy planned Day 8.
-  The engineering autopilot layer (safe forward motion under strict gates) is documented
-  and active. v2 development runs under its own gates (observation-only, hard cost ceiling,
-  per-cycle token/cost logging, no production autonomous cognition without approval).
+  capture-only in prod. **GUGU v2 is a real, built-in-repo agent** in `thus-trading-bot`
+  (PydanticAI + Claude Sonnet 4.6, pgvector memory, 3 chat tools) that is **runtime-frozen**
+  — verified in [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md). Verified sprint:
+  Days 1–5A (memory, cold start, agent+tools, tg_bot, observation cycle, **live fail-closed
+  cost ceiling**). Still **NEEDS VERIFICATION**: "Days 6–8", "locally verified" run logs, and
+  "adversarial testing" (only eval `forbidden_invariants` + a sanitizer re-check exist — no
+  adversarial second-pass agent yet). The engineering autopilot layer is documented and
+  active. v2 dev runs under its own gates (observation-only, hard cost ceiling, no production
+  autonomous cognition without approval).
 - **Relationship to GUGU.** This is the layer that becomes GUGU. It is deliberately
   gated so capability ships dark and is enabled only by explicit human decision.
 - **Known roadmap.** GUGU v2 phased plan (memory stream → agent+tools → proactive →
@@ -260,7 +267,10 @@ roadmap · Gates / risks · Source docs · Missing context.** Status tags per
   echo-chamber is the #1 risk.
 - **Source docs.** `artifacts/pipeline/AUTOPILOT_RULES.md`; `ROADMAP.md` (GUGU freeze);
   GUGU v2 vision (separate repo).
-- **Missing context.** **AI-automation roadmap — NEEDS VERIFICATION (chapter 10).**
+- **Missing context.** Architecture/freeze/cost now captured in
+  [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md); the **forward** AI-automation
+  roadmap (unfreeze plan, proactive/compound-learning phases) remains **NEEDS VERIFICATION**
+  → chapter 10.
 
 ## 12. Operations / Deployment / Review Process
 

@@ -21,25 +21,30 @@ GATED · RESEARCH · VISION · NEEDS VERIFICATION** (VERIFIED is a pairing, e.g.
 - ✅ `03_PRODUCT_MAP.md`
 - ✅ `SOURCE_INVENTORY.md`
 - ✅ `TODO_ROADMAP_CAPTURE.md` (this file)
+- ✅ `GLOSSARY.md`
+- ✅ `GUGU_V2_RECONCILIATION.md` (cross-repo capture, 2026-07-10)
 
 ---
 
 ## Remaining chapters to write
 
-### `04_COMPLETE_ROADMAP.md` — **BLOCKED_BY cross-repo + user-memory capture**
+### `04_COMPLETE_ROADMAP.md` — **GUGU side unblocked; Portfolio/Mentor/Pattern still pending**
 The single consolidated, tagged roadmap across all subsystems — the master list so no
 track is lost.
 
-**Do not write this yet as a single authoritative master roadmap.** GUGU, Mentor,
-Pattern/Lesson, and Portfolio are still thin (see [`SOURCE_INVENTORY.md`](./SOURCE_INVENTORY.md) §7).
-**BLOCKED_BY:** (1) cross-repo GUGU v2 reconciliation from `thus-trading-bot`; (2)
-user-memory capture for Mentor / Pattern-Lesson / Portfolio.
+**Status update (2026-07-10):** the cross-repo GUGU v2 reconciliation is **DONE**
+([`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md)), so the **GUGU side is now
+substantially unblocked** (architecture, freeze, cost ceiling, observation cycle, Capture
+Bot, deploy). **Still BLOCKED_BY user-memory capture:** **Portfolio** roadmap, **Mentor**
+design, and the **Pattern-Library / S50** rules (not found in either repo — see reconciliation
+§10). VPS provider/pricing details also remain NEEDS VERIFICATION.
 
-**Preferred sequencing (Approach A):** run those capture passes *first*, then write
-chapter 04 whole. **If** chapter 04 is written before capture completes, it **must be
-explicitly partial** — carry a banner ("Journal-side roadmap; GUGU / Mentor / Pattern /
-Portfolio pending capture"), or split into `04A_JOURNAL_SIDE_ROADMAP.md` +
-`04B_GUGU_SIDE_ROADMAP.md` with **04A clearly labeled as *not* the whole roadmap.**
+**Preferred sequencing (Approach A):** capture Portfolio/Mentor/Pattern from user memory
+*first*, then write chapter 04 whole. **If** chapter 04 is written now, it **must be
+explicitly partial** — GUGU/Journal/MT5 sections sourced, but Portfolio / Mentor /
+Pattern-Library sections carry a "pending user-memory capture / NEEDS VERIFICATION" banner
+(or split into `04A_JOURNAL_SIDE_ROADMAP.md` + `04B_GUGU_SIDE_ROADMAP.md`, with 04A clearly
+labeled as *not* the whole roadmap).
 
 Must fold in: ROADMAP.md deferred items, PIPELINE_STATE Lanes A–I, the G0–G6 grouping
 phases, the MT5 0A→materializer phases, the Notes activation trigger, the GUGU v2 sprint +
@@ -83,17 +88,25 @@ read-only Inbox, the dry-run harness, and the gated path to materialization. *So
 `artifacts/mt5_auto_draft_import/*`, `artifacts/mt5_import/*`, `ops/mt5_import/*`.
 
 ### `10_GUGU_SUBSYSTEM.md`
-GUGU proper: the v2 memory-stream + reasoning architecture, personality, tools, the
-capture bot, the cognition **freeze** policy, and the path to unfreeze. **Largest capture
-gap** — most detail lives in the separate `thus-trading-bot` repo + user memory. Capture
-deliberately; mark **NEEDS VERIFICATION** everywhere until confirmed against the current
-GUGU design. *Sources:* `thus-trading-bot` CLAUDE.md, memory index, user.
+GUGU proper: the v2 memory-stream + reasoning architecture (PydanticAI + Claude Sonnet 4.6,
+pgvector memory, 3 chat tools), personality, the observation/shadow cycle, the capture bot,
+the cognition **freeze** policy (`CAPTURE_ONLY_MODE` + `manual_run_guard`), the live cost
+ceiling, and the path to unfreeze. **Now substantially sourced** —
+[`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) is the primary capture (built
+in-repo but runtime-frozen). Residual NEEDS VERIFICATION: Days 6–8, "adversarial testing"
+wording, live corpus count. *Sources:* `GUGU_V2_RECONCILIATION.md`, `thus-trading-bot`
+`gugu/*` + `CLAUDE.md`, user.
 
 ### `11_MENTOR_AND_KNOWLEDGE.md`
 The Notes/Knowledge layer (taxonomy, activation trigger, bulk-import gate) and the Mentor
-reasoning/hypothesis layer (currently VISION). How curated knowledge feeds GUGU retrieval;
-why bulk-dumping is forbidden. *Sources:* `docs/notes_taxonomy.md`, `ROADMAP.md` (Notes
-§). **Mentor design = NEEDS VERIFICATION.**
+reasoning/hypothesis layer. How curated knowledge feeds GUGU retrieval; why bulk-dumping is
+forbidden. **Now partly sourced:** the bot-side `bot_knowledge` keyword store (7 categories)
++ **78-row** cold-start into `gugu_memory`, and the real shipped **Note Activation v0.1**
+(6 deterministic, no-LLM during-trade mentor reminders) — see
+[`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) §9–10. Residual NEEDS
+VERIFICATION: the NotebookLM/mentor-PDF pipeline, Wyckoff/candlestick curriculum, and the
+Market Pattern Library / S50 rules (likely THUS Journal notes / user memory). *Sources:*
+`docs/notes_taxonomy.md`, `ROADMAP.md` (Notes §), `GUGU_V2_RECONCILIATION.md`, user.
 
 ### `12_MAJOR_DECISIONS_ADR.md`
 Architecture Decision Records: disable-Merge-not-repair; grouping-as-metadata (Option B);
@@ -136,7 +149,8 @@ GUGU v2 vision, user memory.
 ### `17_RISKS_AND_TECH_DEBT.md`
 The live risk register: silent data-loss (residual non-durable writers), silent double-
 count regression, single-file SPA scale + `57014`, GUGU echo-chamber / premature unfreeze,
-**GUGU economic runaway (no cost ceiling / token-cost leak — v1 ~$5/day lesson)**, docs
+**GUGU economic runaway (v1 ~$3/day monitor-cycle leak; mitigated in v2 by the live
+fail-closed cost ceiling)**, docs
 drift, backup-retention of sensitive data, RLS gaps pending audit, `[DIAG]`/deferred
 cleanups. Each with severity + mitigation + owner-gate. *Sources:* chapters 01/03,
 closeouts, `RESOURCE_AUDIT.md`.
@@ -151,9 +165,13 @@ guardrails that must survive (human-in-control, no auto-execution, no silent unf
 
 ## Cross-cutting capture tasks (independent of any single chapter)
 
-1. **Reconcile with the `thus-trading-bot` repo.** GUGU, Capture Bot, and the memory-
-   stream architecture are documented there, not here. A dedicated pass should pull the
-   current (not just v2-era) design into chapters 10/11/13. **NEEDS VERIFICATION.**
+1. **Reconcile with the `thus-trading-bot` repo — DONE (2026-07-10).** A read-only
+   cross-repo pass captured GUGU v2 architecture, freeze, cost ceiling, observation cycle,
+   Capture Bot, and knowledge/pattern facts into
+   [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md); it feeds chapters
+   10/11/13/15/16/17. Residual items there remain **NEEDS VERIFICATION** (VPS
+   provider/pricing, Days 6–8, pattern-library / S50 — likely THUS Journal notes / user
+   memory).
 2. **Confirm migration apply-state against live Supabase** (read-only): `20260512`
    trade_events lockdown especially. Grouping migrations are settled — G1 (`20260607`)
    and G2 RPCs (`20260705`) applied, and the G2 RPC `isMerged` hardening (`20260708`) is
@@ -166,33 +184,41 @@ guardrails that must survive (human-in-control, no auto-execution, no silent unf
    explicit user-memory capture sessions before writing chapters 03-expansion/11.
 5. **Keep `14_CURRENT_STATE.md` and `PIPELINE_STATE.md` in sync** — one is the durable
    Bible snapshot, the other the working glance.
-6. **Capture the GUGU cost/economics guardrail as a first-class lane.** A hard cost
-   ceiling + per-cycle token/cost logging are release-gating for v2 — specifically a
-   **Day-5 deployment precondition** (a scheduled gate, not just a general principle); v1
-   reportedly leaked ~$5/day on a Haiku daemon (**NEEDS VERIFICATION**). Track it alongside
-   the safety gates and in `17_RISKS_AND_TECH_DEBT.md`, not as an afterthought.
-7. **Capture the existing knowledge corpus.** The knowledge layer is not zero-start:
-   reported mentor-PDF → NotebookLM → `bot_knowledge` pipeline, ~70 items / 17 categories,
-   candlestick / Wyckoff artifacts, codified rules (range boundaries, no-falling-knife,
-   S50 gap rule). Reconcile from `thus-trading-bot` + user memory before the Notes/Mentor
-   chapters. **NEEDS VERIFICATION.**
+6. **GUGU cost/economics guardrail — largely VERIFIED (2026-07-10).** The hard, fail-closed
+   cost ceiling is LIVE in `thus-trading-bot` `gugu/cost_ceiling.py` (1.5M tok/day ≈$5/day
+   Sonnet, 60k/cycle, 25 calls/cycle); v1's leak was ~$3/day (not $5). Residual: a
+   human-facing per-cycle token/cost **log line** / `/cost` command is not yet implemented
+   (usage is persisted to a ledger). Keep it a first-class lane in
+   `17_RISKS_AND_TECH_DEBT.md`. See [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) §5.
+7. **Existing knowledge corpus — partially corrected (2026-07-10).** Verified: a
+   `bot_knowledge` keyword store (**7** categories) + a **78-row** cold-start into
+   `gugu_memory` (not ~70 / 17). **Not found** in `thus-trading-bot`: the mentor-PDF →
+   NotebookLM pipeline and a candlestick/Wyckoff curriculum — these remain **NEEDS
+   VERIFICATION** (likely THUS Journal notes / user memory). See
+   [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) §9.
 8. **Cross-repo GUGU v2 reconciliation is a prerequisite for chapter 04** (see the 04
    entry's BLOCKED_BY). Do not let chapter 04 ship as a single authoritative roadmap
    before it.
-9. **Capture the GUGU VPS host** for chapter 15 (reported, **NEEDS VERIFICATION**):
-   DigitalOcean Ubuntu 24.04, IP `168.144.35.127`, resized to $6/mo while the bot is
-   offline, expected resize to $12/mo + restore crontab/Flask on deploy. Verify against
-   `thus-trading-bot` + user memory before treating as authoritative.
-10. **Capture the cancelled S50 false pattern** for chapter 16: the old S50 "gap up 2 days
-    → sell-off" rule was **explicitly cancelled as a false pattern** — record it in Rejected
-    Ideas so it is not re-derived. The **corrected** S50 gap-down rule (Mar 2026 `S50H26`
-    1029→942 case) belongs in the Pattern/Lesson capture (chapter 11 / §9), not here.
-    **NEEDS VERIFICATION.**
+9. **GUGU VPS host — partially corrected (2026-07-10)** for chapter 15. Verified in-repo:
+   IP `168.144.35.127` + a systemd deploy (`gugu/DEPLOY.md`, `gugu-telegram.service`,
+   `/opt/gugu`, `python -m gugu.tg_bot` polling). **NEEDS VERIFICATION** (not in repo):
+   DigitalOcean, Ubuntu 24.04, $6→$12 pricing/offline-online. **Flask on deploy is REFUTED**
+   for v2 (polling, not webhook); crontab is v1-only. See
+   [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) §6.
+10. **S50 pattern items — NOT FOUND in `thus-trading-bot` (2026-07-10); capture from user
+    memory / THUS Journal.** No "Market Pattern Library" (trigger+lesson+action) exists in
+    the bot repo; the closest shipped feature is **Note Activation v0.1** (6 deterministic
+    during-trade mentor reminders). The cancelled "gap up 2 days → sell-off" rule (→ chapter
+    16) and the corrected S50 gap-down / `S50H26` 1029→942 case (→ Pattern/Lesson, chapter
+    11) are **NOT** in either repo — **NEEDS VERIFICATION**. See
+    [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) §10.
 
-> **Provenance note (applies to tasks 1, 6, 7, 9, 10):** GUGU v2 sprint, cost, VPS,
-> knowledge-corpus, and S50 details currently come from the Fable/ChatGPT review + user-
-> memory attestation — **temporary provenance.** The cross-repo capture must replace them
-> with primary `thus-trading-bot` sources; do not assert them as verified until then.
+> **Provenance note (updated 2026-07-10):** the cross-repo reconciliation (task 1) has
+> replaced much of the Fable/ChatGPT provenance with primary `thus-trading-bot` sources —
+> see [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) for what is now CONFIRMED
+> vs still NEEDS VERIFICATION. Remaining unverified items (VPS provider/pricing, Days 6–8,
+> pattern-library / S50) likely live in THUS Journal notes / user memory; do not assert
+> them as verified until captured.
 
 ---
 

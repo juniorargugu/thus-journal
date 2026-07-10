@@ -103,18 +103,35 @@ confirmed against source, it is marked **NEEDS VERIFICATION**.
   consumer of THUS data.
 - **GUGU v1** — the first bot architecture (stacked hardcoded gates / prefilters / zone
   rules); abandoned for a maintenance-death-spiral lesson.
-- **GUGU v2** — the current, **active** build in the sibling `thus-trading-bot` repo:
-  memory-stream + reasoning, tools, capture bot.
+- **GUGU v2** — the current build in `thus-trading-bot` (verified): a PydanticAI + Claude
+  Sonnet 4.6 memory-stream agent (pgvector memory, 3 chat tools) — **built in-repo but
+  runtime-frozen**; the deployed surface is the capture-only bot. See
+  [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md).
 - **capture-only** — the allowed production behavior: the check-in bot records
   `checkin_events` etc.; no autonomous cognition.
 - **cognition freeze** — the policy that forbids autonomous GUGU cognition against
   live/production data on any repo without explicit approval. Does **not** forbid reviewed
   v2 development in `thus-trading-bot`.
-- **Days 1–8 / "Day 4"** — the reported GUGU v2 sprint (Days 1–4 complete: memory, cold
-  start, agent+tools, Telegram bot; Days 5–8 in progress: observation cycle, adversarial
-  testing, cost monitoring; VPS at Day 8). **NEEDS VERIFICATION** until cross-repo capture.
-- **hard cost ceiling / per-cycle token-cost logging** — the required economic guardrails
-  before v2 runs autonomously (v1 reportedly leaked ~$5/day; **NEEDS VERIFICATION**).
+- **CAPTURE_ONLY_MODE** — the env switch on the deployed Telegram bot; unset → **frozen**
+  (cognition handlers not registered). Verified `gugu/tg_bot.py`.
+- **manual_run_guard** — the fail-closed guard on GUGU's manual cognition entry points
+  (cli, shadow_cycle, evals); blocks unless `GUGU_ALLOW_COGNITION_MANUAL_RUN ==
+  "YES_I_UNDERSTAND"` (exact string). Verified `gugu/manual_run_guard.py`.
+- **observation / shadow cycle** — GUGU's read-only analysis cycle: emits falsifiable
+  `CandidateFinding` objects, **no memory-write, no trade recommendation** ("observation-
+  only before action"). Verified `gugu/cycle_agent.py`, `gugu/shadow_cycle.py`.
+- **Note Activation v0.1** — the real shipped "mentor reminder" feature: 6 deterministic,
+  tag-gated, no-LLM during-trade reminders (explicitly not signals/advice). Verified
+  `gugu/note_activation.py`. It is the closest thing to a "Market Pattern Library"; a
+  `trigger+lesson+action` library was **not** found in the bot repo.
+- **Days 1–8 / "Day 4"** — the reported GUGU v2 sprint. Days 1–5A are substantiated in-repo
+  (memory, cold start, agent+tools, tg_bot, observation cycle, cost ceiling); **Days 6–8**,
+  "adversarial testing", and "locally verified" remain **NEEDS VERIFICATION** (repo tags
+  stop at Day 5A.x). See [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md).
+- **hard cost ceiling / `cost_ceiling.py`** — the fail-closed economic guardrail (verified
+  LIVE): 1.5M tokens/day (≈$5/day at Sonnet 4.6), 60k tokens/cycle, 25 LLM calls/cycle;
+  per-cycle usage persisted to `logs/gugu_usage_ledger.json`. (v1's separate leak was
+  ~$3/day; a human-facing per-cycle cost line is not yet implemented.)
 
 ## Status tags
 

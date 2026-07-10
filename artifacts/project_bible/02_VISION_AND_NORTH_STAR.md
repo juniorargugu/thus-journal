@@ -129,11 +129,15 @@ as historical.
   `thus-trading-bot`, which proceeds under its own gates: observation-only before action, a
   hard cost ceiling, per-cycle token/cost logging, and no production autonomous cognition
   without approval. Capture-only production behavior remains allowed.
-- **No economic runaway.** GUGU's cost must never run away. (GUGU v1 had a token/cost-leak
-  lesson — reportedly a ~$5/day Haiku monitor daemon; **NEEDS VERIFICATION**.) v2
-  deployment **requires a hard cost ceiling and per-cycle token/cost logging** before it
-  runs autonomously. This is a first-class system-safety rule — **same rank as "no silent
-  unfreeze."**
+- **No economic runaway.** GUGU's cost must never run away. GUGU v1 had a token/cost-leak
+  lesson — **~$3/day** from Haiku-default monitor cycles that mostly produced "NOTHING"
+  (verified: `thus-trading-bot` `CLAUDE.md:88`; v1 archived 2026-04-26). v2 already carries
+  a **hard, fail-closed cost ceiling** — verified LIVE in-repo (`gugu/cost_ceiling.py`:
+  1.5M tokens/day ≈ $5/day at Sonnet 4.6, 60k/cycle, 25 calls/cycle) with per-cycle usage
+  persisted to a ledger. This is a first-class system-safety rule — **same rank as "no
+  silent unfreeze."** (A human-facing per-cycle cost line is not yet implemented; and the
+  "$5/day" sometimes cited is the *v2 Sonnet ceiling headroom*, not the v1 leak. See
+  [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md).)
 - **Do not let a metadata layer become a trade.** No synthetic P/L-bearing rows. No
   reducer reading group/portfolio totals as truth. Raw executions are the only P/L-
   bearing rows.
