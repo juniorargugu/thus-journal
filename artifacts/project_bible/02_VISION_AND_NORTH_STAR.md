@@ -47,7 +47,7 @@ must not blur.
 | **Portfolio** | **State / risk layer.** Account balance, equity, high-water mark, exposure — the current risk picture derived from executions. | Partially LIVE; roadmap thin (NEEDS VERIFICATION). |
 | **Knowledge / Notes** | **Learning / retrieval layer.** Curated rules, lessons, quotes, hypotheses — the durable, human-shaped knowledge GUGU retrieves and reasons with. | Schema LIVE; activation DEFERRED. |
 | **Mentor** | **Reasoning / hypothesis layer.** The layer that forms and tests hypotheses about the trader's framework and performance — the bridge between raw memory and useful judgment. | VISION / backlog (NEEDS VERIFICATION). |
-| **GUGU** | **The long-term primary consumer.** Reads across all layers, reasons, proposes, challenges. | Cognition FROZEN; capture-only. |
+| **GUGU** | **The long-term primary consumer.** Reads across all layers, reasons, proposes, challenges. | Autonomous cognition FROZEN (prod); capture-only live; **v2 build active in `thus-trading-bot`**. |
 
 **Human stays in control.** GUGU is an analyst-apprentice / co-trader, not an autopilot.
 It may have opinions, connect dots, and challenge the trader — including challenging
@@ -94,11 +94,13 @@ future AI could be misled:
 
 ---
 
-## What GUGU is meant to be (design intent, carried from GUGU v2)
+## What GUGU is meant to be (GUGU v2 design intent)
 
-The following is **design intent** inherited from the GUGU v2 vision. Much of it lives in
-a separate repository and predates the current Journal-focused phase; treat specifics as
-**NEEDS VERIFICATION** against the latest GUGU design before building.
+The following is the GUGU v2 **design intent**. GUGU v2 is an **active build** in the
+sibling `thus-trading-bot` repo (see [`01_EXECUTIVE_SUMMARY.md`](./01_EXECUTIVE_SUMMARY.md)),
+not a stale or abandoned vision. The detail lives in that repo, so treat specifics below
+as **NEEDS VERIFICATION** against its current state before building — but do not read this
+as historical.
 
 - **Memory-stream + reasoning, not hardcoded logic.** The v2 direction rejected the v1
   architecture of stacked hardcoded gates (prefilters, zone rules, hallucination checks,
@@ -120,8 +122,18 @@ a separate repository and predates the current Journal-focused phase; treat spec
 - **Do not automate trade execution.** Ever, without an explicit, separate, human
   decision. The system proposes; the human executes.
 - **Do not unfreeze GUGU cognition silently.** The freeze is a *policy* decision, not an
-  infrastructure state. It ends only via an explicit, reviewed go-ahead after a real,
-  reviewed data/knowledge corpus exists.
+  infrastructure state. It forbids **autonomous cognition running against live/production
+  data, or producing production behavior, on any repo** without explicit approval — and it
+  ends only via an explicit, reviewed go-ahead after a real, reviewed data/knowledge
+  corpus exists. It does **not** forbid reviewed GUGU **v2 development** in
+  `thus-trading-bot`, which proceeds under its own gates: observation-only before action, a
+  hard cost ceiling, per-cycle token/cost logging, and no production autonomous cognition
+  without approval. Capture-only production behavior remains allowed.
+- **No economic runaway.** GUGU's cost must never run away. (GUGU v1 had a token/cost-leak
+  lesson — reportedly a ~$5/day Haiku monitor daemon; **NEEDS VERIFICATION**.) v2
+  deployment **requires a hard cost ceiling and per-cycle token/cost logging** before it
+  runs autonomously. This is a first-class system-safety rule — **same rank as "no silent
+  unfreeze."**
 - **Do not let a metadata layer become a trade.** No synthetic P/L-bearing rows. No
   reducer reading group/portfolio totals as truth. Raw executions are the only P/L-
   bearing rows.

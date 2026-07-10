@@ -25,13 +25,27 @@ RESEARCH · VISION · NEEDS VERIFICATION.** When a source is missing, capture th
 
 ## Remaining chapters to write
 
-### `04_COMPLETE_ROADMAP.md`
+### `04_COMPLETE_ROADMAP.md` — **BLOCKED_BY cross-repo + user-memory capture**
 The single consolidated, tagged roadmap across all subsystems — the master list so no
-track is lost. Must fold in: ROADMAP.md deferred items, PIPELINE_STATE Lanes A–I, the G0–G6
-grouping phases, the MT5 0A→Phase-1 phases, the Notes activation trigger, and every GATED
-/ DEFERRED item from chapter 03. Cross-reference each to its subsystem and status tag.
-*Sources:* `ROADMAP.md`, `artifacts/pipeline/*`, chapter 03. **Primary gap:** GUGU,
-Mentor, Pattern/Lesson, Portfolio roadmaps — **NEEDS VERIFICATION**.
+track is lost.
+
+**Do not write this yet as a single authoritative master roadmap.** GUGU, Mentor,
+Pattern/Lesson, and Portfolio are still thin (see [`SOURCE_INVENTORY.md`](./SOURCE_INVENTORY.md) §7).
+**BLOCKED_BY:** (1) cross-repo GUGU v2 reconciliation from `thus-trading-bot`; (2)
+user-memory capture for Mentor / Pattern-Lesson / Portfolio.
+
+**Preferred sequencing (Approach A):** run those capture passes *first*, then write
+chapter 04 whole. **If** chapter 04 is written before capture completes, it **must be
+explicitly partial** — carry a banner ("Journal-side roadmap; GUGU / Mentor / Pattern /
+Portfolio pending capture"), or split into `04A_JOURNAL_SIDE_ROADMAP.md` +
+`04B_GUGU_SIDE_ROADMAP.md` with **04A clearly labeled as *not* the whole roadmap.**
+
+Must fold in: ROADMAP.md deferred items, PIPELINE_STATE Lanes A–I, the G0–G6 grouping
+phases, the MT5 0A→materializer phases, the Notes activation trigger, the GUGU v2 sprint +
+cost-ceiling lane, and every GATED/DEFERRED item from chapter 03. Cross-reference each to
+its subsystem and status tag. *Sources:* `ROADMAP.md`, `artifacts/pipeline/*`, chapter 03,
+`thus-trading-bot`, user memory. **Primary gap:** GUGU, Mentor, Pattern/Lesson, Portfolio
+roadmaps — **NEEDS VERIFICATION**.
 
 ### `05_SYSTEM_ARCHITECTURE.md`
 The technical architecture: single-file React SPA (`index.html`), Supabase (tables
@@ -116,7 +130,8 @@ outcome-based Trader Style Profiler; GUGU v1 hardcoded-gate architecture. *Sourc
 ### `17_RISKS_AND_TECH_DEBT.md`
 The live risk register: silent data-loss (residual non-durable writers), silent double-
 count regression, single-file SPA scale + `57014`, GUGU echo-chamber / premature unfreeze,
-docs drift, backup-retention of sensitive data, RLS gaps pending audit, `[DIAG]`/deferred
+**GUGU economic runaway (no cost ceiling / token-cost leak — v1 ~$5/day lesson)**, docs
+drift, backup-retention of sensitive data, RLS gaps pending audit, `[DIAG]`/deferred
 cleanups. Each with severity + mitigation + owner-gate. *Sources:* chapters 01/03,
 closeouts, `RESOURCE_AUDIT.md`.
 
@@ -145,6 +160,18 @@ guardrails that must survive (human-in-control, no auto-execution, no silent unf
    explicit user-memory capture sessions before writing chapters 03-expansion/11.
 5. **Keep `14_CURRENT_STATE.md` and `PIPELINE_STATE.md` in sync** — one is the durable
    Bible snapshot, the other the working glance.
+6. **Capture the GUGU cost/economics guardrail as a first-class lane.** A hard cost
+   ceiling + per-cycle token/cost logging are release-gating for v2 (v1 reportedly leaked
+   ~$5/day on a Haiku daemon; **NEEDS VERIFICATION**). Track it alongside the safety gates
+   and in `17_RISKS_AND_TECH_DEBT.md`, not as an afterthought.
+7. **Capture the existing knowledge corpus.** The knowledge layer is not zero-start:
+   reported mentor-PDF → NotebookLM → `bot_knowledge` pipeline, ~70 items / 17 categories,
+   candlestick / Wyckoff artifacts, codified rules (range boundaries, no-falling-knife,
+   S50 gap rule). Reconcile from `thus-trading-bot` + user memory before the Notes/Mentor
+   chapters. **NEEDS VERIFICATION.**
+8. **Cross-repo GUGU v2 reconciliation is a prerequisite for chapter 04** (see the 04
+   entry's BLOCKED_BY). Do not let chapter 04 ship as a single authoritative roadmap
+   before it.
 
 ---
 
@@ -156,7 +183,7 @@ they are human-gated regardless of how the docs read:
 - Enable `tj_trade_group_write_v01` or any `tj_*` write flag.
 - Keep a real (non-rollback) trade group.
 - Apply any SQL/RLS/schema/migration, or run any write-RPC.
-- Run the MT5 real staging writer / materialize into `trades`.
+- Run further MT5→staging writes, or run the (unbuilt) staging→trades materializer.
 - Unfreeze GUGU cognition / autonomy.
 - Push or deploy (unless a *current* standing user preference authorizes deploy-after-
   clean-preflight — confirm it's current).

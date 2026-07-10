@@ -25,13 +25,18 @@ required (see [§7 Gaps](#7-gaps--areas-with-no-good-in-repo-source)).
 | path | what it contains | subsystem | conf. | use later? |
 |---|---|---|---|---|
 | `ROADMAP.md` | Canonical "why we chose what we chose" record: grouping G0 design lock (G0–G6), P/L invariant, disabled-Merge rationale, `[DIAG] TEMPORARY` log policy, deferred items, 2026-05-12 pivot patch, Notes LLM-retrieval deferral + bulk-import gate, GUGU cognition freeze, Capture Bot Day 4 prep, navigation audit, PageSteps cleanup. | Grouping, Journal, Notes, GUGU, Portfolio | High | **Yes** — 07, 08, 12, 13, 16, 17 |
-| `artifacts/pipeline/PIPELINE_STATE.md` | Authoritative current-state glance: prod bundle `f01eb33`/v3.23.0, HEAD `042aeed`, deploy verification complete, Lanes A–I with status/next/gate, detail notes. **Most current state doc.** | Operations, all | High | **Yes** — 01, 14, 15 |
+| `artifacts/pipeline/PIPELINE_STATE.md` | Authoritative current lane/gate glance: prod bundle `f01eb33`/v3.23.0, deploy verification complete, Lanes A–I with status/next/gate, detail notes. **Most current lane/gate doc.** ⚠️ The `HEAD 042aeed` figure *inside* this file is a point-in-time self-report and goes stale — do **not** cite it as the current repo HEAD. | Operations, all | High | **Yes** — 01, 14, 15 |
 | `artifacts/pipeline/AUTOPILOT_RULES.md` | The gate model: MAY / MUST STOP / MUST NOT, operating loop, "when in doubt STOP." | Operations | High | **Yes** — 00, 06, 15 |
 | `artifacts/pipeline/NEXT_SAFE_TASK.md` | Recommended next safe task + explicitly-blocked steps + the standing Lane-B (G2) gate checklist. | Operations, Grouping | High | **Yes** — 14, 15 |
 | `docs/notes_taxonomy.md` | The Notes 4-type taxonomy (quote/rule/lesson/idea), tag conventions, source conventions, how to encode confidence/applies-to/invalidation without extra fields. | Notes/Knowledge | High | **Yes** — 11 |
 | `RESOURCE_AUDIT.md` *(untracked)* | Supabase resource/cost audit: `portfolio_summary` write loop (P0, patched), `live_prices` double-fetch (patched), diagnostic SELECT (patched), subscriptions/RLS audit, deferred cost items. | Operations, Portfolio | High | **Yes** — 15 (note: **untracked**, do not stage) |
 | `scripts/pipeline_snapshot.ps1` | Read-only PowerShell state snapshot used by autopilot to ground on real repo/prod state. | Operations | Med | Maybe — 15 |
 | `README.md` | Repo stub ("# thus-journal", 14 bytes). | — | High | No |
+
+> **Current HEAD / prod state — cite one place only:** use [`README.md`](./README.md) →
+> "Repo state" (and `14_CURRENT_STATE.md` once written). SHAs embedded inside
+> pipeline/closeout docs are point-in-time self-reports and drift; treat them as
+> historical, not current.
 
 ---
 
@@ -82,11 +87,15 @@ active / 1 archived). GUGU tie-in is the designed **G5 `[Insert GUGU summary]`**
 ## 3. MT5 Import (execution/source layer)
 
 Design intent: mirror MT5 executions into a gated staging area; nothing auto-materializes
-into Journal trades. Phases: 0A schema/RLS/RPCs (applied+verified 2026-06-25) → 0C local
-Python writer (probe → dry-run builder → gated service_role writer) → 0C-3a/0C-3b armed
-smokes (first open + first close-deal writes, idempotent) → 0D-0/0D-1 read-only Inbox UI
-(default-off `tj_mt5_inbox`). Offline dry-run harness merged. Cross-account gate (terminal
-`301102520`), `needs_mapping`, idempotency via `position_id`/`deal_id`/`raw_sha`.
+into Journal trades. **Terminology (keep distinct):** the **MT5→staging writer** exists
+(local Python; has done armed *staging* writes under gate); the **staging→trades
+materializer** is **not started; hard-gated** — armed staging smokes are not precedent for
+automatic materialization. Phases: 0A schema/RLS/RPCs (applied+verified 2026-06-25) → 0C
+local Python MT5→staging writer (probe → dry-run builder → gated service_role writer) →
+0C-3a/0C-3b armed staging smokes (first open + first close-deal writes, idempotent) →
+0D-0/0D-1 read-only Inbox UI (default-off `tj_mt5_inbox`). Offline dry-run harness merged.
+Cross-account gate (terminal `301102520`), `needs_mapping`, idempotency via
+`position_id`/`deal_id`/`raw_sha`.
 
 | path | what it contains | status | conf. | use later? |
 |---|---|---|---|---|
@@ -182,7 +191,9 @@ NEEDS VERIFICATION and capture deliberately.**
 
 | Gap area | Why it's a gap | Where to look |
 |---|---|---|
-| **GUGU roadmap / capabilities** | GUGU's v2 architecture, phases, and runtime live in the separate `thus-trading-bot` repo (CLAUDE.md handoff) and user memory, not here. Only the freeze policy + G5 hook appear in `thus-journal`. | `thus-trading-bot` CLAUDE.md + memory index; user. |
+| **GUGU roadmap / capabilities** | GUGU v2 is an **active build** in `thus-trading-bot` (reported Days 1–8 sprint: memory → agent+tools → Telegram → observation cycle → cost monitoring → VPS at Day 8, **NEEDS VERIFICATION**). Its architecture, phases, and live runtime live there + in user memory, not here. Only the freeze policy + G5 hook appear in `thus-journal`. | `thus-trading-bot` CLAUDE.md + memory index; user. |
+| **GUGU cost / economics** | v2 needs a **hard cost ceiling + per-cycle token/cost logging** before any autonomous run; v1 reportedly leaked ~$5/day on a Haiku monitor daemon. A first-class safety rule (rank of "no silent unfreeze"). **NEEDS VERIFICATION.** | `thus-trading-bot` + user memory. |
+| **Existing knowledge corpus** | The knowledge layer does **not** start from zero. Reported external corpus: mentor-PDF → NotebookLM → `bot_knowledge` pipeline; ~70 items across 17 categories; candlestick / Wyckoff curriculum artifacts; codified rules (range boundaries, no-falling-knife, S50 gap rule). **NEEDS VERIFICATION.** | `thus-trading-bot` + user memory. |
 | **Mentor system** | No forward design in-repo; the old AI-mentor-note route was deprecated. | User memory; future design session. |
 | **Notes / Knowledge engine** | Taxonomy exists; the *retrieval/activation* design is deferred until real content exists. | `docs/notes_taxonomy.md` + a future "Session B". |
 | **Pattern / Lesson engine** | Not implemented or designed in-repo; only conceptual (GUGU v2 "connect dots"/"self-correct"). | User; GUGU v2 vision. |

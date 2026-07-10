@@ -21,6 +21,35 @@ chapter 02. That framing loses the entire point.
 
 ---
 
+## Two-repo topology & scope of authority
+
+THUS spans **two repositories** plus a runtime host. Always know which one you are in:
+
+- **`thus-journal`** (this repo) — the Journal / memory-data layer, the production SPA
+  (`index.html`), the Supabase-facing artifacts (migrations, RLS, storage), and the home
+  of this Project Bible.
+- **`thus-trading-bot`** (sibling repo) — the **GUGU runtime**: the capture bot, the
+  **active GUGU v2 build**, the bot's own memory/context, and that repo's own CLAUDE.md /
+  handoff / current-state docs.
+- **VPS** (`168.144.35.127`, NEEDS VERIFICATION) — the intended runtime environment for
+  GUGU.
+
+**This Bible is currently authoritative for:**
+- THUS direction and North Star.
+- `thus-journal` facts (Journal, persistence, grouping, MT5 staging, product registry).
+- Cross-system gates *as documented here*.
+
+**It is NOT yet fully authoritative for the current GUGU build state.** GUGU v2 is an
+active build in `thus-trading-bot`; until a cross-repo capture pass reconciles that repo's
+live state into this Bible (see [`TODO_ROADMAP_CAPTURE.md`](./TODO_ROADMAP_CAPTURE.md)),
+GUGU details here are directional, not a live status report.
+
+**Rule for agents working in `thus-trading-bot`:** read *that* repo's own CLAUDE.md /
+handoff / current-state first, then reconcile back to this Bible. Do not assume this Bible
+reflects the bot repo's latest sprint.
+
+---
+
 ## Read order
 
 New agents and contributors should read in this order:
@@ -37,6 +66,9 @@ New agents and contributors should read in this order:
    from, with confidence levels and explicit gaps.
 6. [`TODO_ROADMAP_CAPTURE.md`](./TODO_ROADMAP_CAPTURE.md) — the remaining chapters to
    write and what still needs to be captured or verified.
+7. [`GLOSSARY.md`](./GLOSSARY.md) — quick definitions for the acronyms and status tags
+   used throughout (G0–G6, MT5 0A–0D, Lanes, `raw`/`group_id`, GUGU v1/v2, etc.). Keep it
+   open as a reference while reading the rest.
 
 ---
 
@@ -48,7 +80,8 @@ work never silently disappears just because it is not implemented:
 | Tag | Meaning |
 |---|---|
 | **DONE** | Completed and closed out; may be local-only (not deployed). |
-| **LIVE** | Shipped to production and verified. |
+| **LIVE** | Shipped to production (app bundle) and verified. |
+| **APPLIED** | A DB / RPC / schema / migration change has been executed against live Supabase / project state. Distinct from **LIVE** (an app bundle shipped) and **DONE** (a local artifact). Usually paired with **VERIFIED** once its validation has passed — e.g. *APPLIED + VERIFIED*. |
 | **DESIGNED** | Design written and (usually) reviewed; no code/apply yet. |
 | **REVIEWED** | Passed an adversarial/static review pass. |
 | **DEFERRED** | Deliberately postponed with a documented trigger to revisit. |
@@ -58,6 +91,12 @@ work never silently disappears just because it is not implemented:
 | **NEEDS VERIFICATION** | Asserted somewhere but not confirmed against live state or current docs. |
 
 When in doubt, prefer **NEEDS VERIFICATION** over asserting a fact.
+
+**Qualifier patterns are blessed and meaningful** — read the parenthetical/suffix as part
+of the tag: **DONE (local)** = closed out but unpushed; **DONE (reviewed)** = passed
+review, not yet applied/shipped; **LIVE (default-off)** = shipped but behind an unset
+flag; **APPLIED + VERIFIED** = executed against live state and validated. When a bare tag
+would overstate reality, add the qualifier.
 
 ---
 

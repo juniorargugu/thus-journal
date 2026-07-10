@@ -36,9 +36,9 @@ without breaking trust or data.
   add a new abstraction layer to solve a local bug. Extend existing paths
   (`db.saveTrade`, `commitUpdateTrade`, the ProductRegistry facade) rather than
   inventing parallel ones.
-- **Gated ≠ abandoned.** Many powerful capabilities (MT5 writer, G2 write gate, GUGU
-  cognition) are intentionally frozen behind human approval. They are not TODOs you may
-  quietly complete. They are decisions the human owns.
+- **Gated ≠ abandoned.** Many powerful capabilities (the MT5 staging→trades materializer,
+  the G2 write gate, GUGU production cognition) are intentionally frozen behind human
+  approval. They are not TODOs you may quietly complete. They are decisions the human owns.
 
 ---
 
@@ -82,8 +82,9 @@ These require **explicit human review + approval every time.** They are drawn fr
 | **Supabase / RPC writes** | No `insert`/`update`/`delete`/`upsert`, no write-RPC, no transactions. Read-only SELECT is fine. |
 | **G2 write gate** | `tj_trade_group_write_v01` (and any `tj_*` write/feature flag) must never be auto-enabled. |
 | **Keeping a real group** | Persisting a real trade group (vs a rollback-only smoke) is user-approved. |
-| **MT5 staging writer** | The real MT5 staging→journal writer and any MT5 write path is gated. The dry-run harness is offline-only. |
-| **GUGU cognition / runtime** | Cognition and autonomous behavior are **frozen**; capture-only. No cadence/cognition/autonomy change. |
+| **MT5 → staging writer** | Exists. The local Python writer has performed *armed staging writes* under an explicit three-key gate; any further staging write is still gated. The dry-run harness is offline-only. |
+| **MT5 staging → trades materializer** | **Not started; hard-gated.** Materializing staged rows into Journal `trades` is a separate, unbuilt path. Armed staging smokes are **not** precedent for automatic materialization. |
+| **GUGU cognition / runtime** | Autonomous cognition running against live/production data — on *either* repo — is **frozen**; capture-only production behavior is allowed. See §5.2 for exactly what the freeze does and does not forbid. |
 | **Durable save/close/delete/merge/import paths** | The trade persistence surfaces are protected; changes need review. |
 | **Deploy / push** | See §5.1 below. |
 | **Architecture / product tradeoffs** | Anything that collapses a design debate or picks between approaches. |
@@ -101,6 +102,22 @@ deploys are allowed after a clean preflight (build + smoke + no stop-list surfac
 preference governs — but confirm it is current before relying on it, and never treat an
 old approval for one batch as approval for the next. When unsure: treat deploy as gated
 and ask.
+
+### 5.2 GUGU freeze scope
+
+The freeze is precise, not blanket:
+
+- **Forbidden without explicit approval:** autonomous GUGU cognition running against live
+  / production data, or producing production behavior — on **any** repo (`thus-journal`
+  *or* `thus-trading-bot`).
+- **Not forbidden:** reviewed GUGU **v2 development work** in `thus-trading-bot`. v2 is an
+  active build (see [`01_EXECUTIVE_SUMMARY.md`](./01_EXECUTIVE_SUMMARY.md)); development
+  continues under its own gates.
+- **v2 development gates:** observation-only before any action; a hard cost ceiling;
+  per-cycle token/cost logging; and **no production autonomous cognition without explicit
+  approval.**
+- **Always allowed:** capture-only production behavior (the check-in bot) continues
+  normally under the freeze.
 
 ---
 

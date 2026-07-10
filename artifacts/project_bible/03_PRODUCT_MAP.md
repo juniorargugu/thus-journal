@@ -116,21 +116,25 @@ roadmap · Gates / risks · Source docs · Missing context.** Status tags per
   Journal trades. Nothing auto-materializes; the human confirms.
 - **Current state.** **LIVE (read-only + gated).** 0A schema/RLS/RPCs applied + verified
   (2026-06-25): staging/groups/cursors tables, browser SELECT-own only, 3 SECURITY
-  DEFINER RPCs. Local Python writer performed first armed open write (GOU26 open
-  `305830528`) and first close-deal write (`deal_id 2141744`), both idempotent. Read-only
-  **MT5 Inbox** UI shipped behind default-off `tj_mt5_inbox` (`7088473`), with clarity
-  sectioning + safety labels. Offline **dry-run harness** merged (no network/Supabase/MT5).
+  DEFINER RPCs. The local **MT5→staging writer** (Python) performed first armed open write
+  (GOU26 open `305830528`) and first close-deal write (`deal_id 2141744`), both idempotent
+  — these are *staging* writes only, never materialization into `trades`. Read-only **MT5
+  Inbox** UI shipped behind default-off `tj_mt5_inbox` (`7088473`), with clarity sectioning
+  + safety labels. Offline **dry-run harness** merged (no network/Supabase/MT5).
 - **Relationship to GUGU.** Supplies ground-truth fills/prices/contract sizes — the raw
   material for honest performance analysis — while keeping human confirmation so nothing
   auto-enters the Journal.
 - **Known roadmap.** 0C-3c (balance + cursor), 0C-3d (lifecycle reconcile), 0D-1 Inbox
   write actions, Phase 1 materialization into `trades`. Optional review-summary contract-
   size row.
-- **Gates / risks.** The real staging writer and any materialization are **GATED** behind
-  reviewed schema/RLS + explicit DB-write approval + role decision + write tests +
-  rollback plan. Cross-account gate hard-STOPs unless terminal login == `301102520`.
-  `needs_mapping` for unmapped instruments; idempotency via `position_id` (PATCH) /
-  `deal_id` (insert-once immutable) / `raw_sha`.
+- **Gates / risks.** Two distinct gated paths: **(1) MT5→staging writer** — exists, has
+  run armed under a three-key gate; further staging writes still gated. **(2) staging→trades
+  materializer** — **not started; hard-gated**; armed staging smokes are **not** precedent
+  for automatic materialization. Both **GATED** behind reviewed schema/RLS + explicit
+  DB-write approval + role decision + write tests + rollback plan. Cross-account gate
+  hard-STOPs unless terminal login == `301102520`. `needs_mapping` for unmapped
+  instruments; idempotency via `position_id` (PATCH) / `deal_id` (insert-once immutable) /
+  `raw_sha`.
 - **Source docs.** `artifacts/mt5_auto_draft_import/*`; `artifacts/mt5_import/*`;
   `ops/mt5_import/*` (README + Python tooling).
 - **Missing context.** Full MT5 roadmap through materialization **NEEDS VERIFICATION**;
@@ -142,7 +146,9 @@ roadmap · Gates / risks · Source docs · Missing context.** Status tags per
   (`/status`, `/checkin`, `/checkin_trade`, `/review_today`, scheduled + during-trade
   prompts) recorded to `checkin_events` / `checkin_tags` / `checkin_user_prefs`.
 - **Current state.** **LIVE (capture-only).** The Journal does not read or write any
-  check-in table. Cognition/autonomous behavior is **FROZEN**.
+  check-in table. Autonomous cognition is **FROZEN for production** — but this bot is the
+  shipped front of an **active GUGU v2 build** in `thus-trading-bot` (see §11), not a dead
+  end.
 - **Relationship to GUGU.** This *is* GUGU's data-capture arm today; check-ins are the
   behavioral time-series GUGU cognition would later consume (e.g. via the grouping G5
   hook).
@@ -206,13 +212,18 @@ roadmap · Gates / risks · Source docs · Missing context.** Status tags per
   "self-correction" goals) but there is no pattern/lesson engine in-repo.
 - **Relationship to GUGU.** This is much of GUGU's *value* — turning memory into learned
   patterns and self-correction over years.
-- **Known roadmap.** Not designed in-repo; conceptually part of the GUGU v2 compound-
-  learning phases.
+- **Known roadmap.** A **Market Pattern Library** is on the backlog (from user memory /
+  Fable review — **NEEDS VERIFICATION**): structured entries of **trigger + lesson +
+  action**, surfaced as an **auto-warn before/during a trade**. Worked example: a corrected
+  **S50 gap-down rule** (Mar 2026 `S50H26` 1029→942 case). Conceptually part of the GUGU v2
+  compound-learning phases; not designed in-repo. Do not over-specify beyond this seed
+  until captured.
 - **Gates / risks.** Cognition-adjacent → gated. High echo-chamber risk (adversarial
   second-pass is the intended defense).
-- **Source docs.** `docs/notes_taxonomy.md` (idea/lesson types); GUGU v2 vision (separate
-  repo).
-- **Missing context.** **Entirely NEEDS VERIFICATION / capture from user memory.**
+- **Source docs.** `docs/notes_taxonomy.md` (idea/lesson types); GUGU v2 build + user
+  memory (`thus-trading-bot`).
+- **Missing context.** **Largely NEEDS VERIFICATION / capture from user memory** (the
+  Market Pattern Library structure + rule corpus).
 
 ## 10. Review / Analytics
 
@@ -233,9 +244,14 @@ roadmap · Gates / risks · Source docs · Missing context.** Status tags per
 
 - **Purpose.** The AI/automation surface: GUGU cognition/runtime, the multi-model review
   chain, and any autonomous cadence.
-- **Current state.** GUGU cognition/runtime **FROZEN/GATED**; capture-only. The
-  autopilot layer for *engineering* work (safe forward motion under strict gates) is
-  documented and active.
+- **Current state.** GUGU autonomous cognition/runtime **FROZEN/GATED for production**;
+  capture-only in prod. **But GUGU v2 is an active build** in `thus-trading-bot` — reported
+  sprint (Fable review, **NEEDS VERIFICATION**): Days 1–4 complete (memory, cold start,
+  agent+tools, Telegram bot, locally verified); Days 5–8 in progress (observation cycle,
+  adversarial testing, cost monitoring with hard cost ceiling); VPS deploy planned Day 8.
+  The engineering autopilot layer (safe forward motion under strict gates) is documented
+  and active. v2 development runs under its own gates (observation-only, hard cost ceiling,
+  per-cycle token/cost logging, no production autonomous cognition without approval).
 - **Relationship to GUGU.** This is the layer that becomes GUGU. It is deliberately
   gated so capability ships dark and is enabled only by explicit human decision.
 - **Known roadmap.** GUGU v2 phased plan (memory stream → agent+tools → proactive →

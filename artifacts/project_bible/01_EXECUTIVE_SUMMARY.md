@@ -17,7 +17,9 @@ trader (Junior). It has two visible layers today and one destination:
   executions into the system as a trustworthy source of fills, prices, and contract
   sizes.
 - **GUGU** (the destination) — an AI-native trading copilot that will reason over all of
-  the above. GUGU's cognition/runtime is currently **frozen**; only a capture bot runs.
+  the above. Its autonomous cognition/runtime is **gated/frozen** for production and a
+  capture-only check-in bot runs today — but **GUGU v2 is an active build** in the sibling
+  `thus-trading-bot` repo (see "GUGU v2 — active build" below), not dormant vision-ware.
 
 ## The problem it solves
 
@@ -46,6 +48,23 @@ than prescribes** — the human stays in control of every trade. The Journal, MT
 portfolio, notes/knowledge, and a future mentor layer are all inputs GUGU will consume.
 See chapter 02.
 
+## GUGU v2 — active build (sibling repo)
+
+GUGU is **not** dormant vision-ware. Its production **cognition/runtime remains
+gated/frozen** for autonomous behavior, but **v2 development is active** in the sibling
+`thus-trading-bot` repo. Reported sprint state (from the Fable review — **NEEDS
+VERIFICATION** against `thus-trading-bot` + user memory):
+
+- **Days 1–4 — complete:** memory layer, cold start, agent + tools, Telegram bot
+  (locally verified).
+- **Days 5–8 — in progress:** observation cycle, adversarial testing, cost monitoring
+  with a hard cost ceiling.
+- **VPS deployment — planned at Day 8.**
+
+The freeze governs *autonomous production cognition*, not reviewed v2 development (see
+[`00_AI_BOOTSTRAP.md`](./00_AI_BOOTSTRAP.md) §5.2). Do not describe v2 as stale or
+"inherited from an old vision" — it is the current build.
+
 ## What is currently live
 
 - **Journal persistence, hardened.** Every trade mutation (open/add, close, edit,
@@ -54,8 +73,8 @@ See chapter 02.
   retired. **LIVE.**
 - **Image externalization.** Trade screenshots moved from inline base64 to a private
   Supabase Storage bucket (`trade-images`); 18 legacy rows / 37 images backfilled
-  (~112× row-size reduction). **LIVE** (backfill ran browser-side; see chapter for
-  deploy-scope caveat).
+  (~112× row-size reduction). **LIVE** (the backfill ran browser-side and its commit is
+  local-only; full deploy-scope detail lands in chapter 07 when written).
 - **Product/Symbol registry foundation.** `ProductRegistry` facade + first non-futures
   product (DELTA stock). **LIVE** (`2c2c8d2`).
 - **Trade grouping (G1/G2), default-off.** Non-destructive replacement for the old
@@ -66,8 +85,10 @@ See chapter 02.
   **write gate is not enabled** and **no real group is kept** (DB holds 0 active groups).
   **LIVE (default-off).**
 - **MT5 read-only Inbox.** A Settings-embedded, read-only view of staged MT5 rows behind
-  default-off flag `tj_mt5_inbox` (`7088473`). Staging schema + local writer exist. The
-  offline dry-run harness is merged. **LIVE (read-only, default-off).**
+  default-off flag `tj_mt5_inbox` (`7088473`). Staging schema + the local **MT5→staging
+  writer** exist (armed staging writes done under gate). The offline dry-run harness is
+  merged. **LIVE (read-only, default-off).** *(The staging→trades materializer is a
+  separate, unbuilt, hard-gated path — see below.)*
 - **Capture Bot.** GUGU's capture-only check-in bot runs (check-ins via `checkin_events`).
 
 Production bundle at authoring: **`f01eb33` / v3.23.0**, deploy verification complete
@@ -76,8 +97,12 @@ Production bundle at authoring: **`f01eb33` / v3.23.0**, deploy verification com
 ## What is intentionally gated
 
 - **G2 write gate** (`tj_trade_group_write_v01`) and keeping a real, persistent group.
-- **MT5 real staging writer** materializing into Journal `trades`.
-- **GUGU cognition/runtime** — frozen; no autonomous market cognition, capture-only.
+- **MT5 staging → trades materializer** — **not started; hard-gated.** Materializing
+  staged MT5 rows into Journal `trades` is a separate, unbuilt path. (The MT5→staging
+  writer exists and has done armed staging writes under gate; that is not the same thing,
+  and those smokes are not precedent for automatic materialization.)
+- **GUGU cognition/runtime** — frozen for production autonomous behavior (capture-only
+  live); reviewed v2 development in `thus-trading-bot` proceeds under its own gates.
 - **v0.5 ungroup UI** — design approved, deferred until after the current deploy.
 - **RLS/security hardening** — requires a fresh read-only audit first.
 - **Any new deploy, flag enable, or migration apply** — human-approved, every time.
@@ -108,11 +133,17 @@ See [`00_AI_BOOTSTRAP.md`](./00_AI_BOOTSTRAP.md) §5 for the full gate list.
 - **G2 write-gate / real-group path** — now unblocked of its migration prereq; remaining
   is explicit flag-enable approval + a reviewed enable/rollback plan + keeping one real
   group to exercise the v0.4 loader end-to-end. **GATED.**
-- **MT5 real staging writer planning** — design/planning is safe; any DB write is
-  user-gated. **GATED.**
+- **MT5 staging → trades materializer planning** — design/planning is safe; any DB write
+  (further staging writes *or* materialization into `trades`) is user-gated. The
+  MT5→staging writer already exists; the materializer does not. **GATED.**
 - **G2 v0.5 ungroup UI** — approved-deferred; implement after the current deploy, with
   its own adversarial review. **DEFERRED.**
 - **Notes/Knowledge activation** — deferred until Junior has ~20–30 real notes (typed or
-  reviewed-bulk-imported); this is the seed of the mentor/knowledge layer for GUGU.
-  **DEFERRED.**
+  reviewed-bulk-imported); this is the seed of the mentor/knowledge layer for GUGU. Note
+  the knowledge layer is **not** zero-start (a reported external corpus exists — see
+  [`SOURCE_INVENTORY.md`](./SOURCE_INVENTORY.md) §7). **DEFERRED.**
+- **Cross-repo GUGU v2 reconciliation / roadmap capture** — pull `thus-trading-bot`'s live
+  build state + user memory into this Bible. Needed **before** the chapter 04 master
+  roadmap can be authoritative. This is a *documentation-capture* task, **not** a runtime
+  unfreeze. **NEEDS VERIFICATION / GATED (as capture).**
 - **Building out the Bible itself** — see [`TODO_ROADMAP_CAPTURE.md`](./TODO_ROADMAP_CAPTURE.md).
