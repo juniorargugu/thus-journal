@@ -71,9 +71,17 @@ New agents and contributors should read in this order:
 7. [`GLOSSARY.md`](./GLOSSARY.md) — quick definitions for the acronyms and status tags
    used throughout (G0–G6, MT5 0A–0D, Lanes, `raw`/`group_id`, GUGU v1/v2, etc.). Keep it
    open as a reference while reading the rest.
-8. [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) *(appendix)* — the read-only
+8. [`04_COMPLETE_ROADMAP.md`](./04_COMPLETE_ROADMAP.md) — the single consolidated roadmap
+   across all subsystems with status tags preserved. The master list so no track is lost
+   while engineering focus shifts; weaves Journal, Grouping, MT5, GUGU, Portfolio, Mentor,
+   Pattern Library, Operations, and future phases into one view.
+9. [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) *(appendix)* — the read-only
    cross-repo capture of GUGU v2's primary-sourced state from `thus-trading-bot`. Read it
-   alongside chapters 10/11 when they are written.
+   alongside chapter 10 when it is written.
+10. [`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md)
+    *(appendix)* — user-memory capture of Portfolio, Mentor, Pattern Library, and S50
+    market rules, all with epistemic status tags preserved. Read it alongside chapters 04,
+    11, 16, 17.
 
 ---
 

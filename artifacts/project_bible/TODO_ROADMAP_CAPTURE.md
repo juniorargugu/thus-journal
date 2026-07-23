@@ -29,15 +29,16 @@ GATED · RESEARCH · VISION · NEEDS VERIFICATION** (VERIFIED is a pairing, e.g.
 
 ## Remaining chapters to write
 
-### `04_COMPLETE_ROADMAP.md` — **capture complete; ready to draft (tags must be preserved)**
+### `04_COMPLETE_ROADMAP.md` — **DRAFTED (2026-07-23)**
 The single consolidated, tagged roadmap across all subsystems — the master list so no
-track is lost. **(Not written in this task.)**
-
-**Status update (2026-07-10):** both capture prerequisites are now **DONE** — the cross-repo
-GUGU v2 reconciliation ([`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md)) **and**
-the Portfolio / Mentor / Pattern-Library / S50 user-memory capture
-([`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md)).
-Chapter 04 is **no longer blocked by a lack of capture** and is ready to draft.
+track is lost. **Status:** Chapter 04 is **DRAFTED** (commit `760a300`, 970 lines, all status
+tags preserved). Contains 17 sections: how-to-read, North Star, strategic tracks, Journal,
+Grouping, MT5, GUGU, Portfolio, Mentor, Notes/Knowledge/Pattern/S50, Products, Analytics,
+Operations/Cost, by-status view, non-authorizations, next-work, risks/debt. Primary sources:
+[`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) and
+[`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md)
+(both DONE, 2026-07-10). Epistemic status: all items tagged (DONE/LIVE/APPLIED/DESIGNED/DEFERRED/GATED/VISION/NEEDS_VERIFICATION).
+No user-memory items flattened into facts. Ready for review / next chapters.
 
 **Constraints when drafting (do not lose these):** every item must carry its confidence
 tag. The captured layers are **not** repo-verified: Portfolio = `VISION` / `NEEDS_REPO_SOURCE`;
