@@ -134,4 +134,5 @@ would overstate reality, add the qualifier.
   byte-identical; docs/migration commits after `f01eb33` do not touch it)
 - **G2 status:** RPC `isMerged` hardening **applied + verified** (2026-07-10); write gate
   **not enabled**; **no real group kept**
-- **Bible created / last synced:** 2026-07-10, docs-only
+- **Bible created / last synced:** 2026-07-10 (foundation) · **Chapter 04 drafted 2026-07-23**
+  (docs-only; no `index.html` / production-bundle change)

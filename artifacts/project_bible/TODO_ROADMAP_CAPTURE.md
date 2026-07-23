@@ -52,11 +52,6 @@ Must fold in: ROADMAP.md deferred items, PIPELINE_STATE Lanes A–I, the G0–G6
 phases, the MT5 0A→materializer phases, the Notes activation trigger, the GUGU v2 sprint +
 cost-ceiling lane, and every GATED/DEFERRED item from chapter 03. Cross-reference each to
 its subsystem and status tag. *Sources:* `ROADMAP.md`, `artifacts/pipeline/*`, chapter 03,
-
-Must fold in: ROADMAP.md deferred items, PIPELINE_STATE Lanes A–I, the G0–G6 grouping
-phases, the MT5 0A→materializer phases, the Notes activation trigger, the GUGU v2 sprint +
-cost-ceiling lane, and every GATED/DEFERRED item from chapter 03. Cross-reference each to
-its subsystem and status tag. *Sources:* `ROADMAP.md`, `artifacts/pipeline/*`, chapter 03,
 `thus-trading-bot`, user memory. **Primary gap:** GUGU, Mentor, Pattern/Lesson, Portfolio
 roadmaps — **NEEDS VERIFICATION**.
 

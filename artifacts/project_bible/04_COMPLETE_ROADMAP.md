@@ -23,7 +23,7 @@ primary consumer.***
 | **REVIEWED** | Passed adversarial/static review pass. | MT5 0A schema audit REVIEWED |
 | **DEFERRED** | Deliberately postponed with a documented trigger. | Notes LLM-retrieval ← wait for ≥20–30 real items |
 | **GATED** | Blocked behind explicit human approval. | MT5→trades materializer hard-gated |
-| **RESEARCH** | Under investigation; conclusions not settled. | Trade-events `20260512` apply status NEEDS VERIFICATION |
+| **RESEARCH** | Under investigation; conclusions not settled. | *(none open at present — all major unknowns are tagged NEEDS VERIFICATION)* |
 | **VISION** | Long-horizon intent; not scheduled. | Portfolio risk-model roadmap |
 | **NEEDS VERIFICATION** | Asserted somewhere but not confirmed against current state. | VPS provider/pricing; Pattern-Library in THUS Journal notes |
 
@@ -59,7 +59,7 @@ No track is abandoned just because another is the current focus.
 | **Journal Hardening** | Durable persistence, P/L invariant, data integrity, image externalization, product registry | **LIVE + residual P2** | code |
 | **Grouping (G0–G6)** | Metadata model, non-destructive scaling, P/L invariant, write gate, GUGU hook | **LIVE (default-off); G5 hook designed** | code |
 | **MT5 Import** | Execution/source layer, gated staging writer, future materializer, Inbox UI | **LIVE (read-only + gated writer); 0D-1 UI shipped; 0D-2+ deferred** | code |
-| **GUGU v2 Build** | Memory-stream agent, freeze policy, cost ceiling, Capture Bot, observation cycle | **BUILT (runtime-frozen); Days 1–5A VERIFIED; Days 6–8+ NEEDS VERIFICATION** | bot repo |
+| **GUGU v2 Build** | Memory-stream agent, freeze policy, cost ceiling, Capture Bot, observation cycle | **BUILT (runtime-frozen); Days 1–5A CONFIRMED in-repo; Days 6–8+ NEEDS VERIFICATION** | bot repo |
 | **Knowledge / Mentor / Pattern** | Curated rules, hypothesis layer, structured patterns, S50 rules | **Schema/taxonomy LIVE; retrieval/activation deferred; Mentor/Pattern user-memory captured** | design |
 | **Portfolio & Analytics** | State/risk layer, exposure, HWM, performance attribution | **Partially LIVE; roadmap captured from user memory; cards hidden pending redesign** | backlog |
 
@@ -77,18 +77,20 @@ The **memory/data layer**: the canonical, durable, trustworthy record of every t
 **single-row durable** via `db.saveTrade` / `commitUpdateTrade` **LIVE (2026-06-23,
 deployed `2c2c8d2..ba532be`)**.
 
-- **P0: Durable close path** — **LIVE** (`2026-05-01`, close-save-durability-design-timeout-addendum):
-  single-row bounded RETURNING, post-hydration autosave suppression. Durable close-persist
-  bug fixed on trade `1781008993915`.
+- **P0: Durable close path** — **LIVE** (`2026-06-18`, `69531ef`; design addendum
+  `close_save_durability_design_timeout_addendum` 2026-06-15): single-row bounded RETURNING,
+  post-hydration autosave suppression. Durable close-persist bug (confirmed 2026-06-09 on
+  trade `1781008993915`) fixed.
 - **P1: Durable update path** — **LIVE** (`2026-06-18`, `30d5a1d`): edit/price/note+meta
   save-first durable via `commitUpdateTrade`.
-- **P2: Full stack** — **LIVE** (`2026-06-23`, `ba532be..2c2c8d2`): every mutation single-row,
+- **P2: Full stack** — **LIVE** (`2026-06-23`, `2c2c8d2..ba532be`): every mutation single-row,
   autosave ids-only reconcile, full-array writer retired, images externalized.
 - **Closed-trade correction** — **LIVE** (`2026-06-25`, `09842d7`): manually correct
   exitPrice/exitDateTime on eligible standalone closed trades via durable update path.
-- **Image externalization** — **LIVE** (`2026-06-19` storage policy, `2026-06-23` backfill):
-  base64 images → Storage bucket signed-URLs (16.6 MB → 0.15 MB, 112×); backfill
-  18 rows / 37 images, 0 orphans remaining.
+- **Image externalization** — **LIVE** (storage policy applied `2026-06-22`; externalize-on-save
+  shipped with P2 `2026-06-23`; one-time backfill `2026-06-23`, local-only/not pushed): base64
+  images → Storage bucket signed-URLs (16.6 MB → 0.15 MB, 112×); backfill 18 rows / 37 images,
+  0 orphans past retention.
 
 ### Gates / Risks
 - **P/L invariant applies.** All aggregates ignore `group_id` and walk raw `trades[]` —
@@ -128,9 +130,9 @@ row-collapsing "Merge."
 | Phase | Status | Evidence | Date |
 |---|---|---|---|
 | **G0** — Design lock | **DONE** | Reentry audit locked Option B (metadata model); no Merge revival; raw integrity preserved | 2026-06-03 |
-| **G1** — Schema + RLS | **LIVE** | Applied in SQL Editor at `79140c6`; `trade_groups` table, `trades.group_id` FK; V1–V9 PASS; app smoke PASS; 0 rows mutated | 2026-06-08 |
-| **G2** — RPCs + ownership | **LIVE** | Applied `2026-07-05` (`migrations/20260705_...`); `idempotency_key`, ownership trigger, create/ungroup RPCs; IPC isolation + delete-cascade gate | 2026-07-05 |
-| **G2-rpc-isMerged** — Defense-in-depth | **LIVE (applied + verified in prod)** | `20260708` function-body replace adds `merged_child_not_allowed` reject; precheck=0, BEGIN/ROLLBACK validation **PASSED** 2026-07-10; recorded `b94f7fd` | 2026-07-10 |
+| **G1** — Schema + RLS | **APPLIED + VERIFIED** | Applied in SQL Editor at `79140c6`; `trade_groups` table, `trades.group_id` FK; V1–V9 PASS; app smoke PASS; 0 rows mutated | 2026-06-08 |
+| **G2** — RPCs + ownership | **APPLIED + VERIFIED** | Applied `2026-07-05` (`migrations/20260705_...`); `idempotency_key` + unique-active index, ownership-guard trigger, create/ungroup SECURITY DEFINER RPCs writing only `group_id`+`updated_at` (group metadata, never raw trade data) | 2026-07-05 |
+| **G2-rpc-isMerged** — Defense-in-depth | **APPLIED + VERIFIED** | `20260708` function-body replace adds `merged_child_not_allowed` reject; precheck=0, BEGIN/ROLLBACK validation **PASSED** 2026-07-10; recorded `b94f7fd` | 2026-07-10 |
 | **G3** — UI delete-merge + create | **LIVE (create-only, v0.3)** + **LIVE (v0.4 group-aware load/render, default-off)** | v0.3 rollback smoke PASS; v0.4 deployed v3.23.0 (`f01eb33`); ⛓ badge, `tradeGroupIds` map | 2026-07-06/07/08 |
 | **G3.5** — Closed-trade grouping | *Not scheduled yet* | — | — |
 | **G4** — Group notes | *Not scheduled yet* | — | — |
@@ -142,6 +144,12 @@ row-collapsing "Merge."
 - **Write gate:** `tj_trade_group_write_v01` hardcoded in AUTOPILOT_RULES.md as **MUST STOP**.
 - **"No real group kept":** DB clean (1 archived by design from earlier rollback smoke; 0
   active groups).
+
+### UI: v0.5 Ungroup — **DESIGNED / DEFERRED**
+A detail-modal ungroup affordance (ChatGPT PASS, approved-deferred): a typed `UNGROUP`
+confirmation calls **exactly one** `ungroup_trade_group_v1` RPC; **no raw trade mutation**, and
+**no forced refresh** unless a future review decides one is needed. Design only — no code.
+Source: `artifacts/g2_grouping/g2_v05_ungroup_design_closeout.md`. (Also listed under §14 DESIGNED.)
 
 ### Open Questions
 - Is G5 (GUGU summary hook) ready to unblock, or does it wait on Capture Bot Day 4?
@@ -166,14 +174,14 @@ Nothing auto-materializes into Journal trades; the human confirms every entry.
 
 | Phase | Status | Evidence |
 |---|---|---|
-| **0A** — Schema/RLS/RPCs | **LIVE (applied + verified 2026-06-25)** | 3 tables (`staging_mt5_positions`, `staging_mt5_deals`, `staging_mt5_cursors`), 10 indexes, 3 triggers, 3 SECURITY DEFINER RPCs; browser SELECT-own only; V1–V5 PASS; cross-account gate (terminal `301102520`); `needs_mapping` placeholder |
+| **0A** — Schema/RLS/RPCs | **APPLIED + VERIFIED (2026-06-25)** | 3 tables (`staging_mt5_positions`, `staging_mt5_deals`, `staging_mt5_cursors`), 10 indexes, 3 triggers, 3 SECURITY DEFINER RPCs; browser SELECT-own only; V1–V5 PASS; cross-account gate (terminal `301102520`); `needs_mapping` placeholder |
 | **0B** — Probe findings | **DONE** | Hedging (avg-down detection), DELTAU26 contract-size csize=1000 guard, Bangkok TZ, idempotency via `position_id`/`deal_id`/`raw_sha` |
 | **0C-1** — Dry-run harness | **DONE** | Offline fixture harness (`dry_run.py`); pure mappers + TZ; never touches Supabase/MT5/network; 6-row sample (4 mapped, 2 needs_mapping) |
-| **0C-3a** — First armed open write | **DONE** | GOU26 open `305830528` inserted; idempotent rerun→PATCH; timezone + contract_size verified; three-key gate PASS | 2026-06-29 |
-| **0C-3b** — First armed close-deal write | **DONE** | GOU26 close `deal_id=2141744`; insert-once immutable (rerun=DUPLICATE-EXISTING no-op); cross-account gate STOPPED wrong-terminal attempts; PASS | 2026-06-30 |
-| **0D-0** — Read-only Inbox UI | **LIVE (default-off `tj_mt5_inbox`)** | Settings MT5 Inbox shipped v3.23.0 (`8864e73`); SELECT-only, no write buttons; positions ↔ deals read-back verify | 2026-06-30 |
-| **0D-1** — Inbox clarity | **LIVE** | Sections (open/closed/other), summary strip, per-row safety labels, read-only position↔deal hint | 2026-06-30 |
-| **0D-2+** — Write actions (future) | **DEFERRED** | Enable-button / rebalance / staged-commit UI; blocked until Phase 1 materializer designed | — |
+| **0C-3a** — First armed open write | **DONE** | GOU26 open `305830528` inserted 2026-06-26 (MT5 exec 2026-06-25); idempotent rerun→PATCH; tz + contract_size=300 verified; three-key gate PASS |
+| **0C-3b** — First armed close-deal write | **DONE** | GOU26 close `deal_id=2141744` inserted 2026-06-30; insert-once immutable (rerun=DUPLICATE-EXISTING no-op); cross-account gate STOPPED wrong-terminal attempts; PASS |
+| **0D-0** — Read-only Inbox UI | **LIVE (default-off `tj_mt5_inbox`)** | Settings MT5 Inbox shipped v3.23.0 (`8864e73`) 2026-06-30; SELECT-only, no write buttons; positions ↔ deals read-back verify |
+| **0D-1** — Inbox clarity | **LIVE** | Sections (open/closed/other), summary strip, per-row safety labels, read-only position↔deal hint; shipped 2026-06-30 (`7088473`) |
+| **0D-2+** — Write actions (future) | **DEFERRED** | Enable-button / rebalance / staged-commit UI; blocked until Phase 1 materializer designed |
 
 ### Gates & Risks
 **Hard gates on both paths:**
@@ -235,7 +243,7 @@ explicit approval; capture-only production behavior (check-ins, notes) stays all
 ### Cost Ceiling — **CONFIRMED (LIVE-in-repo, fail-closed)**
 
 Hard caps (not suggestive):
-- **Daily:** 1.5M tokens ≈ $5/day at Sonnet 4.6 blended rate (`:114-111 cost_ceiling.py`)
+- **Daily:** 1.5M tokens ≈ $5/day at Sonnet 4.6 blended rate (`cost_ceiling.py:110-114`)
 - **Per-cycle:** 60k tokens (`:115`)
 - **Per-cycle:** 25 calls (`:116`)
 
@@ -252,7 +260,7 @@ Persisted to `logs/gugu_usage_ledger.json` (ledger exists, not visible). **PARTI
 
 | Claim | Verdict | Evidence |
 |---|---|---|
-| Days 1–5A complete (memory, cold start, agent/tools, tg_bot, observation cycle, cost ceiling) | **CONFIRMED** | `gugu/memory.py`, `gugu/cold_start.py`, `gugu/agent.py`, `gugu/agent_tools.py`, `gugu/tg_bot.py`, `gugu/cycle_agent.py`, `gugu/cost_ceiling.py` all in-repo at `b03758a` |
+| Days 1–5A complete (memory, cold start, agent/tools, tg_bot, observation cycle, cost ceiling) | **CONFIRMED (in-repo)** | Code all in-repo at `b03758a` (`gugu/memory.py`, `cold_start.py`, `agent.py`, `agent_tools.py`, `tg_bot.py`, `cycle_agent.py`, `cost_ceiling.py`); the "locally verified" run logs remain **NEEDS VERIFICATION** |
 | "Days 6–8" as distinct completed days | **NEEDS VERIFICATION** | Repo shows **Day 5A.x only**; no Day 6/7/8 markers; no captured run logs |
 | "Adversarial testing" | **PARTIAL / reconcile** | No adversarial-**agent** in runtime path. What exists: eval suite's `forbidden_invariants` + sanitizer re-check in `shadow_cycle.py`. Adversarial-*style* invariants, not a second-pass agent. |
 | Deployment at Day 8 | **PARTIAL** | `gugu/DEPLOY.md` documents real VPS deploy; "Day 8" as trigger not stated in-repo → NEEDS VERIFICATION. |
@@ -281,8 +289,13 @@ Cognition handlers register **only when unfrozen.**
 | DigitalOcean | **NEEDS VERIFICATION** | Zero in-repo hits |
 | Ubuntu 24.04 | **NEEDS VERIFICATION** | Zero hits |
 | $6/mo offline → $12/mo pricing | **NEEDS VERIFICATION** | Zero hits |
-| Restore **crontab** on deploy | **REFUTED for v2** | Only crontab is v1 watchdog; v2 uses systemd, no crontab step |
+| Restore **crontab** on deploy | **NEEDS VERIFICATION** | Only in-repo crontab is a v1 `watchdog.sh`; v2 uses systemd (no crontab step). Whether a crontab is *restored on deploy* is unconfirmed |
 | Restore **Flask** on deploy | **REFUTED for v2** | Flask is v1-only; v2 uses python-telegram-bot polling, not webhook |
+
+> **On "REFUTED"** (not part of the README status vocabulary): it marks a claim carried in an
+> earlier draft that was **contradicted by a primary `thus-trading-bot` source** during the
+> 2026-07-10 reconciliation — e.g. "restore Flask on deploy," a v1-only artifact (v2 uses
+> polling). It is a provenance verdict from reconciliation, not a roadmap status.
 
 ### Open Questions / Next Phases
 
@@ -363,6 +376,11 @@ is positive but open risk is asymmetric"*; *"this resembles prior drawdown behav
 
 **Source:** [`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md) §3.
 **Status:** `DESIGNED` / `VISION` (design seed exists; not implemented in-repo).
+
+> **Not a first attempt.** An earlier in-repo **AI mentor note route** existed and was
+> **deprecated/hidden in the 2026-05-12 pivot** ([`SOURCE_INVENTORY.md`](./SOURCE_INVENTORY.md) §7).
+> Mentor was *partially attempted, then shelved* — the structured hypothesis layer below is the
+> redesign, not a first pass. Provenance is thin; specifics `NEEDS VERIFICATION`.
 
 ### Role
 Mentor is the **hypothesis/reasoning layer** — capture market views, theses, invalidation
@@ -481,7 +499,9 @@ framework knowledge, not stale or noisy data.
 ## 8. Market Pattern Library — Structured Learning (User-Memory Designed)
 
 **Source:** [`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md) §4–5.
-**Status:** `DESIGNED` / `VISION` (design seed + S50 concrete examples; **not found in either repo**).
+**Status:** `DESIGNED` / `VISION` (design seed + S50 concrete examples). **No formal Pattern
+Library is established in either repo** — the closest is an archived GUGU spike seed for the
+S50 gap-down idea (see "Known Roadmap" below).
 
 ### Purpose
 Turn repeated market observations into structured, reviewable patterns — not free text.
@@ -533,8 +553,14 @@ during-trade mentor reminders keyed to emotion tags (`fear_giveback`, `want_exit
 `want_add_position`, `force_narrative`, `plan_drift`, `size_too_big`). Explicitly "not a
 signal/action"; a reminder to review.
 
-**"Market Pattern Library" (trigger+lesson+action auto-warn)** is **NOT in `thus-trading-bot`**
-at `b03758a` — likely in THUS Journal notes or user memory.
+**A formal "Market Pattern Library"** (trigger+lesson+action auto-warn) is **not established in
+either repo.** The closest in `thus-trading-bot` is an **archived spike seed** — the text
+"S50 gap down without intraday recovery = exit immediately" in
+`archive/spike-20260427/test_retrieval.py` (not a live library entry, not labeled "corrected") —
+plus `behavior_scanner.py` gap **tags** with no attached lesson/action. The corrected S50 rule
+and the `S50H26` 1029→942 case remain **user-memory / `NEEDS_MARKET_DATA_SOURCE`** until grounded
+in THUS Journal notes / chart data; the cancelled "gap up 2 days → sell-off" rule remains
+**`REJECTED` / user-memory** (see §9). Source: [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) §10.
 
 ### Risks
 - Overfitting one event into a rule.
@@ -743,29 +769,36 @@ visible per-cycle cost line is wanted.
 
 ## 14. Roadmap by Status — Cross-Subsystem View
 
-### LIVE (Production, Shipped)
-- Journal (core persistence, P0/P1/P2, closed-trade correction, images, product registry)
-- Grouping (G0–G3 schema/UI, G2 RPCs + `isMerged` guard applied+verified in prod)
-- MT5 (0A schema/RLS, 0C-3a/0C-3b armed writes, 0D-0/0D-1 Inbox UI default-off)
-- Notes (taxonomy, schema, 4-type framework)
-- Review/Analytics (core dashboards, Sheets hidden)
-- Capture Bot (check-in commands, notes, tagging)
-- Operations (pipeline, autopilot, review chain)
+*Tag semantics (from README): **LIVE** = shipped to the production app bundle; **APPLIED +
+VERIFIED** = a DB/RPC/schema migration executed against live Supabase and validated; **DONE** =
+completed local/docs/tooling/closed-out work that is not itself a production-app-live bundle.
+DB migrations live under APPLIED (not LIVE); the app features that depend on them live under
+LIVE. No item is listed under two categories except where a subsystem genuinely has distinct
+parts (e.g. image externalization: code=LIVE, storage policy=APPLIED, one-time backfill=DONE).*
 
-### APPLIED (Schema/DB executed)
-- Grouping G1 (2026-06-08)
-- Grouping G2 (2026-07-05)
-- Grouping G2-rpc-isMerged defense (2026-07-10)
-- MT5 0A (2026-06-25)
-- Image externalization storage policy (2026-06-22)
+### LIVE (Production app bundle, shipped)
+- Journal core persistence — P0/P1/P2 durable mutations + closed-trade correction (v3.23.0)
+- Journal image externalization — externalize-on-save (shipped with P2)
+- Product / symbol registry foundation (`2c2c8d2`, 2026-06-19)
+- Grouping G3 loader/render + create-only UI (default-off, v3.23.0)
+- MT5 0D-0 / 0D-1 read-only Inbox UI (default-off `tj_mt5_inbox`)
+- Notes 4-type taxonomy / feature
+- Review / Analytics core dashboards (Sheets Sync hidden)
+- Capture Bot — check-in commands, notes, tagging (`thus-trading-bot`, capture-only)
+- *(the DB migrations these depend on are under APPLIED; armed staging writes under DONE)*
 
-### DONE (Completed, local/undeployed)
-- Journal P0/P1/P2 stack (deployed at v3.23.0)
-- Closed-trade correction (deployed at v3.23.0)
-- Image backfill (local commit; backfill itself is committed, not pushed)
-- Grouping G2 v0.3 UI rollback smoke
-- Grouping G2 v0.4 deploy smoke
-- MT5 0C-3a/0C-3b armed writes
+### APPLIED + VERIFIED (Schema/DB executed against live Supabase and validated)
+- Grouping G1 schema/RLS (2026-06-08)
+- Grouping G2 RPCs (2026-07-05)
+- Grouping G2-rpc-isMerged defense-in-depth (2026-07-10, recorded `b94f7fd`)
+- MT5 0A schema/RLS/RPCs (2026-06-25)
+- Image externalization storage policy + RLS (2026-06-22)
+
+### DONE (Completed local/docs/tooling/closed-out; not necessarily production-app-live)
+- Image backfill — 18 rows / 37 images, browser-side, **local-only commit (not pushed)**
+- Grouping G2 v0.3 create-only UI rollback smoke (local)
+- Grouping G2 write-gate browser smoke (2026-07-07; rolled back → 0 active / 1 archived)
+- MT5 0C-3a / 0C-3b armed staging writes (real prod-Supabase side effects; report-only, no commit)
 - P/L baseline snapshots (G2, 2026-07-02)
 
 ### DESIGNED (Design written, reviewed, not built)
@@ -864,7 +897,8 @@ the gates exist to **enforce** policy, not to suggest it is optional.
 - Decide: is G3.5 (closed-trade grouping) worth shipping before real groups are user-tested?
 
 **Operations Track:**
-- Update [`14_CURRENT_STATE.md`](./14_CURRENT_STATE.md) with the latest PIPELINE_STATE.md.
+- Write [`14_CURRENT_STATE.md`](./14_CURRENT_STATE.md) (not yet created) from the latest
+  [`PIPELINE_STATE.md`](../pipeline/PIPELINE_STATE.md).
 
 ### Medium (unblocked, design ready)
 
@@ -895,7 +929,7 @@ the gates exist to **enforce** policy, not to suggest it is optional.
 
 **Pattern Library Track:**
 - Implement pattern entry structure (trigger/lesson/action/status).
-- Wire GUGU auto-warn behavior before/during/after trades.
+- Design GUGU auto-warn behavior before/during/after trades.
 
 **GUGU Unfreeze Track:**
 - Review knowledge corpus (size, quality, GUGU retrieval accuracy).
@@ -940,7 +974,8 @@ the gates exist to **enforce** policy, not to suggest it is optional.
 - **GUGU unfreeze plan not explicit** — freeze is fail-closed (good), but the reviewed,
   phased unfreeze pathway is not documented.
 - **Docs drift** — this Bible is a point-in-time snapshot; repo will change; sync discipline
-  is needed (see [`14_CURRENT_STATE.md`](./14_CURRENT_STATE.md) + [`PIPELINE_STATE.md`](./PIPELINE_STATE.md)).
+  is needed (see [`14_CURRENT_STATE.md`](./14_CURRENT_STATE.md) *(once written)* +
+  [`PIPELINE_STATE.md`](../pipeline/PIPELINE_STATE.md)).
 - **RLS/security gaps** — pending read-only audit (Lane G, GATED).
 - **Backup-retention** — sensitive image backups (base64/account data) need retention
   decision (**DEFERRED**).
