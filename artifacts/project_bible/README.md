@@ -128,11 +128,18 @@ would overstate reality, add the qualifier.
 ## Repo state
 
 - **Repo:** `thus-journal` (`c:\Users\Junior\Desktop\thus-journal`)
-- **`origin/main`:** `b94f7fd` — "docs: record G2 isMerged RPC migration applied + verified"
-- **Local `main`:** ahead of origin by the Project Bible commits (local-only, not pushed)
+- **`origin/main` (at Chapter 04 draft time):** `84c0a05` — "docs: capture Portfolio Mentor
+  Pattern roadmap context". This is the last-pushed commit before the Chapter 04 commits.
+- **Local `main`:** ahead of `origin/main` by the Chapter 04 draft/review commits
+  (local-only, not pushed yet)
 - **Production bundle:** `f01eb33` / **v3.23.0** on thus999.com — unchanged (`index.html`
-  byte-identical; docs/migration commits after `f01eb33` do not touch it)
+  byte-identical; docs-only commits after `f01eb33` do not touch it)
 - **G2 status:** RPC `isMerged` hardening **applied + verified** (2026-07-10); write gate
   **not enabled**; **no real group kept**
 - **Bible created / last synced:** 2026-07-10 (foundation) · **Chapter 04 drafted 2026-07-23**
-  (docs-only; no `index.html` / production-bundle change)
+  (docs-only; no `index.html` / production-bundle change), not yet pushed
+
+> **Note:** These SHAs are a point-in-time snapshot at Chapter 04 draft time and will go
+> stale once Chapter 04 is pushed. For current repo/prod state after later pushes, prefer
+> `14_CURRENT_STATE.md` once created, or the latest pipeline snapshot — do not treat this
+> block's SHAs as live.
