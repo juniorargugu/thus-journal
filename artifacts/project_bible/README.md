@@ -75,13 +75,18 @@ New agents and contributors should read in this order:
    across all subsystems with status tags preserved. The master list so no track is lost
    while engineering focus shifts; weaves Journal, Grouping, MT5, GUGU, Portfolio, Mentor,
    Pattern Library, Operations, and future phases into one view.
-9. [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) *(appendix)* — the read-only
-   cross-repo capture of GUGU v2's primary-sourced state from `thus-trading-bot`. Read it
-   alongside chapter 10 when it is written.
-10. [`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md)
+9. [`10_GUGU_SUBSYSTEM.md`](./10_GUGU_SUBSYSTEM.md) — the GUGU subsystem deep dive: what
+   GUGU is (and is not), its consumption contract with every other subsystem, the v2
+   memory-stream architecture, the two-layer cognition **freeze**, the fail-closed cost
+   ceiling, and the non-authorizing preconditions before any unfreeze question is askable.
+   Read it alongside [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md).
+10. [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) *(appendix)* — the read-only
+    cross-repo capture of GUGU v2's primary-sourced state from `thus-trading-bot`. The
+    primary source behind chapter 10.
+11. [`USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md`](./USER_MEMORY_CAPTURE_PORTFOLIO_MENTOR_PATTERN.md)
     *(appendix)* — user-memory capture of Portfolio, Mentor, Pattern Library, and S50
     market rules, all with epistemic status tags preserved. Read it alongside chapters 04,
-    11, 16, 17.
+    10, 11, 16, 17.
 
 ---
 

@@ -89,15 +89,23 @@ account gate, `needs_mapping`, idempotency (`position_id`/`deal_id`/`raw_sha`), 
 read-only Inbox, the dry-run harness, and the gated path to materialization. *Sources:*
 `artifacts/mt5_auto_draft_import/*`, `artifacts/mt5_import/*`, `ops/mt5_import/*`.
 
-### `10_GUGU_SUBSYSTEM.md`
+### `10_GUGU_SUBSYSTEM.md` — **DRAFTED (2026-07-24)**
 GUGU proper: the v2 memory-stream + reasoning architecture (PydanticAI + Claude Sonnet 4.6,
 pgvector memory, 3 chat tools), personality, the observation/shadow cycle, the capture bot,
-the cognition **freeze** policy (`CAPTURE_ONLY_MODE` + `manual_run_guard`), the live cost
-ceiling, and the path to unfreeze. **Now substantially sourced** —
-[`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) is the primary capture (built
-in-repo but runtime-frozen). Residual NEEDS VERIFICATION: Days 6–8, "adversarial testing"
-wording, live corpus count. *Sources:* `GUGU_V2_RECONCILIATION.md`, `thus-trading-bot`
-`gugu/*` + `CLAUDE.md`, user.
+the cognition **freeze** policy (`CAPTURE_ONLY_MODE` + `manual_run_guard`), the
+fail-closed cost ceiling, and the (non-authorizing) preconditions for any future unfreeze.
+**Status:** Chapter 10 is **DRAFTED** — 24 sections covering what GUGU is/is-not,
+personality, the layered consumption contract (Journal, MT5, Portfolio, Grouping, Mentor,
+Notes, Pattern Library), v1 autopsy, v2 current state, freeze policy (policy-first, guard
+second), cost/economic safety, memory + self-correction, echo-chamber/adversarial pass
+(design intent), tools, observation cycle, non-authorizations, and risks. **Substantially
+sourced** — [`GUGU_V2_RECONCILIATION.md`](./GUGU_V2_RECONCILIATION.md) is the primary
+capture (built in-repo but runtime-frozen). Wording rule applied: a frozen runtime is not
+described as "live/running" (cost ceiling = implemented + fail-closed, applies whenever the
+runtime runs). Residual NEEDS VERIFICATION carried, not asserted: Days 6–8, "adversarial
+testing" wording, live corpus count, VPS provider/OS/pricing, and the cold-start-vs-"bad
+bulk import" relationship (§15, tagged NEEDS VERIFICATION — not inverted). *Sources:*
+`GUGU_V2_RECONCILIATION.md`, `thus-trading-bot` `gugu/*` + `CLAUDE.md`, user.
 
 ### `11_MENTOR_AND_KNOWLEDGE.md`
 The Notes/Knowledge layer (taxonomy, activation trigger, bulk-import gate) and the Mentor
