@@ -6716,7 +6716,7 @@ function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss,products,preview,onSet
   );
 }
 
-function Mt5InboxPanel({authUid,products}){
+function Mt5InboxPanel({authUid,products,onFlagChange}){
   const[on,setOn]=useState(()=>ls.get(MT5_INBOX_FLAG,false));
   const[loading,setLoading]=useState(false);
   const[rows,setRows]=useState([]);
@@ -6746,7 +6746,7 @@ function Mt5InboxPanel({authUid,products}){
     else{setRows([]);setErr(null);setLoadedAt(null);}
   },[on,authUid]);
 
-  const toggle=()=>{const v=!on;ls.set(MT5_INBOX_FLAG,v);setOn(v);};
+  const toggle=()=>{const v=!on;ls.set(MT5_INBOX_FLAG,v);setOn(v);onFlagChange&&onFlagChange(v);};   // notify PageSettings so FlagStatusPanel reflects the live state immediately (no default flag written on mount)
 
   // Derived (read-only): view-filtered sections; summary + openIds from ALL loaded rows (stable across views).
   const isDismissed=(r)=>dismissed.has(_mt5RowKey(r));
@@ -6796,7 +6796,9 @@ function Mt5InboxPanel({authUid,products}){
           {/* MT5 Status strip (2026-07-24): explains the read-only mirror so "sync doesn't work"
               reads as "auto-sync is off by design", not "broken". Computed from loaded rows only. */}
           {(()=>{
-            const _lastKey=rows.reduce((m,r)=>Math.max(m,_mt5TimeKey(r.mt5_time)),-Infinity);
+            // Writer/staging time (updated_at||created_at), NOT mt5_time (the MT5 event time).
+            // _mt5TimeKey already sinks null/invalid to -Infinity, so missing values are safe.
+            const _lastKey=rows.reduce((m,r)=>Math.max(m,_mt5TimeKey(r.updated_at||r.created_at)),-Infinity);
             const _lastStaged=isFinite(_lastKey)?new Date(_lastKey):null;
             return(
               <div className="text-[11px] text-muted bg-input/20 border border-border rounded-lg px-3 py-2 mb-3 leading-relaxed">
@@ -6808,7 +6810,7 @@ function Mt5InboxPanel({authUid,products}){
                   <div className="mt-1 text-muted">
                     staged rows <b className="text-txt">{rows.length}</b>
                     {needsMappingCount>0?<> · waiting mapping <b className="text-txt">{needsMappingCount}</b></>:null}
-                    {_lastStaged?<> · last staged <b className="text-txt">{fmtDate(_lastStaged)} {fmtTime(_lastStaged)}</b></>:null}
+                    {_lastStaged?<> · เขียนเข้ามาล่าสุด <b className="text-txt">{fmtDate(_lastStaged)} {fmtTime(_lastStaged)}</b></>:null}
                   </div>
                 ):null}
               </div>
@@ -6870,8 +6872,9 @@ function Mt5InboxPanel({authUid,products}){
 // (tj_trade_group_ui_v01, tj_trade_group_mock, tj_trade_group_write_v01,
 // tj_mt5_inbox_product_preview) are deliberately NOT surfaced here — write gates especially
 // must never be presented as a clickable product toggle.
-function FlagStatusPanel(){
-  const mt5On=ls.get(MT5_INBOX_FLAG,false);
+function FlagStatusPanel({mt5On}){
+  // mt5On is lifted from PageSettings (kept in sync with Mt5InboxPanel via onFlagChange) so this
+  // read-only status reflects the live toggle immediately, not a stale render-time localStorage read.
   return(
     <section className="bg-card border border-border rounded-xl p-5">
       <h2 className="font-semibold text-txt mb-1">สถานะฟีเจอร์ (Feature flags)</h2>
@@ -6899,6 +6902,9 @@ function FlagStatusPanel(){
 
 function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsChange,showToast,showConfirm,authUid}){
   const[txModal,setTxModal]=useState(null);
+  // Lifted MT5 Inbox flag (read from LS once; NOT written on mount). Mt5InboxPanel owns the toggle
+  // and reports changes up via onFlagChange so FlagStatusPanel stays live.
+  const[mt5InboxOn,setMt5InboxOn]=useState(()=>ls.get(MT5_INBOX_FLAG,false));
   // Journal AI-key feature deprecated 2026-05-12: old mentor-note AI route
   // (NoteFormModal "✨ ให้ AI ช่วย") was unreliable and encouraged plaintext
   // API-key storage in localStorage. Settings input was never wired into JSX
@@ -7346,9 +7352,9 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
         </div>
       </div>
 
-      <FlagStatusPanel/>
+      <FlagStatusPanel mt5On={mt5InboxOn}/>
 
-      <Mt5InboxPanel authUid={authUid} products={products}/>
+      <Mt5InboxPanel authUid={authUid} products={products} onFlagChange={setMt5InboxOn}/>
 
     </div>
   );
