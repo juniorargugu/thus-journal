@@ -193,7 +193,7 @@ running in production. So:
   capture executed nothing.
 - **Live corpus count** — the DB was not queried; the 78-row cold start is attested, not
   live-counted (§15).
-- **VPS provider / OS / pricing** and any **crontab** step — see §21 / chapter 15.
+- **VPS provider / OS / pricing** and any **crontab** step — see chapter 15.
 
 ---
 
@@ -269,14 +269,16 @@ chapter 15 (Operations), not here.* This section fixes only the **safety rank** 
 - **pgvector memory.** Supabase pgvector with OpenAI `text-embedding-3-small` (1536-d);
   `embed` / `append` / `recall` via a `match_memories` RPC (`gugu/memory.py`). **CONFIRMED.**
 - **Cold start.** `gugu/cold_start.py` imported from the Supabase `bot_knowledge` table;
-  **78 rows** attested (`gugu/README.md`, `personality.py`, `CLAUDE.md:290`), across the
-  **7** `bot_knowledge` categories. Live count NEEDS VERIFICATION (DB not queried). See §15
+  **78 rows** attested (`gugu/README.md`, `personality.py`, `CLAUDE.md:290`) into the
+  `bot_knowledge` store, whose schema has **7** categories (no source proves the rows span
+  all 7). Live count NEEDS VERIFICATION (DB not queried). See §15
   for the cold-start-vs-bad-bulk-import disambiguation.
 - **Raw memory vs curated knowledge vs notes vs extracted facts.** GUGU's stream is **raw,
   lossless observation** — deliberately *not* Mem0-style fact extraction. Fact extraction was
   rejected because it is lossy (loses time, magnitude, cross-asset context) and costs an LLM
   call per append; trading needs lossless, temporal, exact observations. **CONFIRMED as a
-  design decision** (chapter 12 ADR; `DECISIONS.md`). Curated Notes/Knowledge are the
+  design decision** (bot repo `CLAUDE.md` handoff; to be recorded as an ADR in chapter 12).
+  Curated Notes/Knowledge are the
   human-shaped priors (chapter 11); they are a different corpus from the raw stream.
 
 **Epistemic status labels.** Any captured knowledge should carry its status, and GUGU must
@@ -367,8 +369,9 @@ insight.
 **Forbidden outputs:** trade commands · autonomous decisions · recommendations framed as
 instructions · writes to Journal / Portfolio / MT5.
 
-The hardcoded element is *when* the cycle runs (a deterministic timer); *what* it thinks is
-emergent from memories + situation. Frozen in production (§7), the cycle does not run against
+By design, the only hardcoded element is *when* the cycle runs (a deterministic timer);
+*what* it thinks is emergent from memories + situation. Frozen in production (§7), the cycle
+does not run against
 live data without approval.
 
 ---
@@ -413,8 +416,11 @@ The capture bot is a **sense** feeding GUGU's future context; it is not GUGU rea
 
 ## 15. Note Activation and Knowledge
 
-- **Note Activation v0.1 (CONFIRMED shipped, `gugu/note_activation.py`).** Deterministic,
-  tag-gated, **no-LLM** during-trade **mentor reminders** — **6** hardcoded reminders keyed
+- **Note Activation v0.1 — CONFIRMED built in-repo (`gugu/note_activation.py`); commits were
+  local/unpushed at capture time; running-instance inclusion NEEDS VERIFICATION.**
+  (Built in repo ≠ pushed; pushed ≠ running in production; a running capture bot ≠ GUGU
+  cognition unfrozen.) Deterministic, tag-gated, **no-LLM** during-trade **mentor
+  reminders** — **6** hardcoded reminders keyed
   to emotion tags (`fear_giveback`, `want_exit_early`, `want_add_position`, `force_narrative`,
   `plan_drift`, `size_too_big`); explicitly **"not a signal/action"**
   (`note_activation.py:38`). Design: `artifacts/note_activation/note_activation_v0_1_design.md`.

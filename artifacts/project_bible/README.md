@@ -133,18 +133,20 @@ would overstate reality, add the qualifier.
 ## Repo state
 
 - **Repo:** `thus-journal` (`c:\Users\Junior\Desktop\thus-journal`)
-- **`origin/main` (at Chapter 04 draft time):** `84c0a05` — "docs: capture Portfolio Mentor
-  Pattern roadmap context". This is the last-pushed commit before the Chapter 04 commits.
-- **Local `main`:** ahead of `origin/main` by the Chapter 04 draft/review commits
-  (local-only, not pushed yet)
+- **`origin/main` (at Chapter 10 draft time):** `16763c5` — "docs: refresh Project Bible
+  source inventory state". The Chapter 04 stack is pushed; this is the last-pushed commit
+  before the Chapter 10 commit.
+- **Local `main`:** ahead of `origin/main` by exactly **1** commit (local-only, not pushed
+  yet): `b49ac1a` — "docs: add Project Bible GUGU subsystem" (Chapter 10 draft).
 - **Production bundle:** `f01eb33` / **v3.23.0** on thus999.com — unchanged (`index.html`
   byte-identical; docs-only commits after `f01eb33` do not touch it)
 - **G2 status:** RPC `isMerged` hardening **applied + verified** (2026-07-10); write gate
   **not enabled**; **no real group kept**
-- **Bible created / last synced:** 2026-07-10 (foundation) · **Chapter 04 drafted 2026-07-23**
-  (docs-only; no `index.html` / production-bundle change), not yet pushed
+- **Bible created / last synced:** 2026-07-10 (foundation) · Chapter 04 drafted 2026-07-23
+  (pushed) · **Chapter 10 drafted 2026-07-24** (docs-only; no `index.html` /
+  production-bundle change), not yet pushed
 
-> **Note:** These SHAs are a point-in-time snapshot at Chapter 04 draft time and will go
-> stale once Chapter 04 is pushed. For current repo/prod state after later pushes, prefer
+> **Note:** These SHAs are a point-in-time snapshot at Chapter 10 draft time and will go
+> stale once Chapter 10 is pushed. For current repo/prod state after later pushes, prefer
 > `14_CURRENT_STATE.md` once created, or the latest pipeline snapshot — do not treat this
 > block's SHAs as live.
