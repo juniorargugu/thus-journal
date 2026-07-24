@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Maskable: full-bleed background + content kept inside the ~80% safe zone. -->
+  <rect width="512" height="512" fill="#0B0E11"/>
+  <text x="256" y="330" font-family="monospace" font-size="260" font-weight="800" fill="#F0B90B" text-anchor="middle">T</text>
+</svg>

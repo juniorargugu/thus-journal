@@ -3,9 +3,19 @@
 <html lang="th">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,viewport-fit=cover"/>
 <title>THUS Trading Journal</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230B0E11'/%3E%3Ctext x='16' y='23' font-family='monospace' font-size='22' font-weight='800' fill='%23F0B90B' text-anchor='middle'%3ET%3C/text%3E%3C/svg%3E"/>
+<!-- PWA minimum (2026-07-24): manifest + home-screen meta. No service worker by design
+     (avoids the single-file cache-first footgun); this is home-screen/install friendliness
+     only, no offline caching, no data-logic change. -->
+<link rel="manifest" href="/manifest.json"/>
+<meta name="theme-color" content="#0B0E11"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="THUS"/>
+<link rel="apple-touch-icon" href="/icon.svg"/>
 <!-- build:20260408-1775643766 -->
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
@@ -3027,12 +3037,11 @@ function PositionCard({trade,product,isDraft,balance,mergeMode,mergeSym,isChecke
           ):(
             <>
               <button onClick={onClose} className={`${clsBtn("red","sm")} flex-1`}>✕ ปิด</button>
-              {/* Disabled: destructive merge deletes child trade rows and loses per-leg notes/images.
-                  Future replacement should be non-destructive logical grouping via group_id/trade_groups.
-                  Do not re-enable. See ROADMAP.md "Trade Grouping / Thesis Grouping". */}
-              <button type="button" disabled
-                title="Merge ปิดชั่วคราว — กำลังรอ feature ใหม่ที่ไม่ลบ note ของแต่ละไม้"
-                className={`${clsBtn("default","sm")} px-2.5 opacity-40 cursor-not-allowed`}>🔗</button>
+              {/* Dead legacy-Merge button hidden 2026-07-24 (adoption: no disabled/dead controls on
+                  daily cards, esp. mobile). The destructive-merge backend is intentionally LEFT in
+                  place but is unreachable from the UI (no live trigger). Do NOT re-enable legacy
+                  Merge; the non-destructive replacement is G2 grouping (group_id/trade_groups),
+                  which stays default-off. See ROADMAP.md "Trade Grouping / Thesis Grouping". */}
               <button onClick={onDuplicate} className={`${clsBtn("default","sm")} px-2.5`}>⎘</button>
             </>
           )}
@@ -6784,6 +6793,27 @@ function Mt5InboxPanel({authUid,products}){
       )}
       {on&&authUid&&(
         <div>
+          {/* MT5 Status strip (2026-07-24): explains the read-only mirror so "sync doesn't work"
+              reads as "auto-sync is off by design", not "broken". Computed from loaded rows only. */}
+          {(()=>{
+            const _lastKey=rows.reduce((m,r)=>Math.max(m,_mt5TimeKey(r.mt5_time)),-Infinity);
+            const _lastStaged=isFinite(_lastKey)?new Date(_lastKey):null;
+            return(
+              <div className="text-[11px] text-muted bg-input/20 border border-border rounded-lg px-3 py-2 mb-3 leading-relaxed">
+                <div className="text-txt font-semibold mb-1">จาก MT5 — อ่านอย่างเดียว <span className="text-muted font-normal">(read-only mirror)</span></div>
+                <div>• ซิงค์อัตโนมัติ: <span className="text-txt">ปิดไว้โดยตั้งใจ</span> — writer รันมือบนเครื่อง PC (auto-sync OFF by design; manual PC-run writer)</div>
+                <div>• แถวเหล่านี้ยังไม่ใช่เทรดใน Journal — ไม่มีอะไรเข้า Journal อัตโนมัติ</div>
+                <div>• จะเข้า Journal ได้ก็ต่อเมื่อมี flow ยืนยันแยก ซึ่งตอนนี้ยังไม่เปิดใช้ (materializer not enabled)</div>
+                {rows.length>0?(
+                  <div className="mt-1 text-muted">
+                    staged rows <b className="text-txt">{rows.length}</b>
+                    {needsMappingCount>0?<> · waiting mapping <b className="text-txt">{needsMappingCount}</b></>:null}
+                    {_lastStaged?<> · last staged <b className="text-txt">{fmtDate(_lastStaged)} {fmtTime(_lastStaged)}</b></>:null}
+                  </div>
+                ):null}
+              </div>
+            );
+          })()}
           <div className="flex items-center justify-between mb-3 text-xs">
             <span className="text-muted">
               {loading?"กำลังโหลด…":`${rows.length} row(s)`}
@@ -6829,6 +6859,40 @@ function Mt5InboxPanel({authUid,products}){
           )}
         </div>
       )}
+    </section>
+  );
+}
+
+// ─── Flag feedback panel (2026-07-24) ────────────────────────────────────────────────────
+// Read-only status for USER-relevant flags only, so a toggle that "does nothing visible"
+// is explained instead of feeling broken. It does NOT enable anything: the only actual
+// toggle (MT5 Inbox ON/OFF) lives in Mt5InboxPanel below. Dev/inert flags
+// (tj_trade_group_ui_v01, tj_trade_group_mock, tj_trade_group_write_v01,
+// tj_mt5_inbox_product_preview) are deliberately NOT surfaced here — write gates especially
+// must never be presented as a clickable product toggle.
+function FlagStatusPanel(){
+  const mt5On=ls.get(MT5_INBOX_FLAG,false);
+  return(
+    <section className="bg-card border border-border rounded-xl p-5">
+      <h2 className="font-semibold text-txt mb-1">สถานะฟีเจอร์ (Feature flags)</h2>
+      <div className="text-xs text-muted mb-3 leading-relaxed">
+        ฟีเจอร์ที่เปิด/ปิดได้ และสิ่งที่ควรจะเห็นเมื่อเปิด — กันสับสนแบบ "กดแล้วไม่เห็นอะไรเปลี่ยน".
+      </div>
+      <div className="rounded-lg border border-border bg-input/20 px-3 py-2.5">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-sm font-medium text-txt">MT5 Inbox <span className="text-muted text-xs font-normal">(tj_mt5_inbox)</span></span>
+          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${mt5On?"bg-yellow/10 text-yellow border border-yellow/20":"bg-input/40 text-muted border border-border"}`}>{mt5On?"ON":"OFF"}</span>
+        </div>
+        <div className="text-[11px] text-muted leading-relaxed">
+          • ทำอะไร: แสดงข้อมูล MT5 (staging) แบบ<span className="text-txt">อ่านอย่างเดียว</span> — ไม่ใช่เทรดใน Journal<br/>
+          • เมื่อเปิด (ON) ควรเห็น: แถว staging (open/closed) จาก MT5 ในกล่อง MT5 Inbox ด้านล่าง<br/>
+          • ทำไมอาจว่าง: writer บน PC ยังไม่ได้รัน / ไม่มีแถว staging / ยังไม่ได้ sign in — ไม่ใช่ error<br/>
+          • เปิด/ปิดได้ที่ปุ่ม ON/OFF ในกล่อง <span className="text-txt">MT5 Inbox</span> ด้านล่าง
+        </div>
+      </div>
+      <div className="text-[11px] text-muted mt-2">
+        แฟล็กสำหรับพัฒนา/ทดสอบอื่น ๆ ถูกซ่อนไว้โดยตั้งใจ และไม่มีปุ่มเปิด write gate ที่นี่.
+      </div>
     </section>
   );
 }
@@ -7281,6 +7345,8 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
           </div>
         </div>
       </div>
+
+      <FlagStatusPanel/>
 
       <Mt5InboxPanel authUid={authUid} products={products}/>
 
@@ -8659,6 +8725,7 @@ function PageCalendar({trades,products,uid,syncNotesToCloud}){
 function App({session,onSignOut}){
   const[dbReady,  setDbReady]  =useState(false); // true after Supabase load completes
   const[loadAttempt,setLoadAttempt]=useState(0); // bump to retry hydration after critical failure
+  const[hydrateFailed,setHydrateFailed]=useState(false); // true only after the 3rd (final) attempt fails; drives the visible error+Retry splash. Never flips dbReady.
   const[trades,   setTrades]   =useState([]);
   const[tradeGroupIds,setTradeGroupIds]=useState({});   // G2 v0.4: id→group_id (render-only; NEVER merged into raw/trade objects)
   const[portfolio,setPortfolio]=useState({transactions:[],stepBaseMode:"first_deposit"});
@@ -9016,6 +9083,7 @@ function App({session,onSignOut}){
     // or absence, retry) BEFORE any load. A successful load repopulates it below; logout, absence,
     // or a critical failure leaves it empty. Render-only: never touches trades[]/LS/persistence.
     setTradeGroupIds({});
+    setHydrateFailed(false);   // clear any prior terminal-failure state on every (re)attempt; a retry clears the error UI while it re-loads
     if(!authUid)return;
     let retryTimer=null;
     db.loadAll(authUid).then(data=>{
@@ -9025,7 +9093,8 @@ function App({session,onSignOut}){
           const delay=5000*Math.pow(2,loadAttempt); // 5s, 10s
           retryTimer=setTimeout(()=>setLoadAttempt(a=>a+1),delay);
         }else{
-          console.error("[hydrate] permanent load failure after 3 attempts — user must refresh");
+          console.error("[hydrate] permanent load failure after 3 attempts — showing visible error + Retry");
+          setHydrateFailed(true);   // terminal: surface a recoverable error instead of an infinite splash. dbReady stays false; no LS fallback; no writes.
         }
         setTradeGroupIds({});   // G2 v0.4 — critical load failure clears any stale group map (explicit; already reset at effect top)
         return;
@@ -9103,6 +9172,9 @@ function App({session,onSignOut}){
       setTradeGroupIds({});   // G2 v0.4 — unexpected failure clears any stale group map (explicit; already reset at effect top)
       if(loadAttempt<2){
         retryTimer=setTimeout(()=>setLoadAttempt(a=>a+1),5000*Math.pow(2,loadAttempt));
+      }else{
+        console.error("[hydrate] permanent load failure after 3 attempts (exception path) — showing visible error + Retry");
+        setHydrateFailed(true);   // terminal: same recoverable error path as the ok:false branch
       }
     });
     return()=>{if(retryTimer)clearTimeout(retryTimer);};
@@ -9778,11 +9850,29 @@ function App({session,onSignOut}){
   ];
 
   if(!dbReady)return(
-    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0E11"}}>
-      <div style={{textAlign:"center"}}>
-        <div style={{color:"#F0B90B",fontSize:22,fontWeight:800,letterSpacing:3,marginBottom:8}}>THUS</div>
-        <div style={{color:"#848E9C",fontSize:12}}>Loading...</div>
-      </div>
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0B0E11",padding:24}}>
+      {hydrateFailed?(
+        // Terminal hydration failure: visible + recoverable, never an infinite splash.
+        // dbReady is still false, so no autosave/persist effect can fire — Retry only re-reads.
+        <div style={{textAlign:"center",maxWidth:340}}>
+          <div style={{color:"#F0B90B",fontSize:22,fontWeight:800,letterSpacing:3,marginBottom:12}}>THUS</div>
+          <div style={{color:"#EAECEF",fontSize:15,fontWeight:600,marginBottom:6}}>โหลดข้อมูลไม่สำเร็จ</div>
+          <div style={{color:"#848E9C",fontSize:12,lineHeight:1.6,marginBottom:16}}>
+            เน็ต/เซิร์ฟเวอร์อาจมีปัญหา ข้อมูลเดิมจะไม่ถูกเขียนทับ<br/>
+            <span style={{color:"#5E6673"}}>(Could not load your data. Your saved data is not overwritten.)</span>
+          </div>
+          <button type="button"
+            onClick={()=>{setHydrateFailed(false);setLoadAttempt(0);}}
+            style={{background:"#F0B90B",color:"#0B0E11",fontSize:13,fontWeight:700,border:"none",borderRadius:8,padding:"10px 22px",cursor:"pointer"}}>
+            ↻ ลองใหม่
+          </button>
+        </div>
+      ):(
+        <div style={{textAlign:"center"}}>
+          <div style={{color:"#F0B90B",fontSize:22,fontWeight:800,letterSpacing:3,marginBottom:8}}>THUS</div>
+          <div style={{color:"#848E9C",fontSize:12}}>Loading...</div>
+        </div>
+      )}
     </div>
   );
 
