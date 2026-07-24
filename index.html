@@ -6717,8 +6717,7 @@ function Mt5InboxRow({r,openIds,dismissed,onToggleDismiss,products,preview,onSet
   );
 }
 
-function Mt5InboxPanel({authUid,products,onFlagChange}){
-  const[on,setOn]=useState(()=>ls.get(MT5_INBOX_FLAG,false));
+function Mt5InboxPanel({authUid,products,on,onToggle}){   // controlled: on/onToggle owned by PageSettings (shared with Mt5ReviewSettingsControl)
   const[loading,setLoading]=useState(false);
   const[rows,setRows]=useState([]);
   const[err,setErr]=useState(null);
@@ -6747,7 +6746,6 @@ function Mt5InboxPanel({authUid,products,onFlagChange}){
     else{setRows([]);setErr(null);setLoadedAt(null);}
   },[on,authUid]);
 
-  const toggle=()=>{const v=!on;ls.set(MT5_INBOX_FLAG,v);setOn(v);onFlagChange&&onFlagChange(v);};   // notify PageSettings so FlagStatusPanel reflects the live state immediately (no default flag written on mount)
 
   // Derived (read-only): view-filtered sections; summary + openIds from ALL loaded rows (stable across views).
   const isDismissed=(r)=>dismissed.has(_mt5RowKey(r));
@@ -6776,7 +6774,7 @@ function Mt5InboxPanel({authUid,products,onFlagChange}){
     <section className="bg-card border border-border rounded-xl p-5">
       <div className="flex items-center justify-between mb-2">
         <h2 className="font-semibold text-txt">🧪 MT5 Inbox <span className="text-muted text-xs font-normal">— diagnostic, read-only</span></h2>
-        <button onClick={toggle} className={clsBtn(on?"yellow":"ghost","sm")}>{on?"ON":"OFF"}</button>
+        <button onClick={onToggle} className={clsBtn(on?"yellow":"ghost","sm")}>{on?"ON":"OFF"}</button>
       </div>
       <div className="text-xs text-muted mb-3 leading-relaxed">
         Read-only MT5 mirror — not Journal trades. Rows need mapping before they could ever become a trade.<br/>
@@ -6866,37 +6864,40 @@ function Mt5InboxPanel({authUid,products,onFlagChange}){
   );
 }
 
-// ─── Flag feedback panel (2026-07-24) ────────────────────────────────────────────────────
-// Read-only status for USER-relevant flags only, so a toggle that "does nothing visible"
-// is explained instead of feeling broken. It does NOT enable anything: the only actual
-// toggle (MT5 Inbox ON/OFF) lives in Mt5InboxPanel below. Dev/inert flags
-// (tj_trade_group_ui_v01, tj_trade_group_mock, tj_trade_group_write_v01,
-// tj_mt5_inbox_product_preview) are deliberately NOT surfaced here — write gates especially
-// must never be presented as a clickable product toggle.
-function FlagStatusPanel({mt5On}){
-  // mt5On is lifted from PageSettings (kept in sync with Mt5InboxPanel via onFlagChange) so this
-  // read-only status reflects the live toggle immediately, not a stale render-time localStorage read.
+// ─── MT5 review — visible Settings control (2026-07-24, Phase A) ──────────────────────────
+// The always-visible, product-shaped toggle + compact pipeline status for the Positions MT5
+// review. CONTROLLED: `on`/`onToggle` are owned by PageSettings (single source of truth shared
+// with the collapsed diagnostic below), so toggling here updates everything live. Reads a
+// read-only staging snapshot ONLY to show count + last-staged; no writes, no RPC. Not a dev-flag
+// surface — tj_trade_group_write_v01 and other dev/inert flags are never shown here.
+function Mt5ReviewSettingsControl({on,onToggle,authUid}){
+  const[rows,setRows]=useState([]);
+  useEffect(()=>{
+    let alive=true;
+    if(on&&authUid){db.loadMt5Staging(authUid).then(res=>{if(alive)setRows(res&&res.ok?(res.rows||[]):[]);});}   // read-only SELECT-own; snapshot for count/last-staged only
+    else setRows([]);
+    return()=>{alive=false;};
+  },[on,authUid]);
+  const _lastKey=rows.reduce((m,r)=>Math.max(m,_mt5TimeKey(r.updated_at||r.created_at)),-Infinity);
+  const _lastStaged=isFinite(_lastKey)?new Date(_lastKey):null;
   return(
     <section className="bg-card border border-border rounded-xl p-5">
-      <h2 className="font-semibold text-txt mb-1">สถานะฟีเจอร์ (Feature flags)</h2>
-      <div className="text-xs text-muted mb-3 leading-relaxed">
-        ฟีเจอร์ที่เปิด/ปิดได้ และสิ่งที่ควรจะเห็นเมื่อเปิด — กันสับสนแบบ "กดแล้วไม่เห็นอะไรเปลี่ยน".
+      <div className="flex items-center justify-between mb-2">
+        <h2 className="font-semibold text-txt">แสดงรายการจาก MT5 บนหน้า Positions</h2>
+        <button onClick={onToggle} className={clsBtn(on?"yellow":"ghost","sm")}>{on?"ON":"OFF"}</button>
       </div>
-      <div className="rounded-lg border border-border bg-input/20 px-3 py-2.5">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-sm font-medium text-txt">MT5 Inbox <span className="text-muted text-xs font-normal">(tj_mt5_inbox)</span></span>
-          <span className={`text-[11px] font-semibold px-2 py-0.5 rounded ${mt5On?"bg-yellow/10 text-yellow border border-yellow/20":"bg-input/40 text-muted border border-border"}`}>{mt5On?"ON":"OFF"}</span>
+      <div className="text-[11px] text-muted leading-relaxed">
+        • เมื่อเปิด (ON): หน้า Positions จะมีส่วน <span className="text-txt">“จาก MT5 — รอเพิ่มเข้า Journal”</span> ให้ดูรายการที่ยังไม่ได้ลงใน Journal<br/>
+        • ทำไมอาจว่าง: ยังไม่ได้สั่ง sync จากเครื่อง PC / ไม่มีรายการใหม่ / ยังไม่ได้ sign in — ไม่ใช่ error<br/>
+        • ซิงค์อัตโนมัติ: <span className="text-txt">ปิดไว้โดยตั้งใจ</span> — writer รันมือบนเครื่อง PC
+      </div>
+      {on&&(
+        <div className="text-[11px] text-muted mt-2 bg-input/20 rounded-lg px-3 py-1.5">
+          {rows.length>0
+            ?<>มีรายการจาก MT5 <b className="text-txt">{rows.length}</b>{_lastStaged?<> · เขียนเข้ามาล่าสุด <b className="text-txt">{fmtDate(_lastStaged)} {fmtTime(_lastStaged)}</b></>:null}</>
+            :<>ยังไม่มีรายการจาก MT5 บนเครื่องนี้</>}
         </div>
-        <div className="text-[11px] text-muted leading-relaxed">
-          • ทำอะไร: แสดงข้อมูล MT5 (staging) แบบ<span className="text-txt">อ่านอย่างเดียว</span> — ไม่ใช่เทรดใน Journal<br/>
-          • เมื่อเปิด (ON) ควรเห็น: แถว staging (open/closed) จาก MT5 ในกล่อง MT5 Inbox ด้านล่าง<br/>
-          • ทำไมอาจว่าง: writer บน PC ยังไม่ได้รัน / ไม่มีแถว staging / ยังไม่ได้ sign in — ไม่ใช่ error<br/>
-          • เปิด/ปิดได้ที่ปุ่ม ON/OFF ในกล่อง <span className="text-txt">MT5 Inbox</span> ด้านล่าง
-        </div>
-      </div>
-      <div className="text-[11px] text-muted mt-2">
-        แฟล็กสำหรับพัฒนา/ทดสอบอื่น ๆ ถูกซ่อนไว้โดยตั้งใจ และไม่มีปุ่มเปิด write gate ที่นี่.
-      </div>
+      )}
     </section>
   );
 }
@@ -6936,10 +6937,14 @@ function Mt5ReviewCard({r,closed,onDismiss}){
   const noProd=_mt5NoProduct(r);
   const status=noProd?{t:"ต้องเลือก product ก่อน ถึงจะเพิ่มได้",c:"text-yellow"}:{t:"ยังไม่อยู่ใน Journal",c:"text-muted"};
   const when=closed?(r.close_time||r.mt5_time):(r.open_time||r.first_seen_open_at||r.mt5_time);
+  // Open rows: the position side = trade direction (Long/Short). Closed rows: the deal side is the
+  // CLOSING leg, not the original direction (sell-to-close of a Long is side=SELL) — never invert it
+  // (hedging/partials make inversion unsafe); label it honestly as the closing leg instead.
+  const dirLabel=closed?("ปิดขา "+(r.side||"—").toString().toUpperCase()):_mt5PhaseASide(r);
   return(
     <div className="bg-card border border-border rounded-lg px-3 py-2.5">
       <div className="flex items-center justify-between mb-1">
-        <span className="font-semibold text-txt text-sm">{_mt5PhaseASymbol(r)} <span className="text-muted font-normal text-xs">{_mt5PhaseASide(r)}</span></span>
+        <span className="font-semibold text-txt text-sm">{_mt5PhaseASymbol(r)} <span className="text-muted font-normal text-xs">{dirLabel}</span></span>
         <span className={`text-[11px] font-medium ${status.c}`}>{status.t}</span>
       </div>
       <div className="text-xs text-muted flex flex-wrap gap-x-3 gap-y-0.5">
@@ -6948,11 +6953,13 @@ function Mt5ReviewCard({r,closed,onDismiss}){
         {when&&<span>{closed?"ปิด":"เปิด"} <b className="text-txt">{fmtDate(when)} {fmtTime(when)}</b></span>}
         {closed&&r.broker_profit!=null&&<span>กำไรตามโบรก <b className={Number(r.broker_profit)>=0?"text-green":"text-red"}>{String(r.broker_profit)}</b></span>}
       </div>
-      <div className="flex flex-wrap items-center gap-1.5 mt-2">
-        <button type="button" disabled title="ต้อง design แยกก่อน (Phase B)" className={`${clsBtn("default","sm")} opacity-40 cursor-not-allowed`}>{closed?"เพิ่มเป็น closed trade — ยังไม่เปิดใช้":"เพิ่มเข้า Journal — ยังไม่เปิดใช้"}</button>
+      {/* Phase B (add-to-Journal) is design-gated — shown as a muted status line, NOT a disabled
+          control, so it doesn't read as a broken button. No onClick, no write. */}
+      <div className="text-[11px] text-muted mt-2">{closed?"ขั้นถัดไป: เพิ่มเป็น closed trade — กำลังออกแบบ":"ขั้นถัดไป: เพิ่มเข้า Journal — กำลังออกแบบ"}</div>
+      <div className="flex items-center gap-1.5 mt-1.5">
         <button type="button" onClick={onDismiss} className={clsBtn("ghost","sm")}>ลงเองแล้ว</button>
       </div>
-      <div className="text-[11px] text-muted mt-1">ซ่อนเฉพาะเครื่องนี้ — ไม่แตะ MT5 / Journal</div>
+      <div className="text-[11px] text-muted mt-1">ซ่อนเฉพาะเครื่องนี้ — ไม่แตะ MT5 / Journal · เลิกซ่อนได้ในส่วนตรวจสอบ (Settings)</div>
       <Mt5AdvancedDetails r={r}/>
     </div>
   );
@@ -7037,9 +7044,11 @@ function Mt5PositionsReview({authUid,trades}){
 
 function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsChange,showToast,showConfirm,authUid}){
   const[txModal,setTxModal]=useState(null);
-  // Lifted MT5 Inbox flag (read from LS once; NOT written on mount). Mt5InboxPanel owns the toggle
-  // and reports changes up via onFlagChange so FlagStatusPanel stays live.
+  // Lifted MT5 Inbox flag — single source of truth (read from LS once; NOT written on mount).
+  // Both the visible control and the collapsed diagnostic are controlled by this; the Positions
+  // review reads the same flag on mount (Settings is the toggle source).
   const[mt5InboxOn,setMt5InboxOn]=useState(()=>ls.get(MT5_INBOX_FLAG,false));
+  const toggleMt5Inbox=()=>{const v=!mt5InboxOn;ls.set(MT5_INBOX_FLAG,v);setMt5InboxOn(v);};
   // Journal AI-key feature deprecated 2026-05-12: old mentor-note AI route
   // (NoteFormModal "✨ ให้ AI ช่วย") was unreliable and encouraged plaintext
   // API-key storage in localStorage. Settings input was never wired into JSX
@@ -7487,18 +7496,19 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
         </div>
       </div>
 
-      <FlagStatusPanel mt5On={mt5InboxOn}/>
+      <Mt5ReviewSettingsControl on={mt5InboxOn} onToggle={toggleMt5Inbox} authUid={authUid}/>
 
-      {/* MT5 Phase A: the dense staging panel is demoted to a collapsed diagnostic. The primary,
-          trader-facing MT5 review ("จาก MT5 — รอเพิ่มเข้า Journal") now lives on the Positions page.
-          Kept here (collapsed) so operator diagnostics are not lost. Still read-only, no writes. */}
+      {/* MT5 Phase A: the dense staging panel is demoted to a collapsed diagnostic (raw/technical
+          rows only). The primary, trader-facing MT5 review ("จาก MT5 — รอเพิ่มเข้า Journal") lives on
+          Positions, and the visible toggle above is the source. Kept here (collapsed) so operator
+          diagnostics are not lost. Still read-only, no writes. Controlled by the same flag state. */}
       <details className="bg-card border border-border rounded-xl">
         <summary className="cursor-pointer select-none px-5 py-3 text-sm font-semibold text-txt">
           สำหรับตรวจสอบ / Diagnostic (เทคนิค) — ข้อมูล MT5 ดิบ
           <span className="text-muted text-xs font-normal ml-2">รายการหลักอยู่ที่หน้า Positions</span>
         </summary>
         <div className="px-1 pb-1">
-          <Mt5InboxPanel authUid={authUid} products={products} onFlagChange={setMt5InboxOn}/>
+          <Mt5InboxPanel authUid={authUid} products={products} on={mt5InboxOn} onToggle={toggleMt5Inbox}/>
         </div>
       </details>
 
