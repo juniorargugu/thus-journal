@@ -6,9 +6,11 @@ contains**, **which subsystem** it belongs to, a **confidence** level, and wheth
 areas where the repo has *no* good source and future search or user-memory capture is
 required (see [§7 Gaps](#7-gaps--areas-with-no-good-in-repo-source)).
 
-- **Repo:** `thus-journal`. `origin/main` = `b94f7fd` ("docs: record G2 isMerged RPC
-  migration applied + verified"); the Project Bible sits on top as a local-only commit.
-  Authored/synced 2026-07-10.
+- **Repo:** `thus-journal`. At Chapter 04 draft time, `origin/main` = `84c0a05` ("docs:
+  capture Portfolio Mentor Pattern roadmap context"); local `main` is ahead by the Chapter
+  04 draft/review commits (local-only, not pushed). Production bundle remains `f01eb33` /
+  v3.23.0 because `index.html` is unchanged. These SHAs are a point-in-time snapshot and go
+  stale once Chapter 04 is pushed. Inventory authored/synced 2026-07-10.
 - **Confidence** = the inventory author's confidence that the summary reflects the file's
   actual content, *not* a claim that the file's own assertions are verified against live
   systems.
