@@ -3726,7 +3726,7 @@ function GroupingPreview({openTrades,products,writeEnabled,showToast,groupIdMap}
     </div>
   );
 }
-function PagePositions({trades,products,productRegistry,balance,portfolio,groupIdMap,onCommitOpen,onCommitExecuteDraft,onCommitClose,onCommitUpdate,onCommitMerge,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
+function PagePositions({trades,products,productRegistry,balance,portfolio,groupIdMap,authUid,onCommitOpen,onCommitExecuteDraft,onCommitClose,onCommitUpdate,onCommitMerge,onDeleteTrade,showConfirm,showToast,livePrices:livePricesProp,liveTimestamps:liveTimestampsProp,liveErrors:liveErrorsProp,fetchPricesFn}){
   const gmap=groupIdMap||{};   // G2 v0.4 render-only id→group_id (default {})
   const[showForm,setShowForm]=useState(false);
   const[editTrade,setEditTrade]=useState(null);
@@ -3952,6 +3952,7 @@ function PagePositions({trades,products,productRegistry,balance,portfolio,groupI
       
       <section>
         <IMAlertBanner trades={trades} products={products} balance={balance} livePrices={livePrices} liveTimestamps={liveTimestamps}/>
+        <Mt5PositionsReview authUid={authUid} trades={trades}/>
         <h2 className="font-semibold text-txt mb-3 flex items-center justify-between">Open Positions <span className="text-muted font-normal text-sm">({openTrades.length})</span><button onClick={()=>fetchPricesFn&&fetchPricesFn()} className="text-xs text-muted hover:text-yellow transition px-2 py-0.5 rounded hover:bg-input font-normal">🔄 Refresh</button></h2>
         {mockGroupsOn&&(mockGroups.length>0
           ?<div className="space-y-2 mb-3">{mockGroups.map(g=>{const kids=g.childIds.map(id=>openTrades.find(t=>t.id===id)).filter(Boolean);return<GroupCard key={g.groupId} childTrades={kids} products={products} livePrices={livePrices}/>;})}</div>
@@ -6900,6 +6901,140 @@ function FlagStatusPanel({mt5On}){
   );
 }
 
+// ─── MT5 Phase A (2026-07-24): user-facing "รอเพิ่มเข้า Journal" review on Positions ──────────
+// READ-ONLY re-surfacing of MT5 staging rows for the trader. Reuses the existing read-only SELECT
+// path (db.loadMt5Staging) and the local-only dismissed store (MT5_DISMISSED_KEY). NO writes, NO
+// RPC, NO materializer, NO Journal-trade creation. The "เพิ่มเข้า Journal" action is design-gated
+// (disabled) and creates nothing — Phase B needs a separate /design. Internal/staging vocabulary is
+// kept out of the default cards; technical fields live only inside a collapsed advanced section.
+function _mt5PhaseASymbol(r){return r.normalized_symbol||r.symbol_raw||"—";}
+function _mt5PhaseASide(r){const s=(r.side||"").toString().toLowerCase();return s==="buy"?"Long":s==="sell"?"Short":(r.side||"—");}
+
+function Mt5AdvancedDetails({r}){
+  return(
+    <details className="mt-2">
+      <summary className="text-[11px] text-muted cursor-pointer select-none">รายละเอียดเชิงเทคนิค</summary>
+      <div className="mt-1 text-[11px] text-muted grid grid-cols-2 gap-x-3 gap-y-0.5 bg-input/20 rounded px-2 py-1.5 break-all">
+        {r.position_id!=null&&<div>position_id: {String(r.position_id)}</div>}
+        {r.deal_id!=null&&<div>deal_id: {String(r.deal_id)}</div>}
+        {r.mt5_time&&<div>mt5_time: {String(r.mt5_time)}</div>}
+        {r.created_at&&<div>created_at: {String(r.created_at)}</div>}
+        {r.updated_at&&<div>updated_at: {String(r.updated_at)}</div>}
+        {r.contract_size!=null&&<div>contract_size: {String(r.contract_size)}</div>}
+        {r.instrument_class&&<div>instrument_class: {String(r.instrument_class)}</div>}
+        {r.product_id_candidate!=null&&<div>product_id_candidate: {String(r.product_id_candidate)}</div>}
+        {r.state&&<div>state: {String(r.state)}</div>}
+        {r.source_account!=null&&<div>account: {_mt5MaskAccount(r.source_account)}</div>}
+      </div>
+    </details>
+  );
+}
+
+// Simple, trader-readable card. No staging/needs_mapping/mirror language, no state chips, no raw ids
+// in the default view. Primary action is design-gated (disabled, writes nothing). Dismiss is local-only.
+function Mt5ReviewCard({r,closed,onDismiss}){
+  const noProd=_mt5NoProduct(r);
+  const status=noProd?{t:"ต้องเลือก product ก่อน ถึงจะเพิ่มได้",c:"text-yellow"}:{t:"ยังไม่อยู่ใน Journal",c:"text-muted"};
+  const when=closed?(r.close_time||r.mt5_time):(r.open_time||r.first_seen_open_at||r.mt5_time);
+  return(
+    <div className="bg-card border border-border rounded-lg px-3 py-2.5">
+      <div className="flex items-center justify-between mb-1">
+        <span className="font-semibold text-txt text-sm">{_mt5PhaseASymbol(r)} <span className="text-muted font-normal text-xs">{_mt5PhaseASide(r)}</span></span>
+        <span className={`text-[11px] font-medium ${status.c}`}>{status.t}</span>
+      </div>
+      <div className="text-xs text-muted flex flex-wrap gap-x-3 gap-y-0.5">
+        {r.volume!=null&&<span>จำนวน <b className="text-txt">{String(r.volume)}</b></span>}
+        {r.price!=null&&<span>{closed?"ราคาปิด":"ราคาเข้า"} <b className="text-txt">{String(r.price)}</b></span>}
+        {when&&<span>{closed?"ปิด":"เปิด"} <b className="text-txt">{fmtDate(when)} {fmtTime(when)}</b></span>}
+        {closed&&r.broker_profit!=null&&<span>กำไรตามโบรก <b className={Number(r.broker_profit)>=0?"text-green":"text-red"}>{String(r.broker_profit)}</b></span>}
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 mt-2">
+        <button type="button" disabled title="ต้อง design แยกก่อน (Phase B)" className={`${clsBtn("default","sm")} opacity-40 cursor-not-allowed`}>{closed?"เพิ่มเป็น closed trade — ยังไม่เปิดใช้":"เพิ่มเข้า Journal — ยังไม่เปิดใช้"}</button>
+        <button type="button" onClick={onDismiss} className={clsBtn("ghost","sm")}>ลงเองแล้ว</button>
+      </div>
+      <div className="text-[11px] text-muted mt-1">ซ่อนเฉพาะเครื่องนี้ — ไม่แตะ MT5 / Journal</div>
+      <Mt5AdvancedDetails r={r}/>
+    </div>
+  );
+}
+
+// Positions/Home surface. Shows only when tj_mt5_inbox is ON and there is an auth session.
+// Matches staging rows to Journal trades via position_id === trade.mt5PositionId (no new query).
+function Mt5PositionsReview({authUid,trades}){
+  const[on]=useState(()=>ls.get(MT5_INBOX_FLAG,false));
+  const[rows,setRows]=useState([]);
+  const[loading,setLoading]=useState(false);
+  const[err,setErr]=useState(null);
+  const[expanded,setExpanded]=useState(false);
+  const[dismissed,setDismissed]=useState(()=>{const a=ls.get(MT5_DISMISSED_KEY,[]);return new Set(Array.isArray(a)?a.map(String):[]);});
+  const toggleDismiss=(key)=>{setDismissed(prev=>{const next=new Set(prev);next.add(key);ls.set(MT5_DISMISSED_KEY,Array.from(next));return next;});};   // local-only; same store as the Settings diagnostic. No network/DB/RPC.
+
+  const load=async()=>{
+    if(!authUid){setRows([]);return;}
+    setLoading(true);setErr(null);
+    const res=await db.loadMt5Staging(authUid);   // existing read-only SELECT-own path; no writes
+    setLoading(false);
+    if(res&&res.ok)setRows(res.rows||[]);
+    else{setErr((res&&res.error)||"load failed");setRows([]);}
+  };
+  useEffect(()=>{if(on&&authUid)load();else{setRows([]);setErr(null);}},[on,authUid]);
+
+  if(!on||!authUid)return null;   // flag OFF or no session → render nothing, no nag
+
+  const journalPosIds=new Set((trades||[]).map(t=>t&&t.mt5PositionId).filter(v=>v!=null&&v!=="").map(String));
+  const isMatched=(r)=>r.position_id!=null&&journalPosIds.has(String(r.position_id));
+  const isDismissed=(r)=>dismissed.has(_mt5RowKey(r));
+  // Phase A surface = open + closed buckets only ('other'/balance rows stay in the Settings diagnostic).
+  const openRows=rows.filter(r=>_mt5Bucket(r)==="open");
+  const closedRows=rows.filter(r=>_mt5Bucket(r)==="closed");
+  const pendOpen=openRows.filter(r=>!isMatched(r)&&!isDismissed(r)).sort((a,b)=>_mt5OpenSortKey(b)-_mt5OpenSortKey(a));
+  const pendClosed=closedRows.filter(r=>!isMatched(r)&&!isDismissed(r)).sort((a,b)=>_mt5ClosedSortKey(b)-_mt5ClosedSortKey(a));
+  const matchedCount=[...openRows,...closedRows].filter(isMatched).length;
+  const needProdCount=[...pendOpen,...pendClosed].filter(_mt5NoProduct).length;
+  const totalPending=pendOpen.length+pendClosed.length;
+
+  return(
+    <section className="mb-5 bg-card border border-border rounded-xl p-4 fade-in">
+      <div className="flex items-center justify-between mb-1">
+        <h2 className="font-semibold text-txt text-sm">จาก MT5 — รอเพิ่มเข้า Journal</h2>
+        {totalPending>0&&<button onClick={()=>setExpanded(e=>!e)} className={clsBtn("ghost","sm")}>{expanded?"ซ่อน":"ดูรายการ"}</button>}
+      </div>
+      {loading&&<div className="text-xs text-muted">กำลังโหลด…</div>}
+      {err&&!loading&&<div className="text-xs text-muted">โหลดไม่สำเร็จ <button onClick={load} className="underline ml-1">ลองใหม่</button></div>}
+      {!loading&&!err&&totalPending===0&&(
+        <div className="text-xs text-muted">ไม่มีรายการใหม่จาก MT5 — ถ้าเพิ่งเทรด ให้สั่ง sync จากเครื่อง PC ก่อน{matchedCount>0?<span className="text-green"> · อยู่ใน Journal แล้ว ✓ {matchedCount}</span>:null}</div>
+      )}
+      {!loading&&!err&&totalPending>0&&(
+        <>
+          <div className="text-xs text-muted flex flex-wrap gap-x-3 gap-y-0.5">
+            <span>เปิดอยู่ <b className="text-txt">{pendOpen.length}</b></span>
+            <span>ปิดแล้ว <b className="text-txt">{pendClosed.length}</b></span>
+            {needProdCount>0&&<span>ต้องเลือก product ก่อน <b className="text-yellow">{needProdCount}</b></span>}
+            <span>รวม <b className="text-txt">{totalPending}</b></span>
+            {matchedCount>0&&<span className="text-green">อยู่ใน Journal แล้ว ✓ {matchedCount}</span>}
+          </div>
+          {expanded&&(
+            <div className="mt-3 space-y-3">
+              {pendOpen.length>0&&(
+                <div>
+                  <div className="text-xs font-semibold text-txt mb-1.5">ยังเปิดอยู่ <span className="text-muted font-normal">({pendOpen.length})</span></div>
+                  <div className="space-y-2">{pendOpen.map(r=><Mt5ReviewCard key={_mt5RowKey(r)} r={r} closed={false} onDismiss={()=>toggleDismiss(_mt5RowKey(r))}/>)}</div>
+                </div>
+              )}
+              {pendClosed.length>0&&(
+                <div>
+                  <div className="text-xs font-semibold text-txt mb-1.5">ปิดแล้ว <span className="text-muted font-normal">({pendClosed.length})</span></div>
+                  <div className="space-y-2">{pendClosed.map(r=><Mt5ReviewCard key={_mt5RowKey(r)} r={r} closed={true} onDismiss={()=>toggleDismiss(_mt5RowKey(r))}/>)}</div>
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsChange,showToast,showConfirm,authUid}){
   const[txModal,setTxModal]=useState(null);
   // Lifted MT5 Inbox flag (read from LS once; NOT written on mount). Mt5InboxPanel owns the toggle
@@ -7354,7 +7489,18 @@ function PageSettings({portfolio,products,trades,onPortfolioChange,onProductsCha
 
       <FlagStatusPanel mt5On={mt5InboxOn}/>
 
-      <Mt5InboxPanel authUid={authUid} products={products} onFlagChange={setMt5InboxOn}/>
+      {/* MT5 Phase A: the dense staging panel is demoted to a collapsed diagnostic. The primary,
+          trader-facing MT5 review ("จาก MT5 — รอเพิ่มเข้า Journal") now lives on the Positions page.
+          Kept here (collapsed) so operator diagnostics are not lost. Still read-only, no writes. */}
+      <details className="bg-card border border-border rounded-xl">
+        <summary className="cursor-pointer select-none px-5 py-3 text-sm font-semibold text-txt">
+          สำหรับตรวจสอบ / Diagnostic (เทคนิค) — ข้อมูล MT5 ดิบ
+          <span className="text-muted text-xs font-normal ml-2">รายการหลักอยู่ที่หน้า Positions</span>
+        </summary>
+        <div className="px-1 pb-1">
+          <Mt5InboxPanel authUid={authUid} products={products} onFlagChange={setMt5InboxOn}/>
+        </div>
+      </details>
 
     </div>
   );
@@ -9999,7 +10145,7 @@ function App({session,onSignOut}){
       )}
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
-        {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} groupIdMap={tradeGroupIds} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onCommitMerge={commitMerge} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
+        {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} groupIdMap={tradeGroupIds} authUid={authUid} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onCommitMerge={commitMerge} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
         {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onCommitImport={commitImportTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid}/>}
         {page==="dashboard"&&<PageDashboard trades={trades} products={products} balance={balance} portfolio={portfolio}/>}
