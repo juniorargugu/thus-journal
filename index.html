@@ -6888,8 +6888,8 @@ function Mt5ReviewSettingsControl({on,onToggle,authUid}){
         <button onClick={onToggle} className={clsBtn(on?"yellow":"ghost","sm")}>{on?"ON":"OFF"}</button>
       </div>
       <div className="text-[11px] text-muted leading-relaxed">
-        • เมื่อเปิด (ON): หน้า Positions จะมีส่วน <span className="text-txt">“จาก MT5 — รอเพิ่มเข้า Journal”</span> ให้ดูรายการที่ยังไม่ได้ลงใน Journal<br/>
-        • ถ้าว่าง: ยังไม่ได้สั่ง sync จากเครื่อง PC (ซิงค์อัตโนมัติปิดไว้โดยตั้งใจ) หรือยังไม่ได้ sign in
+        • เมื่อเปิด จะเห็นรายการ MT5 ที่รอตรวจสอบบนหน้า Positions<br/>
+        • ถ้าว่าง: ยังไม่ได้สั่ง sync จากเครื่อง PC (ซิงค์อัตโนมัติปิดไว้โดยตั้งใจ), ยังไม่ได้ sign in หรือไม่มีรายการค้าง — ถ้าไม่มีรายการค้าง ส่วนนี้จะไม่แสดงบนหน้า Positions
       </div>
       {on&&(
         <>
@@ -6921,7 +6921,7 @@ function _mt5FmtPrice(v){if(v===null||v===undefined||v==="")return null;const n=
 function Mt5AdvancedDetails({r,closed}){
   return(
     <details className="mt-2">
-      <summary className="text-[11px] text-muted cursor-pointer select-none">▸ ข้อมูลเชิงเทคนิค</summary>
+      <summary className="text-[11px] text-muted cursor-pointer select-none">ข้อมูลเชิงเทคนิค</summary>
       <div className="mt-1 text-[11px] text-muted grid grid-cols-2 gap-x-3 gap-y-0.5 bg-input/20 rounded px-2 py-1.5 break-all">
         {r.position_id!=null&&<div>position_id: {String(r.position_id)}</div>}
         {r.deal_id!=null&&<div>deal_id: {String(r.deal_id)}</div>}
@@ -6948,24 +6948,22 @@ function Mt5ReviewCard({r,closed,onDismiss}){
   const when=closed?(r.close_time||r.mt5_time):(r.open_time||r.first_seen_open_at||r.mt5_time);
   const whenStr=when?`${fmtDate(when)} ${fmtTime(when)}`:"";
   const profit=(closed&&r.broker_profit!=null&&!isNaN(Number(r.broker_profit)))?Number(r.broker_profit):null;
-  const facts=closed
-    ?`ปิด ${vol||"—"}${price!=null?` · ${price}`:""}`
-    :`${vol||"—"}${price!=null?` · เข้า ${price}`:""}`;
   return(
-    <div className="bg-card border border-border rounded-lg">
-      <button type="button" onClick={()=>setOpen(o=>!o)} className="w-full text-left px-3 py-2.5">
+    <div>
+      <button type="button" onClick={()=>setOpen(o=>!o)} className="w-full text-left px-3 py-2.5 hover:bg-input/20 transition">
         <div className="flex items-center justify-between gap-2">
-          <span className="font-semibold text-txt text-sm">
-            {_mt5PhaseASymbol(r)}
-            {!closed&&<span className="ml-1.5 text-[10px] font-medium text-muted border border-border rounded px-1 py-0.5 align-middle">{_mt5PhaseASide(r)}</span>}
+          <span className="flex items-center gap-1.5 min-w-0">
+            <span className="font-semibold text-txt text-sm">{_mt5PhaseASymbol(r)}</span>
+            {!closed&&<DirBadge dir={_mt5PhaseASide(r)}/>}
+            {!closed&&vol&&<span className="text-xs text-muted whitespace-nowrap">{vol}</span>}
           </span>
-          <span className="flex items-center gap-2">
-            {noProd&&<span className="text-[10px] font-medium text-yellow bg-yellow/10 border border-yellow/20 rounded px-1.5 py-0.5">รอเลือก product</span>}
-            {profit!=null&&<span className={`text-xs font-semibold ${profit>=0?"text-green":"text-red"}`}>{profit>=0?"+":""}{fmtNum(profit,0)}</span>}
+          <span className="flex items-center gap-2 shrink-0">
+            {!closed&&noProd&&<span className="text-[10px] font-medium text-yellow bg-yellow/10 border border-yellow/20 rounded px-1.5 py-0.5">รอเลือก product</span>}
+            {profit!=null&&<span className={`text-sm font-semibold ${profit>=0?"text-green":"text-red"}`}>{profit>=0?"+":""}{fmtNum(profit,0)}</span>}
           </span>
         </div>
         <div className="flex items-center justify-between gap-2 mt-0.5 text-xs text-muted">
-          <span>{facts}</span>
+          <span>{closed?`ปิด ${vol||"—"}${price!=null?` · ${price}`:""}`:(price!=null?`เข้า ${price}`:"—")}</span>
           <span className="whitespace-nowrap">{whenStr}</span>
         </div>
       </button>
@@ -6989,18 +6987,30 @@ function Mt5ReviewCard({r,closed,onDismiss}){
 function Mt5PositionsReview({authUid,trades,showToast}){
   const[on]=useState(()=>ls.get(MT5_INBOX_FLAG,false));
   const[rows,setRows]=useState([]);
+  const[err,setErr]=useState(false);
   const[showClosed,setShowClosed]=useState(false);
   const[dismissed,setDismissed]=useState(()=>{const a=ls.get(MT5_DISMISSED_KEY,[]);return new Set(Array.isArray(a)?a.map(String):[]);});
   const dismissRow=(r)=>{const key=_mt5RowKey(r);setDismissed(prev=>{const next=new Set(prev);next.add(key);ls.set(MT5_DISMISSED_KEY,Array.from(next));return next;});showToast&&showToast("ซ่อน "+_mt5PhaseASymbol(r)+" แล้ว — เลิกซ่อนได้ใน Settings");};   // local-only dismiss + simple toast (showToast has no undo API); undo lives in the Settings diagnostic. No DB/RPC.
 
-  useEffect(()=>{
-    let alive=true;
-    if(on&&authUid){db.loadMt5Staging(authUid).then(res=>{if(alive)setRows(res&&res.ok?(res.rows||[]):[]);});}   // existing read-only SELECT-own path; no writes
-    else setRows([]);
-    return()=>{alive=false;};
-  },[on,authUid]);
+  const load=()=>{
+    if(!(on&&authUid)){setRows([]);setErr(false);return;}
+    setErr(false);
+    db.loadMt5Staging(authUid).then(res=>{   // existing read-only SELECT-own path; no writes
+      if(res&&res.ok){setRows(res.rows||[]);setErr(false);}
+      else{setRows([]);setErr(true);}
+    }).catch(()=>{setRows([]);setErr(true);});
+  };
+  useEffect(()=>{load();},[on,authUid]);   // retry is manual (tap) only — never an auto-loop
 
   if(!on||!authUid)return null;
+  // Distinct from empty-success: a load failure shows a compact, tappable retry line (not render-null).
+  if(err)return(
+    <div className="mb-5">
+      <button type="button" onClick={load} className="w-full text-left text-xs text-muted bg-card border border-border rounded-lg px-3 py-2.5 hover:bg-input/20 transition">
+        โหลดรายการ MT5 ไม่สำเร็จ · แตะเพื่อลองใหม่
+      </button>
+    </div>
+  );
 
   const journalPosIds=new Set((trades||[]).map(t=>t&&t.mt5PositionId).filter(v=>v!=null&&v!=="").map(String));
   const isMatched=(r)=>r.position_id!=null&&journalPosIds.has(String(r.position_id));
@@ -7009,15 +7019,15 @@ function Mt5PositionsReview({authUid,trades,showToast}){
   const pendOpen=rows.filter(r=>_mt5Bucket(r)==="open"&&!isMatched(r)&&!isDismissed(r)).sort((a,b)=>_mt5OpenSortKey(b)-_mt5OpenSortKey(a));
   const pendClosed=rows.filter(r=>_mt5Bucket(r)==="closed"&&!isMatched(r)&&!isDismissed(r)).sort((a,b)=>_mt5ClosedSortKey(b)-_mt5ClosedSortKey(a));
 
-  if(pendOpen.length+pendClosed.length===0)return null;   // nothing pending → render nothing (no empty nag)
+  if(pendOpen.length+pendClosed.length===0)return null;   // success + nothing pending → render nothing (no empty nag)
 
   return(
     <div className="mb-5 space-y-3 fade-in">
       {pendOpen.length>0&&(
         <div>
-          <div className="text-sm font-semibold text-txt">● กำลังเปิดอยู่ใน MT5 <span className="text-muted font-normal">({pendOpen.length})</span></div>
+          <div className="text-sm font-semibold text-txt flex items-center"><span className="w-2 h-2 rounded-full bg-green inline-block mr-1.5"/>กำลังเปิดอยู่ใน MT5 <span className="text-muted font-normal ml-1">({pendOpen.length})</span></div>
           <div className="text-[11px] text-muted mb-2">ยังไม่ลง Journal — ยังไม่นับรวมในพอร์ต</div>
-          <div className="space-y-2">{pendOpen.map(r=><Mt5ReviewCard key={_mt5RowKey(r)} r={r} closed={false} onDismiss={()=>dismissRow(r)}/>)}</div>
+          <div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">{pendOpen.map(r=><Mt5ReviewCard key={_mt5RowKey(r)} r={r} closed={false} onDismiss={()=>dismissRow(r)}/>)}</div>
         </div>
       )}
       {pendClosed.length>0&&(
@@ -7026,7 +7036,10 @@ function Mt5PositionsReview({authUid,trades,showToast}){
             ปิดไปแล้ว ยังไม่ได้บันทึก <span className="text-muted font-normal">({pendClosed.length})</span>
             <span className="text-muted font-normal text-xs">{showClosed?"ซ่อน ▴":"แสดง ▾"}</span>
           </button>
-          {showClosed&&<div className="space-y-2 mt-2">{pendClosed.map(r=><Mt5ReviewCard key={_mt5RowKey(r)} r={r} closed={true} onDismiss={()=>dismissRow(r)}/>)}</div>}
+          {showClosed&&<>
+            <div className="text-[11px] text-muted mt-1 mb-2">ไม่กระทบพอร์ตปัจจุบัน — เก็บลงบันทึกย้อนหลังได้</div>
+            <div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">{pendClosed.map(r=><Mt5ReviewCard key={_mt5RowKey(r)} r={r} closed={true} onDismiss={()=>dismissRow(r)}/>)}</div>
+          </>}
         </div>
       )}
     </div>
