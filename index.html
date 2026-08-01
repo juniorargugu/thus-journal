@@ -5096,53 +5096,137 @@ function parseMt5ReportForReconciliation(file,products){
     });
   });
 }
-// Matching tolerances (validated against ReportHistory-301102520.xlsx fixtures).
+// ── <RECON-CORE> ─────────────────────────────────────────────────────────────────────────────
+// PURE reconciliation core. Self-contained: the ONLY external input is the `products` array (used
+// read-only to normalize product ids). NO DOM/React/Supabase deps — extracted verbatim and eval'd
+// by ops/mt5_reconciliation/run_fixtures.mjs, so it must stay standalone. Fail-closed everywhere:
+// any uncertainty → AMBIGUOUS/CONFLICT, never a fabricated confident match.
+var _RECON_VOL_EPS=1e-6;        // decimal-volume equality epsilon (TFEX integers unaffected)
+var _RECON_POOL_CAP=24;         // candidate pool larger than this → fail closed (SEARCH_LIMIT)
+var _RECON_SUBSET_MAX=8;        // max legs per aggregate
+var _RECON_COMBO_CAP=200000;    // DFS node cap → fail closed (SEARCH_LIMIT), never a silent "no match"
+function _reconNorm(s){return String(s==null?"":s).trim().toUpperCase();}
+function _reconVolEq(a,b){return Math.abs((+a||0)-(+b||0))<_RECON_VOL_EPS;}
 function _reconTol(p){return Math.max(0.5,Math.abs(p||0)*0.0005);}   // weighted-entry tol = max(0.5, 0.05%)
 function _reconBand(p){return Math.max(2,Math.abs(p||0)*0.0075);}    // candidate-pool entry band = 0.75%
 function _reconWAvg(set,fld){var v=0,q=0;for(var i=0;i<set.length;i++){v+=(set[i][fld]||0)*set[i].contracts;q+=set[i].contracts;}return q?v/q:null;}
 function _reconCloseSpreadMin(set){var ts=[];for(var i=0;i<set.length;i++){var d=set[i].exitDateTime?new Date(set[i].exitDateTime).getTime():NaN;if(!isNaN(d))ts.push(d);}if(ts.length<2)return 0;return(Math.max.apply(null,ts)-Math.min.apply(null,ts))/60000;}
-// Bounded subset search: subsets of pool summing to targetVol, weighted entry within tol, close-window
-// cohesive (<=15 min). Returns UNIQUE candidate sets (by position-id set). Capped to stay deterministic.
+// Self-contained base-product id (mirrors resolveProduct's `_next` convention without calling it, so
+// the core stays extractable). "gold_next"→"gold", "gold"→"gold".
+function _reconProductOf(products,pid){
+  if(!pid)return null;var base=String(pid).replace(/_next$/,""),list=products||[];
+  for(var i=0;i<list.length;i++){if(list[i]&&(list[i].id===base||list[i].id===pid))return list[i];}
+  return null;
+}
+function _reconBaseId(products,pid){var p=_reconProductOf(products,pid);if(p)return p._baseId||p.id;return pid?String(pid).replace(/_next$/,""):null;}
+// Contract-size compatibility: when BOTH sides resolve to a product with a known size, sizes must
+// agree (SSF csize 1000 must never fold into a stock csize 1). Unknown on either side → don't block
+// here; the contract-code gate below carries the weight.
+function _reconSizeCompatible(jt,p,products){
+  var jp=_reconProductOf(products,jt.productId),pp=_reconProductOf(products,p.productId);
+  var js=jp&&jp.contractSize,ps=pp&&pp.contractSize;
+  if(js!=null&&js!==""&&ps!=null&&ps!=="")return Number(js)===Number(ps);
+  return true;
+}
+// Match relationship between a Journal trade and a report leg: "id" > "code" > "base"; null = incompatible.
+// Key order (§1): stored MT5 position id → exact normalized contract code → base-product fallback ONLY
+// when a contract code is absent. Two present-but-different contract codes are NEVER folded together.
+function _reconMatchKind(jt,p,products){
+  if(jt.mt5PositionId&&p.mt5PositionId&&String(jt.mt5PositionId)===String(p.mt5PositionId))return "id";
+  if((jt.direction||null)!==(p.direction||null))return null;
+  var jc=_reconNorm(jt.contractCode),pc=_reconNorm(p.contractCode);
+  if(jc&&pc)return jc===pc?"code":null;                          // both coded → exact series only
+  var jb=_reconBaseId(products,jt.productId),pb=_reconBaseId(products,p.productId);
+  if(jb&&pb&&jb===pb)return _reconSizeCompatible(jt,p,products)?"base":null;
+  return null;
+}
+// Bounded subset search: subsets of pool summing (±eps) to targetVol, weighted entry within tol,
+// close-window cohesive (<=15 min). Returns {sets, capped}. capped=true means the DFS was truncated —
+// the caller MUST treat that as SEARCH_LIMIT (never accept a "unique" result from a truncated search).
 function _reconFindSubsets(pool,targetVol,targetEntry){
-  var res=[],n=pool.length,combos=0,T=_reconTol(targetEntry);
+  var res=[],n=pool.length,combos=0,capped=false,T=_reconTol(targetEntry);
   function dfs(i,chosen,sumv){
-    if(sumv===targetVol){var we=_reconWAvg(chosen,"entryPrice");if(we!=null&&Math.abs(we-targetEntry)<=T&&_reconCloseSpreadMin(chosen)<=15)res.push(chosen.slice());return;}
-    if(i>=n||sumv>targetVol||chosen.length>=8)return;
-    if(++combos>200000)return;
+    if(capped)return;
+    if(Math.abs(sumv-targetVol)<_RECON_VOL_EPS){var we=_reconWAvg(chosen,"entryPrice");if(chosen.length&&we!=null&&Math.abs(we-targetEntry)<=T&&_reconCloseSpreadMin(chosen)<=15)res.push(chosen.slice());return;}
+    if(i>=n||sumv>targetVol+_RECON_VOL_EPS)return;
+    if(chosen.length>=_RECON_SUBSET_MAX){if(sumv<targetVol-_RECON_VOL_EPS&&i<n)capped=true;return;}   // subset-size bound reached below target → fail closed
+    if(++combos>_RECON_COMBO_CAP){capped=true;return;}
     dfs(i+1,chosen.concat([pool[i]]),sumv+pool[i].contracts);
     dfs(i+1,chosen,sumv);
   }
   dfs(0,[],0);
   var uniq=[],seen={};for(var j=0;j<res.length;j++){var k=res[j].map(function(p){return p.mt5PositionId;}).sort().join(",");if(!seen[k]){seen[k]=1;uniq.push(res[j]);}}
-  return uniq;
+  return {sets:uniq,capped:capped};
 }
-// Per-Journal-trade classification (NOT global window grouping). Consumes matched position ids in-memory.
-function reconcileMt5Report(journalTrades,report){
-  var consumed={},classA=[],classD=[],ambiguous=[];
+// Order-independent, fail-closed classification. Two passes, NO greedy consumption:
+//   Pass 1 — compute candidate leg-sets per Journal trade without consuming any report leg.
+//   Pass 2 — a report leg claimed by >1 uniquely-matched trade makes all affected trades CONFLICT;
+//            only non-overlapping unique matches are accepted. Result is independent of trade/row order.
+function reconcileMt5Report(journalTrades,report,products){
+  var closed=(report&&report.closed)||[],openRep=(report&&report.open)||[];
   var jts=(journalTrades||[]).filter(function(t){return t&&t.productId&&t.status&&t.status!=="draft";});
-  jts.forEach(function(jt){
-    var pool=report.closed.filter(function(p){return p.productId&&p.productId===jt.productId&&p.direction===jt.direction&&!consumed[p.mt5PositionId]&&p.entryPrice!=null&&Math.abs(p.entryPrice-jt.entryPrice)<=_reconBand(jt.entryPrice);});
-    var singles=pool.filter(function(p){return p.contracts===jt.contracts&&Math.abs(p.entryPrice-jt.entryPrice)<=_reconTol(jt.entryPrice);});
-    var match=null,conf=null,amb=false;
-    if(singles.length===1){match=[singles[0]];conf="EXACT_FIELD_MATCH";}
-    else if(singles.length>1){amb=true;}
-    else if(pool.length>24){amb=true;}   // too many candidates → don't auto-choose
-    else{var subs=_reconFindSubsets(pool,jt.contracts,jt.entryPrice);if(subs.length===1){match=subs[0];conf="EXACT_AGGREGATE_MATCH";}else if(subs.length>1){amb=true;}}
-    if(match){
-      match.forEach(function(p){consumed[p.mt5PositionId]=1;});
-      var entry={journal:jt,legs:match,confidence:conf,wEntry:_reconWAvg(match,"entryPrice"),wExit:_reconWAvg(match,"exitPrice"),
-        brokerProfit:match.reduce(function(s,p){return s+(p.brokerProfit||0);},0),commission:match.reduce(function(s,p){return s+(p.commission||0);},0)};
+  // Pass 1: candidate leg-sets (no consumption).
+  var plans=jts.map(function(jt){
+    var idLegs=closed.filter(function(p){return _reconMatchKind(jt,p,products)==="id";});
+    if(idLegs.length)return {jt:jt,sets:[idLegs],capped:false,poolSize:idLegs.length,idMatch:true};
+    var pool=closed.filter(function(p){
+      var k=_reconMatchKind(jt,p,products);
+      return (k==="code"||k==="base")&&p.entryPrice!=null&&Math.abs(p.entryPrice-jt.entryPrice)<=_reconBand(jt.entryPrice);
+    });
+    if(pool.length>_RECON_POOL_CAP)return {jt:jt,sets:[],capped:true,poolSize:pool.length,idMatch:false};   // fail closed
+    var found=_reconFindSubsets(pool,jt.contracts,jt.entryPrice);
+    return {jt:jt,sets:found.sets,capped:found.capped,poolSize:pool.length,idMatch:false};
+  });
+  // Pass 2: claim map over uniquely-matched plans only. Overlap → CONFLICT for all claimants.
+  var claim={};
+  plans.forEach(function(pl){if(!pl.capped&&pl.sets.length===1){pl.sets[0].forEach(function(p){claim[p.mt5PositionId]=(claim[p.mt5PositionId]||0)+1;});}});
+  var overlaps=function(set){return set.some(function(p){return (claim[p.mt5PositionId]||0)>1;});};
+  var classA=[],classD=[],ambiguous=[],noEvidence=[],consumed={};
+  plans.forEach(function(pl){
+    var jt=pl.jt;
+    if(pl.capped){ambiguous.push({journal:jt,reason:"SEARCH_LIMIT",nSets:0,candidates:[]});return;}
+    if(pl.sets.length===1&&!overlaps(pl.sets[0])){
+      var legs=pl.sets[0];
+      var conf=pl.idMatch?"EXACT_ID_MATCH":(legs.length>1?"EXACT_AGGREGATE_MATCH":"EXACT_FIELD_MATCH");
+      legs.forEach(function(p){consumed[p.mt5PositionId]=1;});
+      var entry={journal:jt,legs:legs,confidence:conf,wEntry:_reconWAvg(legs,"entryPrice"),wExit:_reconWAvg(legs,"exitPrice"),
+        brokerProfit:legs.reduce(function(s,p){return s+(p.brokerProfit||0);},0),commission:legs.reduce(function(s,p){return s+(p.commission||0);},0)};
       (jt.status==="open"?classA:classD).push(entry);   // open journal + closed MT5 = discrepancy (A); closed journal = reconciled (D)
-    }else if(amb){ambiguous.push({journal:jt,candidates:pool.slice(0,12)});}
-    // journal open with NO report close evidence → genuinely still open; nothing to reconcile (not surfaced)
+      return;
+    }
+    if(pl.sets.length===1&&overlaps(pl.sets[0])){ambiguous.push({journal:jt,reason:"CONFLICT",nSets:1,candidates:pl.sets[0].slice(0,12)});return;}
+    if(pl.sets.length>1){var flat=[],s2={};pl.sets.forEach(function(st){st.forEach(function(p){if(!s2[p.mt5PositionId]){s2[p.mt5PositionId]=1;flat.push(p);}});});ambiguous.push({journal:jt,reason:"MULTIPLE",nSets:pl.sets.length,candidates:flat.slice(0,12)});return;}
+    if(jt.status==="open")noEvidence.push({journal:jt});   // open in Journal, NO close evidence in THIS report (not "still open" truth)
   });
-  var classB=report.open.filter(function(p){
-    if(!p.productId)return true;   // unresolved (e.g. DELTAU26 SSF) → Class B, product-scope decision; never mapped to a stock preset
-    return!jts.some(function(jt){return jt.productId===p.productId&&jt.direction===p.direction&&jt.status==="open";});
+  // Class B: report opens NOT confidently covered by a Journal open (id, or exact code/base + equal volume).
+  var classB=openRep.filter(function(p){
+    return !jts.some(function(jt){
+      if(jt.status!=="open")return false;
+      var k=_reconMatchKind(jt,p,products);
+      if(k==="id")return true;
+      return (k==="code"||k==="base")&&_reconVolEq(jt.contracts,p.contracts);
+    });
   });
-  var classC=report.closed.filter(function(p){return!consumed[p.mt5PositionId];});
-  return{classA:classA,classB:classB,classC:classC,classD:classD,ambiguous:ambiguous};
+  // Class C scope (§9): unconsumed report closes AFTER the earliest Journal trade are honest "missing"
+  // debt; anything older (or if no Journal date can be established) is OUT_OF_SCOPE, not asserted debt.
+  var earliest=null;
+  jts.forEach(function(jt){var d=jt.openDateTime?new Date(jt.openDateTime).getTime():NaN;if(!isNaN(d)&&(earliest==null||d<earliest))earliest=d;});
+  var classC=[],outOfScope=[];
+  closed.forEach(function(p){
+    if(consumed[p.mt5PositionId])return;
+    var t=p.exitDateTime?new Date(p.exitDateTime).getTime():NaN;
+    var inScope=earliest!=null&&!isNaN(t)&&t>=earliest;
+    (inScope?classC:outOfScope).push(p);
+  });
+  return{classA:classA,classB:classB,classC:classC,outOfScope:outOfScope,classD:classD,ambiguous:ambiguous,noEvidence:noEvidence,
+    scopeAnchor:earliest,
+    summary:{opensExamined:jts.filter(function(t){return t.status==="open";}).length,confirmedClosed:classA.length,reconciled:classD.length,noEvidence:noEvidence.length,needCheck:ambiguous.length}};
 }
+// Freshness helpers (pure). Missing/invalid timestamps are stale-safe, NEVER treated as fresh (§7/§8).
+function _reconTsKey(v){if(!v)return -Infinity;var t=Date.parse(v);return isNaN(t)?-Infinity:t;}
+function _reconReportStale(meta,nowMs){var g=meta&&meta.generatedAt?Date.parse(meta.generatedAt):NaN;if(isNaN(g))return true;return (nowMs-g)>86400000;}
+function _reconSnapshotFresh(rows,nowMs){var m=-Infinity;(rows||[]).forEach(function(r){var t=Math.max(_reconTsKey(r.updated_at),_reconTsKey(r.created_at));if(t>m)m=t;});return {fresh:isFinite(m)&&(nowMs-m)<=86400000,at:isFinite(m)?m:null};}
+// ── </RECON-CORE> ────────────────────────────────────────────────────────────────────────────
 
 function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onProductsChange,onBalanceSet,onTransactions}){
   const[step,setStep]=useState("upload");
@@ -7113,12 +7197,18 @@ function Mt5PositionsReview({authUid,trades,showToast}){
 
   if(pendOpen.length+pendClosed.length===0)return null;   // success + nothing pending → render nothing (no empty nag)
 
+  // Snapshot freshness (§7): staging is a SYNC SNAPSHOT, not live truth. Freshness = newest write
+  // (updated_at/created_at), NEVER mt5_time (broker clock). Stale snapshot must not read as "currently open".
+  const snap=_reconSnapshotFresh(rows,new Date().getTime());
+  const stagingFresh=snap.fresh;
+  const stagingWhen=snap.at!=null?fmtDate(new Date(snap.at)):"—";
+
   return(
     <div className="mb-5 space-y-3 fade-in">
       {pendOpen.length>0&&(
         <div>
-          <div className="text-sm font-semibold text-txt flex items-center"><span className="w-2 h-2 rounded-full bg-green inline-block mr-1.5"/>กำลังเปิดอยู่ใน MT5 <span className="text-muted font-normal ml-1">({pendOpen.length})</span></div>
-          <div className="text-[11px] text-muted mb-2">ยังไม่ลง Journal — ยังไม่นับรวมในพอร์ต</div>
+          <div className="text-sm font-semibold text-txt flex items-center"><span className={`w-2 h-2 rounded-full inline-block mr-1.5 ${stagingFresh?"bg-green":"bg-yellow"}`}/>{stagingFresh?"กำลังเปิดอยู่ใน MT5":"เปิดอยู่ตอน sync ครั้งล่าสุด"} <span className="text-muted font-normal ml-1">({pendOpen.length})</span></div>
+          <div className="text-[11px] text-muted mb-2">{stagingFresh?"ยังไม่ลง Journal — ยังไม่นับรวมในพอร์ต":`ข้อมูลเมื่อ ${stagingWhen} อาจไม่เป็นปัจจุบัน · Refresh หน้านี้ไม่ได้ sync จาก MT5`}</div>
           <div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">{pendOpen.map(r=><Mt5ReviewCard key={_mt5RowKey(r)} r={r} closed={false} onDismiss={()=>dismissRow(r)}/>)}</div>
         </div>
       )}
@@ -7138,11 +7228,22 @@ function Mt5PositionsReview({authUid,trades,showToast}){
   );
 }
 
-// ─── MT5 report reconciliation UI (R0.5A) — READ-ONLY preview, no write actions ─────────────
+// ─── MT5 report reconciliation UI (R0.5A hardened) — READ-ONLY preview, no write actions ─────
 function _reconSym(products,pid,fallback){var p=resolveProduct(products,pid);return (p&&(p.currentContract||p.baseSymbol))||fallback||pid||"—";}
 function _reconDigits(s){return String(s||"").replace(/\D/g,"");}
 function _reconErrMsg(code){return code==="no_sections"?"ไฟล์นี้ไม่มีส่วน Positions/Open Positions — อาจไม่ใช่รายงาน MT5":code==="read_failed"?"อ่านไฟล์ไม่สำเร็จ":"อ่านรายงานไม่สำเร็จ — ต้องเป็นไฟล์ .xlsx จาก MT5";}
-
+// User-facing confidence copy — internal enum stays in the model; this maps it to plain Thai (§12).
+function _reconConfTh(conf,n){
+  if(conf==="EXACT_ID_MATCH")return "ตรงด้วย MT5 position ID";
+  if(conf==="EXACT_FIELD_MATCH")return "ข้อมูลตรงกัน: สัญลักษณ์ · ทิศทาง · จำนวน · ราคาเข้า — ยังต้องยืนยันก่อนแก้ Journal";
+  if(conf==="EXACT_AGGREGATE_MATCH")return "ตรงแบบรวม "+n+" ขาใน MT5 — ยังต้องยืนยันก่อนแก้ Journal";
+  return conf||"—";
+}
+function _reconReasonTh(reason){
+  if(reason==="CONFLICT")return "ขา MT5 เดียวกันถูกอ้างโดยหลายรายการ — ต้องตรวจเอง";
+  if(reason==="SEARCH_LIMIT")return "ชุดความเป็นไปได้เยอะเกินกว่าจะสรุปอัตโนมัติ — ต้องตรวจเอง";
+  return "พบมากกว่าหนึ่งชุดที่เป็นไปได้ — ต้องตรวจเอง";
+}
 // Class A discrepancy / Class D reconciled row. Tap to reveal evidence. NO write/dismiss action.
 function ReconMatchRow({entry,products,red}){
   const[open,setOpen]=useState(false);
@@ -7162,7 +7263,7 @@ function ReconMatchRow({entry,products,red}){
       </button>
       {open&&(
         <div className="px-3 pb-2.5 text-[11px] text-muted space-y-0.5">
-          <div className="pt-1.5 border-t border-border">ความมั่นใจ: <span className="text-txt">{entry.confidence}</span> · ต้องยืนยันก่อนแก้ Journal</div>
+          <div className="pt-1.5 border-t border-border text-txt">{_reconConfTh(entry.confidence,legs.length)}</div>
           <div>กำไรตามโบรก: <span className={entry.brokerProfit>=0?"text-green":"text-red"}>{fmtNum(entry.brokerProfit,0)}</span> · ค่าคอม: {fmtNum(entry.commission,0)}</div>
           <div>เข้าเฉลี่ย {fmtNum(entry.wEntry,2)} · ออกเฉลี่ย {fmtNum(entry.wExit,2)}</div>
           <div className="break-all">ขา MT5: {legs.map(p=>p.mt5PositionId).join(", ")}</div>
@@ -7192,43 +7293,66 @@ function ReconOpenRow({p}){
 function ReconClosedRow({p}){
   return(<div className="px-3 py-2 text-xs text-muted flex items-center justify-between gap-2"><span className="flex items-center gap-1.5"><span className="text-txt">{p.contractCode}</span><DirBadge dir={p.direction}/><span>{(+p.contracts)} สัญญา</span></span><span className="whitespace-nowrap">ปิด {p.exitDateTime?fmtDate(p.exitDateTime):"—"} @ {fmtNum(p.exitPrice,2)}</span></div>);
 }
+// No-close-evidence row (Journal-open, this report shows no matching close). NOT a claim it is still open.
+function ReconNoEvidenceRow({en,products}){
+  const jt=en.journal;
+  return(<div className="px-3 py-2 text-xs text-muted flex items-center justify-between gap-2"><span className="flex items-center gap-1.5"><span className="text-txt">{_reconSym(products,jt.productId,jt.contractCode)}</span><DirBadge dir={jt.direction}/><span>{jt.contracts} สัญญา</span></span><span className="whitespace-nowrap">เปิด @ {fmtNum(jt.entryPrice,2)}</span></div>);
+}
 
 // Positions surface: pick an MT5 report, parse locally, reconcile against loaded Journal trades.
 // READ-ONLY — no Supabase, no Journal/products/portfolio writes, no import commit, nothing persisted.
+// Gated behind the existing tj_mt5_inbox feature flag (§13).
 function Mt5ReportRecon({trades,products,authUid}){
+  const[on]=useState(()=>ls.get(MT5_INBOX_FLAG,false));
   const fileRef=useRef(null);
   const[loading,setLoading]=useState(false);
   const[report,setReport]=useState(null);
   const[recon,setRecon]=useState(null);
   const[err,setErr]=useState(null);
-  const[expectedAccount,setExpectedAccount]=useState(null);
+  const[expectedAccounts,setExpectedAccounts]=useState(null);   // null=loading; []=none known; [..]=known set (digits)
+  const[acctConfirmed,setAcctConfirmed]=useState(false);        // React memory only — NOT persisted (§11)
   const[showC,setShowC]=useState(false);
+  const[showOOS,setShowOOS]=useState(false);
   const[showD,setShowD]=useState(false);
   const[showAmb,setShowAmb]=useState(false);
+  const[showNoEv,setShowNoEv]=useState(false);
 
-  useEffect(()=>{   // read-only: derive an expected account from staging (if any) for the mismatch guard
+  useEffect(()=>{   // read-only: build the expected-account SET from staging (§11). No writes.
     let alive=true;
-    if(authUid){db.loadMt5Staging(authUid).then(res=>{if(!alive)return;const rows=(res&&res.ok&&res.rows)||[];const acct=rows.map(r=>r.source_account).find(a=>a!=null&&a!=="");if(acct)setExpectedAccount(String(acct));});}
+    if(authUid){db.loadMt5Staging(authUid).then(res=>{if(!alive)return;const rows=(res&&res.ok&&res.rows)||[];const set=[...new Set(rows.map(r=>_reconDigits(r.source_account)).filter(Boolean))];setExpectedAccounts(set);});}
+    else setExpectedAccounts([]);
     return()=>{alive=false;};
   },[authUid]);
+
+  if(!on)return null;   // feature-flag gate (§13)
 
   const onFile=(e)=>{
     const file=e.target.files&&e.target.files[0];
     if(fileRef.current)fileRef.current.value="";   // allow re-selecting the same file; never persisted
     if(!file)return;
-    setLoading(true);setErr(null);setReport(null);setRecon(null);
+    setLoading(true);setErr(null);setReport(null);setRecon(null);setAcctConfirmed(false);
     parseMt5ReportForReconciliation(file,products).then(res=>{
       setLoading(false);
       if(!res||!res.ok){setErr((res&&res.error)||"parse_failed");return;}
       setReport(res);
-      setRecon(reconcileMt5Report(trades,res));   // pure, in-memory
+      setRecon(reconcileMt5Report(trades,res,products));   // pure, in-memory
     });
   };
-  const reset=()=>{setReport(null);setRecon(null);setErr(null);setShowC(false);setShowD(false);setShowAmb(false);};   // clears in-memory preview ONLY
+  const reset=()=>{setReport(null);setRecon(null);setErr(null);setAcctConfirmed(false);setShowC(false);setShowOOS(false);setShowD(false);setShowAmb(false);setShowNoEv(false);};   // in-memory ONLY
 
-  const acctMismatch=report&&report.meta&&report.meta.account&&expectedAccount&&_reconDigits(report.meta.account)!==_reconDigits(expectedAccount);
-  const genAt=report&&report.meta&&report.meta.generatedAt?new Date(report.meta.generatedAt):null;
-  const reportStale=genAt?((new Date().getTime()-genAt.getTime())>86400000):false;
+  const reportAcct=report&&report.meta&&report.meta.account?_reconDigits(report.meta.account):null;
+  const acctKnown=Array.isArray(expectedAccounts)&&expectedAccounts.length>0;
+  const acctMismatch=acctKnown&&reportAcct&&expectedAccounts.indexOf(reportAcct)<0;
+  const acctNeedsConfirm=report&&reportAcct&&!acctKnown&&!acctConfirmed;   // no known account → explicit confirm first
+  const showRecon=report&&recon&&!acctMismatch&&(acctKnown||acctConfirmed);
+  // Report freshness (§8): missing/invalid generatedAt is stale-safe, NOT fresh.
+  const genValid=!!(report&&report.meta&&report.meta.generatedAt&&!isNaN(Date.parse(report.meta.generatedAt)));
+  const reportStale=report?_reconReportStale(report.meta,new Date().getTime()):false;
+  // Coverage window across parsed events (§8).
+  let covFrom=null,covTo=null;
+  if(report){const ts=[];(report.closed||[]).forEach(p=>{[p.openDateTime,p.exitDateTime].forEach(v=>{const t=v?Date.parse(v):NaN;if(!isNaN(t))ts.push(t);});});(report.open||[]).forEach(p=>{const t=p.openDateTime?Date.parse(p.openDateTime):NaN;if(!isNaN(t))ts.push(t);});if(ts.length){covFrom=fmtDate(new Date(Math.min(...ts)));covTo=fmtDate(new Date(Math.max(...ts)));}}
+  const partial=report&&(!report.hasPositionsSection||!report.hasOpenSection);
+  const s=recon&&recon.summary;
 
   return(
     <div className="mb-5">
@@ -7243,16 +7367,30 @@ function Mt5ReportRecon({trades,products,authUid}){
         <div className="space-y-3">
           <div className="bg-card border border-border rounded-xl px-3 py-2.5 text-[11px] text-muted">
             <div className="text-txt font-semibold text-sm mb-0.5">รายงาน MT5{report.meta.account?`: บัญชี ${report.meta.account}`:""}</div>
-            <div>{report.meta.generatedRaw?`ข้อมูลถึง ${report.meta.generatedRaw}`:"ไม่พบเวลาออกรายงาน"}</div>
+            <div>{genValid?`ออกรายงานเมื่อ ${report.meta.generatedRaw}`:"รายงานไม่ระบุเวลา — ยืนยันสถานะปัจจุบันไม่ได้"}</div>
+            {covFrom&&<div>ครอบคลุม {covFrom}–{covTo}</div>}
             <div>อ่านไฟล์ในเครื่องเท่านั้น — ไม่ได้อัปโหลด</div>
+            {partial&&<div className="text-yellow mt-1">ไฟล์นี้ไม่มีส่วน {report.hasPositionsSection?"Open Positions":"Positions"} — ตรวจได้บางส่วน</div>}
             <button onClick={reset} className="underline mt-1">ล้างรายงาน</button>
           </div>
           {acctMismatch?(
             <div className="bg-red/10 border border-red/30 rounded-xl px-3 py-2.5 text-xs text-red">
-              เลขบัญชีในรายงาน ({report.meta.account}) ไม่ตรงกับบัญชีที่คาดไว้ ({expectedAccount}) — ไม่จับคู่รายการ ตรวจสอบไฟล์ก่อน
+              เลขบัญชีในรายงาน ({report.meta.account}) ไม่ตรงกับบัญชีที่รู้จัก ({expectedAccounts.join(", ")}) — ไม่จับคู่รายการ ตรวจสอบไฟล์ก่อน
             </div>
-          ):recon&&(
+          ):acctNeedsConfirm?(
+            <div className="bg-card border border-yellow/30 rounded-xl px-3 py-2.5 text-xs text-muted">
+              <div className="text-txt mb-1.5">รายงานนี้เป็นบัญชี {report.meta.account||"—"} ของพี่ใช่ไหม?</div>
+              <div className="text-[11px] mb-2">ยังไม่รู้จักบัญชี MT5 จากที่นี่ — ยืนยันก่อนถึงจะจับคู่ (เก็บในหน่วยความจำเท่านั้น ไม่ได้บันทึก)</div>
+              <button type="button" onClick={()=>setAcctConfirmed(true)} className={clsBtn("ghost","sm")}>ใช่ บัญชีของผม</button>
+            </div>
+          ):showRecon&&(
             <>
+              {s&&(
+                <div className="bg-card border border-border rounded-xl px-3 py-2 text-[11px] text-muted space-y-0.5">
+                  <div>ตรวจรายการเปิดใน Journal {s.opensExamined} รายการ</div>
+                  <div>MT5 ยืนยันว่าปิดแล้ว {s.confirmedClosed} · ตรงกันแล้ว {s.reconciled} · ไม่พบหลักฐานปิด {s.noEvidence} · ต้องตรวจเอง {s.needCheck}</div>
+                </div>
+              )}
               {recon.classA.length>0&&(
                 <div>
                   <div className="text-sm font-semibold text-red">Journal ไม่ตรงกับ MT5 <span className="font-normal text-muted">({recon.classA.length})</span></div>
@@ -7260,23 +7398,35 @@ function Mt5ReportRecon({trades,products,authUid}){
                   <div className="bg-card border border-red/30 rounded-xl divide-y divide-border overflow-hidden">{recon.classA.map((en,i)=><ReconMatchRow key={i} entry={en} products={products} red={true}/>)}</div>
                 </div>
               )}
+              {recon.noEvidence.length>0&&(
+                <div>
+                  <button type="button" onClick={()=>setShowNoEv(s=>!s)} className="text-sm font-semibold text-txt flex items-center gap-1.5">เปิดใน Journal — ไม่พบหลักฐานปิดในรายงานนี้ <span className="text-muted font-normal">({recon.noEvidence.length})</span><span className="text-muted text-xs font-normal">{showNoEv?"ซ่อน ▴":"แสดง ▾"}</span></button>
+                  {showNoEv&&<><div className="text-[11px] text-muted mt-1 mb-2">รายงานนี้ไม่มีหลักฐานปิด — ไม่ได้แปลว่ายังเปิดอยู่จริง ต้องดูรายงานที่ครอบคลุมช่วงล่าสุด</div><div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">{recon.noEvidence.map((en,i)=><ReconNoEvidenceRow key={i} en={en} products={products}/>)}</div></>}
+                </div>
+              )}
               {recon.classB.length>0&&(
                 <div>
                   <div className="text-sm font-semibold text-txt">{reportStale?"เปิดอยู่ตอนออกรายงาน":"เปิดใน MT5 แต่ยังไม่มีใน Journal"} <span className="font-normal text-muted">({recon.classB.length})</span></div>
-                  {reportStale&&<div className="text-[11px] text-muted mb-1">ข้อมูลเมื่อ {report.meta.generatedRaw||"—"} อาจไม่เป็นปัจจุบัน</div>}
+                  {reportStale&&<div className="text-[11px] text-muted mb-1">{genValid?`ข้อมูลเมื่อ ${report.meta.generatedRaw} อาจไม่เป็นปัจจุบัน`:"รายงานไม่ระบุเวลา — ยืนยันสถานะปัจจุบันไม่ได้"}</div>}
                   <div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden mt-1">{recon.classB.map((p,i)=><ReconOpenRow key={i} p={p}/>)}</div>
                 </div>
               )}
               {recon.ambiguous.length>0&&(
                 <div>
                   <button type="button" onClick={()=>setShowAmb(s=>!s)} className="text-sm font-semibold text-yellow flex items-center gap-1.5">ต้องตรวจเอง <span className="text-muted font-normal">({recon.ambiguous.length})</span><span className="text-muted text-xs font-normal">{showAmb?"ซ่อน ▴":"แสดง ▾"}</span></button>
-                  {showAmb&&<div className="bg-card border border-yellow/30 rounded-xl px-3 py-2 mt-2 text-[11px] text-muted space-y-1">{recon.ambiguous.map((a,i)=><div key={i}>{_reconSym(products,a.journal.productId,"")} {a.journal.direction} {a.journal.contracts}@{fmtNum(a.journal.entryPrice,2)} — มีหลายชุดที่เป็นไปได้ ({a.candidates.length} ขา)</div>)}</div>}
+                  {showAmb&&<div className="bg-card border border-yellow/30 rounded-xl px-3 py-2 mt-2 text-[11px] text-muted space-y-1">{recon.ambiguous.map((a,i)=><div key={i}>{_reconSym(products,a.journal.productId,a.journal.contractCode)} {a.journal.direction} {a.journal.contracts}@{fmtNum(a.journal.entryPrice,2)} — {_reconReasonTh(a.reason)}</div>)}</div>}
                 </div>
               )}
               {recon.classC.length>0&&(
                 <div>
-                  <button type="button" onClick={()=>setShowC(s=>!s)} className="text-sm font-semibold text-txt flex items-center gap-1.5">ปิดแล้ว แต่ยังไม่เคยบันทึก <span className="text-muted font-normal">({recon.classC.length})</span><span className="text-muted text-xs font-normal">{showC?"ซ่อน ▴":"แสดง ▾"}</span></button>
+                  <button type="button" onClick={()=>setShowC(s=>!s)} className="text-sm font-semibold text-txt flex items-center gap-1.5">ปิดแล้ว แต่ยังไม่เคยบันทึก — หลังเริ่มใช้ Journal <span className="text-muted font-normal">({recon.classC.length})</span><span className="text-muted text-xs font-normal">{showC?"ซ่อน ▴":"แสดง ▾"}</span></button>
                   {showC&&<div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden mt-2">{recon.classC.slice(0,100).map((p,i)=><ReconClosedRow key={i} p={p}/>)}{recon.classC.length>100&&<div className="px-3 py-2 text-[11px] text-muted">… และอีก {recon.classC.length-100} รายการ</div>}</div>}
+                </div>
+              )}
+              {recon.outOfScope.length>0&&(
+                <div>
+                  <button type="button" onClick={()=>setShowOOS(s=>!s)} className="text-sm font-semibold text-muted flex items-center gap-1.5">ประวัติเก่ากว่า Journal / ยังไม่ได้กำหนดขอบเขต <span className="font-normal">({recon.outOfScope.length})</span><span className="text-xs font-normal">{showOOS?"ซ่อน ▴":"แสดง ▾"}</span></button>
+                  {showOOS&&<><div className="text-[11px] text-muted mt-1 mb-2">เก่ากว่ารายการแรกใน Journal — ยังไม่ถือว่าเป็นรายการที่ต้องบันทึก</div><div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">{recon.outOfScope.slice(0,100).map((p,i)=><ReconClosedRow key={i} p={p}/>)}{recon.outOfScope.length>100&&<div className="px-3 py-2 text-[11px] text-muted">… และอีก {recon.outOfScope.length-100} รายการ</div>}</div></>}
                 </div>
               )}
               {recon.classD.length>0&&(

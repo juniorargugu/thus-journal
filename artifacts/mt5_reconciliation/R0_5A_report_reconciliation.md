@@ -72,6 +72,56 @@ vs the 5-lot @4156, both closed 2026-07-08 21:37).
 Leftover historical closes → Class C (177). Ambiguous: 0. Validation was run in node with the
 exact in-app pure functions; the in-app path additionally passed a full Babel compile.
 
+## Hardening pass (2026-08-01) — correctness fixes from adversarial review
+
+The classifier was rebuilt as a self-contained, **fail-closed** core bracketed by
+`// ── <RECON-CORE>` / `// ── </RECON-CORE>` markers and exercised by a committed deterministic
+harness (`ops/mt5_reconciliation/run_fixtures.mjs`, 34 assertions, PASS). Fixes:
+
+- **Product-key / contract-code matching (§1).** Report rows resolve to base ids (`gold`, `s50`)
+  while Journal rows use `gold_next`/`s50_next` — the old `productId===productId` check silently
+  produced **zero** candidates. New key order: stored `mt5PositionId` (`EXACT_ID_MATCH`) →
+  exact normalized **contract code** (`GOU26===GOU26`) → base-product fallback **only** when a
+  contract code is absent (`_reconBaseId` normalizes `_next`). Two present-but-different codes are
+  never folded; different-size instruments (SSF csize 1000 vs stock csize 1) are blocked
+  (`_reconSizeCompatible`).
+- **Order independence (§3).** Two-pass, **no greedy consumption**: Pass 1 computes candidate
+  leg-sets without consuming; Pass 2 rejects any leg claimed by >1 uniquely-matched trade
+  (`CONFLICT`). Reversing Journal or report order yields identical output (fixtures F6–F8).
+- **Fail-closed caps (§4).** Pool > `_RECON_POOL_CAP`, combo cap, and **subset-size** exhaustion
+  all → `SEARCH_LIMIT` AMBIGUOUS — never a silent unique pick or silent "no evidence" (F9–F10).
+- **Decimal volumes (§5).** `_reconVolEq` uses an epsilon (`0.1+0.2==0.3` matches; nearby-unequal
+  does not); TFEX integers unchanged (F11).
+- **No-evidence visibility (§6).** Journal-opens with no matching close surface in a `noEvidence`
+  group ("ไม่พบหลักฐานปิดในรายงานนี้" — explicitly **not** "ยังเปิดอยู่จริง"), plus an audit summary
+  strip (opens examined / confirmed-closed / reconciled / no-evidence / need-check).
+- **Freshness truth (§7/§8).** Pure helpers `_reconReportStale` / `_reconSnapshotFresh`
+  (missing/invalid timestamp = **stale-safe**, computed from `updated_at`/`created_at`, never
+  `mt5_time`). Staging open group flips to "เปิดอยู่ตอน sync ครั้งล่าสุด" + amber dot when the
+  snapshot is >24h old; Class B header never uses live present-tense wording on a stale report.
+  Report card shows coverage window + a partial-evidence warning when a section is missing.
+- **Class-C scope (§9).** Unmatched closes are split: after the earliest Journal date →
+  "ปิดแล้ว แต่ยังไม่เคยบันทึก — หลังเริ่มใช้ Journal"; older / no-Journal-date →
+  "ประวัติเก่ากว่า Journal / ยังไม่ได้กำหนดขอบเขต" (OUT_OF_SCOPE, not asserted debt).
+- **Class-B suppression (§10).** A report open is hidden only when a Journal **open** actually
+  matches (id, or exact code/base + equal volume) — not merely same product/direction. DELTAU26
+  stays Class B, individually listed, product-scope decision, no create action.
+- **Account authority (§11).** Expected-account **set** from distinct staging accounts; report
+  account must be a member or classification is blocked. With no known account, an in-session
+  React-only confirm ("รายงานนี้เป็นบัญชี … ของพี่ใช่ไหม") gates classification (never persisted).
+- **Confidence copy (§12).** Internal enums stay in the model; UI shows plain Thai
+  (`_reconConfTh` / `_reconReasonTh`). S50U26 is `EXACT_FIELD_MATCH`, never ID-confirmed.
+- **Flag gate (§13).** The whole reconciliation entry point is behind the existing `tj_mt5_inbox`
+  user flag.
+
+**Known residual (documented, not silently dropped):** report-evidence → staging cross-suppression
+(hiding a staged-open row that the loaded report proves closed) is **not** wired — the two Positions
+surfaces read independently, and lifting that state is a separate change. The Class A discrepancy
+list already surfaces the same closed-vs-open truth for Journal-open trades. Full parser + **live
+Journal** end-to-end (A=2/D=1/B=3) needs an authenticated browser session; the committed harness
+proves the classifier against production-shaped fixtures, and the real workbook's Open Positions
+section was confirmed = DELTAU26×3 (→ Class B=3).
+
 ## Not in R0.5A (gated, separate `/design`)
 
 No write actions rendered (no "ยืนยันปิด"/"เพิ่มเข้า Journal"/materialize/writer). Class A cannot
