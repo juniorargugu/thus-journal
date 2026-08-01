@@ -5260,6 +5260,15 @@ function _reconContractLabel(jt,legs,products){
 }
 // A loaded report is the active evidence surface → the stale staging list is hidden while it is loaded (§8).
 function _reconShowStagingList(hasReport){return !hasReport;}
+// Group Class-B (report opens) into ONE task label per contract+direction: {code,dir,count,vol}. Used by
+// the secondary task card and its summary — makes "DELTAU26 · Long · 3 รายการ · รวม 6 สัญญา" one object (§4).
+function _reconGroupOpens(list){
+  var g={},out=[];
+  (list||[]).forEach(function(p){var code=p.contractCode||"—";var k=code+"·"+p.direction;if(!g[k]){g[k]={code:code,dir:p.direction,count:0,vol:0};out.push(g[k]);}g[k].count++;g[k].vol+=(+p.contracts||0);});
+  return out;
+}
+// Single-open accordion transition (§5): clicking the open row closes it; clicking another switches. Pure.
+function _reconAccordionNext(current,key){return current===key?null:key;}
 // ── </RECON-CORE> ────────────────────────────────────────────────────────────────────────────
 
 function ExcelImportModal({products,existingTrades,balance,onImport,onCancel,onProductsChange,onBalanceSet,onTransactions}){
@@ -7340,16 +7349,28 @@ function ReconPreviewRow({entry,products}){
   const lastClose=legs.reduce((m,p)=>{const t=p.exitDateTime?new Date(p.exitDateTime).getTime():-Infinity;return t>m?t:m;},-Infinity);
   return(<div className="flex items-center justify-between gap-2 py-1"><span className="flex items-center gap-2 min-w-0"><span className="font-medium text-txt text-sm">{label}</span><DirBadge dir={jt.direction}/><span className="text-xs text-muted whitespace-nowrap">{jt.contracts} สัญญา</span></span><span className="text-xs text-muted whitespace-nowrap">MT5 ปิด {isFinite(lastClose)?_reconThaiDate(new Date(lastClose)):"—"}</span></div>);
 }
-// Grouped Class-B summary (§4): "{code} · {dir} — {n} รายการ · รวม {vol} สัญญา". No IDs, no mapping terms.
+// Grouped Class-B summary (§4): "{code} · {dir} · {n} รายการ · รวม {vol} สัญญา". No IDs, no mapping terms.
 function ReconBGroupSummary({list}){
-  const g={};(list||[]).forEach(p=>{const code=p.contractCode||"—";const k=code+"·"+p.direction;g[k]=g[k]||{code,dir:p.direction,n:0,vol:0};g[k].n++;g[k].vol+=(+p.contracts||0);});
-  return(<div className="text-xs text-muted space-y-0.5">{Object.values(g).map((x,i)=><div key={i}>{x.code} · {x.dir} — {x.n} รายการ · รวม {x.vol} สัญญา</div>)}</div>);
+  return(<div className="text-xs text-muted space-y-0.5">{_reconGroupOpens(list).map((x,i)=><div key={i}>{x.code} · {x.dir} · {x.count} รายการ · รวม {x.vol} สัญญา</div>)}</div>);
 }
 
 // Positions surface: pick an MT5 report, parse locally, reconcile against loaded Journal trades.
 // READ-ONLY — no Supabase, no Journal/products/portfolio writes, no import commit, nothing persisted.
 // Gated behind the existing tj_mt5_inbox feature flag (§13).
-// Action-first task inbox (§1–§10). Answers in 3 seconds: what needs attention, why, how many,
+// One accordion row: title + subtitle/count on the left, chevron on the right. Details render only when
+// open. Rows share one container with hairline dividers; only one is open at a time (controlled).
+function ReconDetailRow({title,subtitle,open,onToggle,children}){
+  return(
+    <div>
+      <button type="button" onClick={onToggle} className="w-full flex items-center justify-between gap-3 px-3.5 py-3 text-left hover:bg-input/20 transition">
+        <span className="min-w-0"><span className="text-sm text-txt">{title}</span>{subtitle&&<span className="block text-xs text-muted truncate mt-0.5">{subtitle}</span>}</span>
+        <span className="text-muted text-sm shrink-0">{open?"▴":"›"}</span>
+      </button>
+      {open&&<div className="px-3.5 pb-3 -mt-0.5 text-[11px] text-muted">{children}</div>}
+    </div>
+  );
+}
+// Action-first task inbox (§1–§14). Answers in 3 seconds: what needs attention, why, how many,
 // which button next. Owns the report in memory; renders the stale staging list ONLY when no report is
 // loaded. READ-ONLY throughout — no writes, no callbacks, no persistence. Behind tj_mt5_inbox (§11).
 function Mt5ReportRecon({trades,products,authUid,showToast}){
@@ -7362,14 +7383,13 @@ function Mt5ReportRecon({trades,products,authUid,showToast}){
   const[expectedAccounts,setExpectedAccounts]=useState(null);   // null=loading; []=none known; [..]=known set (digits)
   const[stagingAt,setStagingAt]=useState(null);                 // newest staging write (for the "ใช้รายงานล่าสุดแทน" note)
   const[acctConfirmed,setAcctConfirmed]=useState(false);        // React memory only — NOT persisted (§11)
-  const[showA,setShowA]=useState(false);   // full Class-A evidence (CTA-driven)
-  const[showB,setShowB]=useState(false);   // Class-B list
-  const[showAmb,setShowAmb]=useState(false);
-  const[showC,setShowC]=useState(false);
-  const[showOOS,setShowOOS]=useState(false);
-  const[showD,setShowD]=useState(false);
-  const[showNoEv,setShowNoEv]=useState(false);
-  const[showDetails,setShowDetails]=useState(false);
+  const[showA,setShowA]=useState(false);   // full Class-A evidence (hero CTA)
+  const[showB,setShowB]=useState(false);   // Class-B list (hero/secondary CTA)
+  const[showAmb,setShowAmb]=useState(false);   // ambiguous list (hero CTA)
+  const[showC,setShowC]=useState(false);   // Class-C list (hero CTA)
+  const[showD,setShowD]=useState(false);   // Class-D rows (nested "ดู")
+  const[showDetails,setShowDetails]=useState(false);   // opens the "รายละเอียดอื่น" accordion menu
+  const[detailKey,setDetailKey]=useState(null);        // one-open-at-a-time accordion row (§5)
 
   useEffect(()=>{   // read-only: expected-account SET + staging snapshot time from staging (§8/§11). No writes.
     let alive=true;
@@ -7386,7 +7406,7 @@ function Mt5ReportRecon({trades,products,authUid,showToast}){
     if(fileRef.current)fileRef.current.value="";   // allow re-selecting the same file; never persisted
     if(!file)return;
     setLoading(true);setErr(null);setReport(null);setRecon(null);setAcctConfirmed(false);
-    setShowA(false);setShowB(false);setShowAmb(false);setShowC(false);setShowOOS(false);setShowD(false);setShowNoEv(false);setShowDetails(false);
+    setShowA(false);setShowB(false);setShowAmb(false);setShowC(false);setShowD(false);setShowDetails(false);setDetailKey(null);
     parseMt5ReportForReconciliation(file,products).then(res=>{
       setLoading(false);
       if(!res||!res.ok){setErr((res&&res.error)||"parse_failed");return;}
@@ -7394,7 +7414,7 @@ function Mt5ReportRecon({trades,products,authUid,showToast}){
       setRecon(reconcileMt5Report(trades,res,products));   // pure, in-memory
     });
   };
-  const reset=()=>{setReport(null);setRecon(null);setErr(null);setAcctConfirmed(false);setShowA(false);setShowB(false);setShowAmb(false);setShowC(false);setShowOOS(false);setShowD(false);setShowNoEv(false);setShowDetails(false);};   // in-memory ONLY; restores staging UI
+  const reset=()=>{setReport(null);setRecon(null);setErr(null);setAcctConfirmed(false);setShowA(false);setShowB(false);setShowAmb(false);setShowC(false);setShowD(false);setShowDetails(false);setDetailKey(null);};   // in-memory ONLY; restores staging UI
 
   const reportAcct=report&&report.meta&&report.meta.account?_reconDigits(report.meta.account):null;
   const acctKnown=Array.isArray(expectedAccounts)&&expectedAccounts.length>0;
@@ -7408,7 +7428,6 @@ function Mt5ReportRecon({trades,products,authUid,showToast}){
   const partial=report&&(!report.hasPositionsSection||!report.hasOpenSection);
   const hero=showRecon?_reconHeroState(recon):{state:"none",n:0};
   const oa=showRecon?_reconOpenAudit(recon):null;         // current-open audit (§7)
-  const rs=showRecon?_reconReportSummary(recon):null;     // whole-report summary (§7)
   const genQuiet=genValid?report&&report.meta.generatedRaw:"ไม่ระบุเวลา";
 
   // Reusable list containers ------------------------------------------------------------------
@@ -7416,28 +7435,34 @@ function Mt5ReportRecon({trades,products,authUid,showToast}){
   const classBList=(<div className="mt-2 bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">{recon&&recon.classB.map((p,i)=><ReconOpenRow key={i} p={p}/>)}</div>);
   const ambList=(<div className="mt-2 bg-card border border-yellow/30 rounded-xl px-3 py-2 text-[11px] text-muted space-y-1">{recon&&recon.ambiguous.map((a,i)=><div key={i}>{_reconContractLabel(a.journal,null,products)} {a.journal.direction} {a.journal.contracts}@{fmtNum(a.journal.entryPrice,2)} — {_reconReasonTh(a.reason)}</div>)}</div>);
   const classCList=(<div className="mt-2 bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">{recon&&recon.classC.slice(0,100).map((p,i)=><ReconClosedRow key={i} p={p}/>)}{recon&&recon.classC.length>100&&<div className="px-3 py-2 text-[11px] text-muted">… และอีก {recon.classC.length-100} รายการ</div>}</div>);
+  const toggleDetail=(k)=>setDetailKey(v=>_reconAccordionNext(v,k));   // single-open accordion (§5)
+  // Short Thai provenance for the "ข้อมูลรายงาน" subtitle, e.g. "31 ก.ค. 21:44".
+  const genDate=genValid?new Date(report.meta.generatedAt):null;
+  const genShort=genValid?`${_reconThaiDate(genDate)} ${String(genDate.getHours()).padStart(2,"0")}:${String(genDate.getMinutes()).padStart(2,"0")}`:"ไม่ระบุเวลา";
+  const backlogCount=recon?((hero.state==="classC"?0:recon.classC.length)+recon.outOfScope.length):0;   // Class C shown in hero isn't duplicated
+  const bText=recon?_reconGroupOpens(recon.classB).map(x=>`${x.code} · ${x.dir} · ${x.count} รายการ · รวม ${x.vol} สัญญา`).join(" / "):"";
 
-  // Secondary Class-B task line (§4) — only when Class B is NOT the hero.
+  // Secondary Class-B task CARD (§4) — one compact object; only when Class B is NOT the hero.
   const secondaryB=(recon&&recon.classB.length>0&&(hero.state==="classA"||hero.state==="ambiguous"))?(
-    <div>
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm text-txt">มีอีก {recon.classB.length} รายการใน MT5 ที่ยังไม่มีใน Journal</span>
-        <button type="button" onClick={()=>setShowB(v=>!v)} className={clsBtn("ghost","sm")}>ดูรายการ</button>
-      </div>
-      {showB&&<div className="mt-2"><ReconBGroupSummary list={recon.classB}/>{classBList}<div className="text-[11px] text-muted mt-1">ยังไม่ได้เลือกว่าจะบันทึก product นี้ใน Journal หรือไม่</div></div>}
+    <div className="bg-card border border-border rounded-xl overflow-hidden">
+      <button type="button" onClick={()=>setShowB(v=>!v)} className="w-full flex items-center justify-between gap-3 px-3.5 py-3 text-left hover:bg-input/20 transition">
+        <span className="min-w-0 block"><span className="block text-sm text-txt">มี {recon.classB.length} รายการใน MT5 ที่ยังไม่มีใน Journal</span><span className="block text-xs text-muted truncate mt-0.5">{bText}</span></span>
+        <span className="text-muted text-sm shrink-0">{showB?"ซ่อน ▴":"ดู ›"}</span>
+      </button>
+      {showB&&<div className="px-3.5 pb-3">{classBList}<div className="text-[11px] text-muted mt-1">ยังไม่ได้เลือกว่าจะบันทึก product นี้ใน Journal หรือไม่</div></div>}
     </div>
   ):null;
 
   return(
-    <div className="mb-5">
+    <div className="mb-5 max-w-xl">
       <input ref={fileRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={onFile}/>
 
-      {/* STATE: no report — trigger + (stale-safe) staging list. Error state → yellow error hero. */}
+      {/* STATE: no report — trigger + (stale-safe) staging list. Error state → compact yellow hero. */}
       {!report&&(err?(
-        <div className="bg-card border border-yellow/30 rounded-2xl p-4">
+        <div className="bg-card border border-yellow/30 rounded-xl p-3.5">
           <div className="text-base font-semibold text-txt">อ่านรายงานไม่สำเร็จ</div>
           <div className="text-xs text-muted mt-1">{_reconErrMsg(err)}</div>
-          <button type="button" onClick={pick} className={clsBtn("yellow","sm")+" mt-3"}>เลือกไฟล์ใหม่</button>
+          <button type="button" onClick={pick} className={clsBtn("yellow","md")+" mt-3 w-full sm:w-auto"}>เลือกไฟล์ใหม่</button>
         </div>
       ):(
         <div>
@@ -7448,135 +7473,116 @@ function Mt5ReportRecon({trades,products,authUid,showToast}){
 
       {/* STATE: account mismatch (red, blocks classification) */}
       {report&&acctMismatch&&(
-        <div className="bg-card border border-red/30 rounded-2xl p-4">
+        <div className="bg-card border border-red/30 rounded-xl p-3.5">
           <div className="text-base font-bold text-txt">เลขบัญชีในรายงานไม่ตรง</div>
-          <div className="text-sm text-red mt-1">รายงาน: {report.meta.account||"—"}<br/>บัญชีที่รู้จัก: {expectedAccounts.join(", ")||"—"}</div>
-          <button type="button" onClick={pick} className={clsBtn("yellow","sm")+" mt-3"}>เลือกไฟล์ใหม่</button>
-          <button type="button" onClick={reset} className="text-xs text-muted underline ml-3">ล้างรายงาน</button>
+          <div className="text-sm text-red mt-1">รายงาน {report.meta.account||"—"} · บัญชีที่รู้จัก {expectedAccounts.join(", ")||"—"}</div>
+          <div className="mt-3 flex items-center gap-3"><button type="button" onClick={pick} className={clsBtn("yellow","md")+" w-full sm:w-auto"}>เลือกไฟล์ใหม่</button><button type="button" onClick={reset} className="text-xs text-muted underline">ล้างรายงาน</button></div>
         </div>
       )}
 
       {/* STATE: account needs confirm (no known account) */}
       {report&&!acctMismatch&&acctNeedsConfirm&&(
-        <div className="bg-card border border-yellow/30 rounded-2xl p-4">
+        <div className="bg-card border border-yellow/30 rounded-xl p-3.5">
           <div className="text-base font-semibold text-txt">รายงานนี้เป็นบัญชี {report.meta.account||"—"} ของพี่ใช่ไหม?</div>
           <div className="text-xs text-muted mt-1">ยังไม่รู้จักบัญชี MT5 จากที่นี่ — ยืนยันก่อนถึงจะจับคู่ (เก็บในหน่วยความจำเท่านั้น ไม่ได้บันทึก)</div>
-          <button type="button" onClick={()=>setAcctConfirmed(true)} className={clsBtn("yellow","sm")+" mt-3"}>ใช่ บัญชีของผม</button>
-          <button type="button" onClick={reset} className="text-xs text-muted underline ml-3">ล้างรายงาน</button>
+          <div className="mt-3 flex items-center gap-3"><button type="button" onClick={()=>setAcctConfirmed(true)} className={clsBtn("yellow","md")+" w-full sm:w-auto"}>ใช่ บัญชีของผม</button><button type="button" onClick={reset} className="text-xs text-muted underline">ล้างรายงาน</button></div>
         </div>
       )}
 
-      {/* STATE: reconciliation — action-first hero + preview + secondary + one disclosure */}
+      {/* STATE: reconciliation — compact task card + one accordion menu (§1–§10) */}
       {showRecon&&(
         <div className="space-y-4">
 
           {hero.state==="classA"&&(
-            <div className="bg-card border border-red/30 rounded-2xl p-4">
-              <div className="text-base font-bold text-txt">⚠ มี {hero.n} รายการที่ต้องจัดการ</div>
-              <div className="text-sm text-red mt-1">Journal ยังแสดงว่าเปิดอยู่<br/>แต่รายงาน MT5 ระบุว่าปิดแล้ว</div>
-              <button type="button" onClick={()=>setShowA(v=>!v)} className={clsBtn("yellow","sm")+" mt-3"}>ตรวจสอบ {hero.n} รายการ</button>
+            <div className="bg-card border border-red/30 rounded-xl p-3.5">
+              <div className="text-base font-bold text-txt leading-snug">⚠ มี {hero.n} รายการที่ต้องจัดการ</div>
+              <div className="text-sm text-red mt-1">Journal ยังแสดงว่าเปิดอยู่ แต่ MT5 ระบุว่าปิดแล้ว</div>
+              <button type="button" onClick={()=>setShowA(v=>!v)} className={clsBtn("yellow","md")+" mt-3 w-full sm:w-auto"}>ตรวจสอบ {hero.n} รายการ →</button>
               <div className="text-[11px] text-muted mt-1.5">ดูหลักฐานเท่านั้น — ยังไม่มีการแก้ไข Journal</div>
-              <div className="mt-3 border-t border-border pt-2">{recon.classA.map((en,i)=><ReconPreviewRow key={i} entry={en} products={products}/>)}</div>
+              <div className="mt-3 border-t border-border pt-2.5 space-y-0.5">{recon.classA.map((en,i)=><ReconPreviewRow key={i} entry={en} products={products}/>)}</div>
+              <div className="text-[11px] text-muted mt-2">ตรวจ {oa.n} รายการเปิด · พบว่าปิดแล้ว {oa.a}{oa.u>0?` · ยังไม่พบหลักฐานปิด ${oa.u}`:""}</div>
               {showA&&classAList}
             </div>
           )}
 
           {hero.state==="ambiguous"&&(
-            <div className="bg-card border border-yellow/30 rounded-2xl p-4">
-              <div className="text-base font-semibold text-txt">มี {hero.n} รายการที่ระบบจับคู่ไม่ได้</div>
+            <div className="bg-card border border-yellow/30 rounded-xl p-3.5">
+              <div className="text-base font-semibold text-txt leading-snug">มี {hero.n} รายการที่ระบบจับคู่ไม่ได้</div>
               <div className="text-sm text-muted mt-1">ต้องตรวจสอบด้วยตัวเอง</div>
-              <button type="button" onClick={()=>setShowAmb(v=>!v)} className={clsBtn("yellow","sm")+" mt-3"}>ดูรายการ</button>
+              <button type="button" onClick={()=>setShowAmb(v=>!v)} className={clsBtn("yellow","md")+" mt-3 w-full sm:w-auto"}>ดูรายการ →</button>
               {showAmb&&ambList}
             </div>
           )}
 
           {hero.state==="classB"&&(
-            <div className="bg-card border border-border rounded-2xl p-4">
-              <div className="text-base font-semibold text-txt">{reportStale?`รายงานครั้งล่าสุดพบ ${hero.n} รายการที่ยังไม่มีใน Journal`:`มี ${hero.n} รายการใน MT5 ที่ยังไม่มีใน Journal`}</div>
+            <div className="bg-card border border-border rounded-xl p-3.5">
+              <div className="text-base font-semibold text-txt leading-snug">{reportStale?`รายงานครั้งล่าสุดพบ ${hero.n} รายการที่ยังไม่มีใน Journal`:`มี ${hero.n} รายการใน MT5 ที่ยังไม่มีใน Journal`}</div>
+              <div className="text-xs text-muted mt-0.5">{bText}</div>
               {reportStale&&<div className="text-[11px] text-muted mt-1">{genValid?`ข้อมูลเมื่อ ${report.meta.generatedRaw} อาจไม่เป็นปัจจุบัน`:"รายงานไม่ระบุเวลา — ยืนยันสถานะปัจจุบันไม่ได้"}</div>}
-              <button type="button" onClick={()=>setShowB(v=>!v)} className={clsBtn("yellow","sm")+" mt-3"}>ดูรายการ</button>
-              {showB&&<><div className="mt-2"><ReconBGroupSummary list={recon.classB}/></div>{classBList}<div className="text-[11px] text-muted mt-1">ยังไม่ได้เลือกว่าจะบันทึก product นี้ใน Journal หรือไม่</div></>}
+              <button type="button" onClick={()=>setShowB(v=>!v)} className={clsBtn("yellow","md")+" mt-3 w-full sm:w-auto"}>ดูรายการ →</button>
+              {showB&&<>{classBList}<div className="text-[11px] text-muted mt-1">ยังไม่ได้เลือกว่าจะบันทึก product นี้ใน Journal หรือไม่</div></>}
             </div>
           )}
 
           {hero.state==="classC"&&(
-            <div className="bg-card border border-border rounded-2xl p-4">
-              <div className="text-base font-semibold text-txt">สถานะปัจจุบันไม่พบความไม่ตรงกัน</div>
+            <div className="bg-card border border-border rounded-xl p-3.5">
+              <div className="text-base font-semibold text-txt leading-snug">สถานะปัจจุบันไม่พบความไม่ตรงกัน</div>
               <div className="text-sm text-muted mt-1">มี {hero.n} รายการย้อนหลังให้ตรวจสอบ</div>
-              <button type="button" onClick={()=>setShowC(v=>!v)} className={clsBtn("yellow","sm")+" mt-3"}>ดูรายการย้อนหลัง</button>
+              <button type="button" onClick={()=>setShowC(v=>!v)} className={clsBtn("yellow","md")+" mt-3 w-full sm:w-auto"}>ดูรายการย้อนหลัง →</button>
               {showC&&classCList}
             </div>
           )}
 
           {hero.state==="clear"&&(
-            <div className="bg-card border border-border rounded-2xl p-4">
-              <div className="text-base font-semibold text-txt">{(partial||!genValid)?"ไม่พบความไม่ตรงกันจากข้อมูลที่ตรวจได้":"✓ Journal ตรงกับรายงาน MT5"}</div>
+            <div className="bg-card border border-green/30 rounded-xl p-3.5">
+              <div className="text-base font-semibold text-green">{(partial||!genValid)?"ไม่พบความไม่ตรงกันจากข้อมูลที่ตรวจได้":"✓ Journal ตรงกับรายงาน MT5"}</div>
               <div className="text-sm text-muted mt-1">ตรวจ {oa.n} รายการใน Journal — ไม่พบความไม่ตรงกัน</div>
             </div>
           )}
 
           {secondaryB}
 
-          {/* ONE disclosure for everything else (§6) */}
+          {/* ONE disclosure → compact single-open accordion menu (§5/§6) */}
           <div>
-            <button type="button" onClick={()=>setShowDetails(v=>!v)} className="text-sm text-muted flex items-center gap-1.5">ดูรายการอื่นและรายละเอียดรายงาน {showDetails?"▴":"▾"}</button>
+            <button type="button" onClick={()=>setShowDetails(v=>!v)} className="w-full flex items-center justify-between text-sm text-muted py-1"><span>รายละเอียดอื่น</span><span>{showDetails?"▴":"›"}</span></button>
             {showDetails&&(
-              <div className="mt-2 space-y-3">
-                {/* 1. report metadata */}
-                <div className="bg-card border border-border rounded-xl px-3 py-2.5 text-[11px] text-muted">
-                  <div>บัญชี {report.meta.account||"—"}</div>
-                  <div>{genValid?`ออกรายงานเมื่อ ${report.meta.generatedRaw}`:"รายงานไม่ระบุเวลา — ยืนยันสถานะปัจจุบันไม่ได้"}</div>
-                  {covFrom&&<div>ครอบคลุม {covFrom}–{covTo}</div>}
-                  {partial&&<div className="text-yellow">ไฟล์นี้ไม่มีส่วน {report.hasPositionsSection?"Open Positions":"Positions"} — ตรวจได้บางส่วน</div>}
-                  <div>อ่านไฟล์ในเครื่องเท่านั้น — ไม่ได้อัปโหลด</div>
-                  <button onClick={reset} className="underline mt-1">ล้างรายงาน</button>
-                </div>
-                {/* current-open audit (§7) */}
-                <div className="text-[11px] text-muted">
-                  <div className="text-txt">รายการที่ Journal ยังเปิดอยู่ ({oa.n})</div>
-                  <div>MT5 ยืนยันว่าปิดแล้ว {oa.a} · ไม่พบหลักฐานปิด {oa.u} · ต้องตรวจเอง {oa.x}</div>
-                </div>
-                {/* no-close-evidence detail */}
-                {recon.noEvidence.length>0&&(
-                  <div>
-                    <button type="button" onClick={()=>setShowNoEv(v=>!v)} className="text-xs text-muted flex items-center gap-1.5">ไม่พบหลักฐานปิดในรายงานนี้ ({recon.noEvidence.length}) {showNoEv?"▴":"▾"}</button>
-                    {showNoEv&&<><div className="text-[11px] text-muted mt-1 mb-1">รายงานนี้ไม่มีหลักฐานปิด — ไม่ได้แปลว่ายังเปิดอยู่จริง</div><div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">{recon.noEvidence.map((en,i)=><ReconNoEvidenceRow key={i} en={en} products={products}/>)}</div></>}
+              <div className="mt-1 bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">
+                <ReconDetailRow title="ข้อมูลรายงาน" subtitle={`บัญชี ${report.meta.account||"—"} · ${genShort}`} open={detailKey==="report"} onToggle={()=>toggleDetail("report")}>
+                  <div className="space-y-0.5 pt-1">
+                    {covFrom&&<div>ครอบคลุม {covFrom}–{covTo}</div>}
+                    <div>{genValid?`ออกรายงานเมื่อ ${report.meta.generatedRaw}`:"รายงานไม่ระบุเวลา — ยืนยันสถานะปัจจุบันไม่ได้"}</div>
+                    <div>อ่านไฟล์ในเครื่องเท่านั้น — ไม่ได้อัปโหลด</div>
+                    {partial&&<div className="text-yellow">ไฟล์นี้ไม่มีส่วน {report.hasPositionsSection?"Open Positions":"Positions"} — ตรวจได้บางส่วน</div>}
+                    <div className="pt-1.5 mt-1 border-t border-border">ตรวจรายการเปิดใน Journal {oa.n} รายการ · พบว่าปิดแล้ว {oa.a}</div>
+                    {recon.noEvidence.length>0&&<div className="pt-1"><div>ยังไม่พบหลักฐานปิด {recon.noEvidence.length} รายการ</div><div className="mt-1 bg-input/30 rounded-lg divide-y divide-border overflow-hidden">{recon.noEvidence.map((en,i)=><ReconNoEvidenceRow key={i} en={en} products={products}/>)}</div></div>}
+                    <button onClick={reset} className="underline mt-1.5">ล้างรายงาน</button>
                   </div>
-                )}
-                {/* ambiguous — unless it currently owns the hero */}
+                </ReconDetailRow>
+
                 {recon.ambiguous.length>0&&hero.state!=="ambiguous"&&(
-                  <div>
-                    <button type="button" onClick={()=>setShowAmb(v=>!v)} className="text-sm font-semibold text-yellow flex items-center gap-1.5">ต้องตรวจเอง <span className="text-muted font-normal">({recon.ambiguous.length})</span> <span className="text-muted text-xs font-normal">{showAmb?"▴":"▾"}</span></button>
-                    {showAmb&&ambList}
-                  </div>
+                  <ReconDetailRow title="ต้องตรวจเพิ่มเติม" subtitle={`${recon.ambiguous.length} รายการ`} open={detailKey==="ambiguous"} onToggle={()=>toggleDetail("ambiguous")}>{ambList}</ReconDetailRow>
                 )}
-                {/* Class C — unless it currently owns the hero */}
-                {recon.classC.length>0&&hero.state!=="classC"&&(
-                  <div>
-                    <button type="button" onClick={()=>setShowC(v=>!v)} className="text-sm font-semibold text-txt flex items-center gap-1.5">ปิดแล้ว แต่ยังไม่เคยบันทึก — หลังเริ่มใช้ Journal <span className="text-muted font-normal">({recon.classC.length})</span> <span className="text-muted text-xs font-normal">{showC?"▴":"▾"}</span></button>
-                    {showC&&classCList}
-                  </div>
+
+                {backlogCount>0&&(
+                  <ReconDetailRow title="รายการย้อนหลัง" subtitle={`${backlogCount} รายการ`} open={detailKey==="backlog"} onToggle={()=>toggleDetail("backlog")}>
+                    {hero.state!=="classC"&&recon.classC.length>0&&<div className="pt-1"><div className="text-txt">หลังเริ่มใช้ Journal ({recon.classC.length})</div>{classCList}</div>}
+                    {recon.outOfScope.length>0&&<div className="pt-2"><div>ประวัติเก่ากว่า Journal / ยังไม่ได้กำหนดขอบเขต ({recon.outOfScope.length}) — ยังไม่ถือว่าเป็นรายการที่ต้องบันทึก</div><div className="mt-1 bg-input/30 rounded-lg divide-y divide-border overflow-hidden">{recon.outOfScope.slice(0,100).map((p,i)=><ReconClosedRow key={i} p={p}/>)}{recon.outOfScope.length>100&&<div className="px-3 py-2">… และอีก {recon.outOfScope.length-100} รายการ</div>}</div></div>}
+                  </ReconDetailRow>
                 )}
-                {/* older / unscoped history */}
-                {recon.outOfScope.length>0&&(
-                  <div>
-                    <button type="button" onClick={()=>setShowOOS(v=>!v)} className="text-sm font-semibold text-muted flex items-center gap-1.5">ประวัติเก่ากว่า Journal / ยังไม่ได้กำหนดขอบเขต <span className="font-normal">({recon.outOfScope.length})</span> <span className="text-xs font-normal">{showOOS?"▴":"▾"}</span></button>
-                    {showOOS&&<div className="mt-2 bg-card border border-border rounded-xl divide-y divide-border overflow-hidden">{recon.outOfScope.slice(0,100).map((p,i)=><ReconClosedRow key={i} p={p}/>)}{recon.outOfScope.length>100&&<div className="px-3 py-2 text-[11px] text-muted">… และอีก {recon.outOfScope.length-100} รายการ</div>}</div>}
-                  </div>
-                )}
-                {/* Class D */}
+
                 {recon.classD.length>0&&(
-                  <div className="text-[11px] text-muted">ตรงกันแล้ว ✓ {recon.classD.length} {!showD&&<button onClick={()=>setShowD(true)} className="underline ml-1">ดู</button>}
-                    {showD&&<div className="bg-card border border-border rounded-xl divide-y divide-border overflow-hidden mt-1">{recon.classD.map((en,i)=><ReconMatchRow key={i} entry={en} products={products} red={false}/>)}</div>}
-                  </div>
+                  <ReconDetailRow title="รายการที่ตรงกัน" subtitle={`${recon.classD.length} รายการ`} open={detailKey==="matched"} onToggle={()=>toggleDetail("matched")}>
+                    <div className="pt-1">ตรวจแล้วตรงกับ Journal {recon.classD.length} รายการ {!showD&&<button onClick={()=>setShowD(true)} className="underline ml-1">ดู</button>}
+                      {showD&&<div className="mt-1 bg-input/30 rounded-lg divide-y divide-border overflow-hidden">{recon.classD.map((en,i)=><ReconMatchRow key={i} entry={en} products={products} red={false}/>)}</div>}
+                    </div>
+                  </ReconDetailRow>
                 )}
-                {/* whole-report summary (§7) */}
-                <div className="text-[11px] text-muted">
-                  <div className="text-txt">สรุปทั้งรายงาน</div>
-                  <div>ตรงกับ Journal {rs.d} · ต้องตรวจเอง {rs.x} · รายการย้อนหลัง {rs.c}</div>
-                </div>
-                {/* staging precedence note (§8) */}
-                {stagingAt!=null&&<div className="text-[11px] text-muted">ใช้รายงานล่าสุดแทนข้อมูล sync เดิมวันที่ {fmtDate(new Date(stagingAt))} · Refresh หน้านี้ไม่ได้ sync จาก MT5</div>}
+
+                {stagingAt!=null&&(
+                  <ReconDetailRow title="ข้อมูล sync เดิม" subtitle={`${fmtDate(new Date(stagingAt))} · ไม่ได้ใช้เป็นสถานะปัจจุบัน`} open={detailKey==="sync"} onToggle={()=>toggleDetail("sync")}>
+                    <div className="pt-1 space-y-0.5"><div>ใช้รายงานล่าสุดแทนข้อมูล sync เดิม</div><div>Refresh หน้านี้ไม่ได้ sync จาก MT5</div></div>
+                  </ReconDetailRow>
+                )}
               </div>
             )}
           </div>

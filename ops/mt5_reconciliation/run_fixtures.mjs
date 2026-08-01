@@ -35,11 +35,12 @@ const factory = new Function(
   coreSrc +
     "\nreturn { reconcileMt5Report, _reconMatchKind, _reconSizeCompatible, _reconVolEq, _reconBaseId," +
     " _reconFindSubsets, _reconReportStale, _reconSnapshotFresh, _RECON_POOL_CAP, _RECON_SUBSET_MAX," +
-    " _reconHeroState, _reconOpenAudit, _reconReportSummary, _reconContractLabel, _reconShowStagingList };"
+    " _reconHeroState, _reconOpenAudit, _reconReportSummary, _reconContractLabel, _reconShowStagingList," +
+    " _reconGroupOpens, _reconAccordionNext };"
 );
 const core = factory();
 const { reconcileMt5Report, _reconMatchKind, _reconSizeCompatible, _reconReportStale, _reconSnapshotFresh,
-  _reconHeroState, _reconOpenAudit, _reconContractLabel, _reconShowStagingList } = core;
+  _reconHeroState, _reconOpenAudit, _reconContractLabel, _reconShowStagingList, _reconGroupOpens, _reconAccordionNext } = core;
 
 // ── Tiny assert harness ──────────────────────────────────────────────────────────────────────
 let pass = 0, fail = 0;
@@ -267,6 +268,29 @@ console.log("── U9–U10: report is the active surface → staging list hidd
 check("U9 no report → show staging list", _reconShowStagingList(null) === true, "");
 check("U10 report loaded → hide staging list (restored on clear)", _reconShowStagingList({ meta: {} }) === false, "");
 // U11 (flag OFF hides the whole entry) is the component guard `if(!on)return null` — verified by Babel + read, not node-testable.
+
+console.log("── V1–V7: visual-hierarchy simplification (§4/§5/§6) ──");
+{
+  const opens = [
+    openLeg("306676142", "DELTAU26", null, "Long", 2, 60, "2026-07-10T10:00"),
+    openLeg("308292939", "DELTAU26", null, "Long", 2, 61, "2026-07-11T10:00"),
+    openLeg("310290054", "DELTAU26", null, "Long", 2, 62, "2026-07-12T10:00"),
+  ];
+  const groups = _reconGroupOpens(opens);
+  check("V2a Class-B → one grouped task label", groups.length === 1, "groups=" + groups.length);
+  check("V2b group carries count 3 · total volume 6", groups[0].count === 3 && groups[0].vol === 6, JSON.stringify(groups[0]));
+}
+check("V3a open a fresh row", _reconAccordionNext(null, "report") === "report", "");
+check("V3b clicking the open row closes it", _reconAccordionNext("report", "report") === null, "");
+check("V5 opening another row switches (only one active)", _reconAccordionNext("report", "backlog") === "backlog", "");
+{
+  const ambRowShown = (r, heroState) => r.ambiguous.length > 0 && heroState !== "ambiguous";
+  check("V4a zero ambiguous → 'ต้องตรวจเพิ่มเติม' row omitted", ambRowShown(fakeRecon({ A: 2, amb: 0, B: 3 }), "classA") === false, "");
+  check("V4b ambiguous present → row shown", ambRowShown(fakeRecon({ A: 2, amb: 2, B: 3 }), "classA") === true, "");
+}
+check("V6 default flow no longer renders a 'สรุปทั้งรายงาน' block", html.indexOf("สรุปทั้งรายงาน") < 0, "still present");
+check("V6b accordion present (รายละเอียดอื่น + ReconDetailRow)", html.indexOf("รายละเอียดอื่น") >= 0 && html.indexOf("function ReconDetailRow") >= 0, "");
+check("V7 report-loaded hides staging list (helper)", _reconShowStagingList({ meta: {} }) === false, "");
 
 // ── Summary ──────────────────────────────────────────────────────────────────────────────────
 console.log("\n" + (fail === 0 ? "FIXTURES: PASS" : "FIXTURES: FAIL") + `  (${pass} passed, ${fail} failed)`);

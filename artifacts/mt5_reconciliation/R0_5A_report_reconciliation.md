@@ -153,6 +153,26 @@ to the core (`_reconHeroState`, `_reconOpenAudit`, `_reconReportSummary`, `_reco
 - **No write controls:** no "ปิดใน Journal"/"ยืนยัน"/"เพิ่มเข้า Journal", no disabled future actions;
   the only disabled state is the file-picker during load.
 
+## Visual hierarchy simplification (2026-08-01) — presentation only, classifier frozen
+
+Follow-up polish of the action-first surface into a compact task inbox. **No classifier change**
+(byte-identical vs the action-first commit); only two more pure selectors were added
+(`_reconGroupOpens` for the Class-B task label, `_reconAccordionNext` for single-open accordion),
+both fixture-covered (59 assertions PASS, incl. the 49 prior ones unchanged).
+
+- **Compact hero** (`rounded-xl p-3.5`, single-line body, `max-w-xl` surface), **dominant CTA**
+  (`clsBtn md` + "→", full-width on mobile), aligned Class-A preview under a hairline divider.
+- **Class-B task card** — one object: "มี 3 รายการใน MT5…" + grouped subtitle
+  "DELTAU26 · Long · 3 รายการ · รวม 6 สัญญา" + "ดู ›" (whole card taps to expand).
+- **Accordion menu** replaces the text dump: "รายละเอียดอื่น" opens a single shared list with
+  hairline dividers — ข้อมูลรายงาน / ต้องตรวจเพิ่มเติม / รายการย้อนหลัง / รายการที่ตรงกัน / ข้อมูล sync เดิม —
+  **one row open at a time** (`_reconAccordionNext`); zero-count rows are omitted.
+- **Audit relocated**: the raw multi-line audit block + "สรุปทั้งรายงาน" paragraph are gone from the
+  default flow; the current-open audit is a single quiet line under the hero and the whole-report
+  counts are carried by the accordion row subtitles.
+- All-clear is a calm compact green confirmation. Every state uses the same language: one hero, one
+  next action, secondary info hidden. No write/disabled-future controls; `tj_mt5_inbox` gate preserved.
+
 ## Not in R0.5A (gated, separate `/design`)
 
 No write actions rendered (no "ยืนยันปิด"/"เพิ่มเข้า Journal"/materialize/writer). Class A cannot
