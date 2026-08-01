@@ -34,10 +34,12 @@ const coreSrc = html.slice(iStart, iEnd);
 const factory = new Function(
   coreSrc +
     "\nreturn { reconcileMt5Report, _reconMatchKind, _reconSizeCompatible, _reconVolEq, _reconBaseId," +
-    " _reconFindSubsets, _reconReportStale, _reconSnapshotFresh, _RECON_POOL_CAP, _RECON_SUBSET_MAX };"
+    " _reconFindSubsets, _reconReportStale, _reconSnapshotFresh, _RECON_POOL_CAP, _RECON_SUBSET_MAX," +
+    " _reconHeroState, _reconOpenAudit, _reconReportSummary, _reconContractLabel, _reconShowStagingList };"
 );
 const core = factory();
-const { reconcileMt5Report, _reconMatchKind, _reconSizeCompatible, _reconReportStale, _reconSnapshotFresh } = core;
+const { reconcileMt5Report, _reconMatchKind, _reconSizeCompatible, _reconReportStale, _reconSnapshotFresh,
+  _reconHeroState, _reconOpenAudit, _reconContractLabel, _reconShowStagingList } = core;
 
 // ── Tiny assert harness ──────────────────────────────────────────────────────────────────────
 let pass = 0, fail = 0;
@@ -231,6 +233,40 @@ console.log("── F15: Class C scope split (after vs before earliest Journal d
   const r0 = reconcileMt5Report([], { closed, open: [], meta: { account: "1", generatedAt: "2026-07-31T21:44" }, hasPositionsSection: true, hasOpenSection: true }, P);
   check("no Journal date → all unmatched are OUT_OF_SCOPE, classC empty", r0.classC.length === 0 && r0.outOfScope.length === 2, counts(r0));
 }
+
+// ── Action-first UI selector fixtures (classifier untouched — pure presentation) ─────────────
+function fakeRecon({ A = 0, B = 0, C = 0, amb = 0, D = 0, noEv = 0, ambOpen = 0 } = {}) {
+  const mk = n => Array.from({ length: n }, () => ({ journal: { status: "open" } }));
+  const ambArr = Array.from({ length: amb }, (_, i) => ({ journal: { status: i < ambOpen ? "open" : "closed" }, reason: "MULTIPLE" }));
+  return { classA: mk(A), classB: mk(B), classC: mk(C), classD: mk(D), ambiguous: ambArr, noEvidence: mk(noEv), outOfScope: [],
+    summary: { opensExamined: A + noEv + ambOpen, reconciled: D, noEvidence: noEv, needCheck: amb, confirmedClosed: A } };
+}
+console.log("── U1–U5: hero state machine priority (§5) ──");
+check("U1 Class A wins over B/C", _reconHeroState(fakeRecon({ A: 2, B: 3, C: 5 })).state === "classA", "");
+check("U2a ambiguous does NOT win when Class A > 0", _reconHeroState(fakeRecon({ A: 1, amb: 2 })).state === "classA", "");
+check("U2b ambiguous hero only when Class A = 0", _reconHeroState(fakeRecon({ A: 0, amb: 2 })).state === "ambiguous", "");
+check("U3 Class B prevents false all-clear", _reconHeroState(fakeRecon({ A: 0, amb: 0, B: 3 })).state === "classB", "");
+check("U4 Class C-only → classC (not clear)", _reconHeroState(fakeRecon({ A: 0, B: 0, amb: 0, C: 4 })).state === "classC", "");
+check("U5a true all-clear requires A/B/C/amb = 0", _reconHeroState(fakeRecon({})).state === "clear", "");
+check("U5b reconciled (Class D) alone still reads clear", _reconHeroState(fakeRecon({ D: 3 })).state === "clear", "");
+
+console.log("── U6–U7: contract-code display (§3) — exact series, never generic currentContract ──");
+check("U6 GOU26 label, not GOM26", _reconContractLabel({ contractCode: "GOU26", productId: "gold_next" }, null, P) === "GOU26", _reconContractLabel({ contractCode: "GOU26", productId: "gold_next" }, null, P));
+check("U7 S50U26 label, not S50M26", _reconContractLabel({ contractCode: "S50U26", productId: "s50_next" }, null, P) === "S50U26", _reconContractLabel({ contractCode: "S50U26", productId: "s50_next" }, null, P));
+check("U7b no contract code → neutral family, never a series code", !/[HMUZ]\d{2}$/.test(_reconContractLabel({ productId: "gold_next" }, null, P)), _reconContractLabel({ productId: "gold_next" }, null, P));
+
+console.log("── U8: current-open audit excludes historical D/C and closed-ambiguous (§7) ──");
+{
+  const oa = _reconOpenAudit(fakeRecon({ A: 1, C: 5, D: 3, amb: 2, ambOpen: 1, noEv: 1 }));
+  check("U8a open audit 'confirmed closed' = Class A only (excludes D/C)", oa.a === 1, JSON.stringify(oa));
+  check("U8b open audit 'need check' counts only OPEN ambiguous", oa.x === 1, JSON.stringify(oa));
+  check("U8c open audit 'no evidence' = noEvidence only", oa.u === 1, JSON.stringify(oa));
+}
+
+console.log("── U9–U10: report is the active surface → staging list hidden while loaded (§8) ──");
+check("U9 no report → show staging list", _reconShowStagingList(null) === true, "");
+check("U10 report loaded → hide staging list (restored on clear)", _reconShowStagingList({ meta: {} }) === false, "");
+// U11 (flag OFF hides the whole entry) is the component guard `if(!on)return null` — verified by Babel + read, not node-testable.
 
 // ── Summary ──────────────────────────────────────────────────────────────────────────────────
 console.log("\n" + (fail === 0 ? "FIXTURES: PASS" : "FIXTURES: FAIL") + `  (${pass} passed, ${fail} failed)`);

@@ -122,6 +122,37 @@ Journal** end-to-end (A=2/D=1/B=3) needs an authenticated browser session; the c
 proves the classifier against production-shaped fixtures, and the real workbook's Open Positions
 section was confirmed = DELTAU26×3 (→ Class B=3).
 
+## Action-first UI layer (2026-08-01) — presentation only, classifier frozen
+
+The reconciliation surface was reshaped from a technical dashboard into a mass-market task inbox.
+**No classifier change** — `reconcileMt5Report`, `_reconMatchKind`, `_reconFindSubsets`, tolerances,
+and constants are byte-identical to the hardening commit; only pure read-only **selectors** were added
+to the core (`_reconHeroState`, `_reconOpenAudit`, `_reconReportSummary`, `_reconContractLabel`,
+`_reconShowStagingList`), all covered by the fixture harness (49 assertions PASS, incl. the original
+34 classifier ones unchanged).
+
+- **Hero state machine (§5):** error → account-mismatch → Class A → ambiguous → Class B → Class C →
+  all-clear. One hero, one dominant yellow CTA, one compact preview, one secondary line, one
+  disclosure. `_reconHeroState` is the pure selector (fixtures U1–U5).
+- **Class A flow (§1/§2):** red hero "⚠ มี {n} รายการที่ต้องจัดการ", CTA "ตรวจสอบ {n} รายการ" (the only
+  saturated control) expands the full evidence list; compact preview rows are plain (no card/chip/
+  chevron/confidence/ID). Microcopy "ดูหลักฐานเท่านั้น — ยังไม่มีการแก้ไข Journal".
+- **Contract-code labels (§3):** `_reconContractLabel` shows the Journal contract code (GOU26/S50U26)
+  → matched report symbol → neutral family name — **never** the generic `currentContract` that
+  produced the wrong S50M26/GOM26 (fixtures U6/U7).
+- **Class B secondary (§4):** "มีอีก {n} รายการใน MT5 ที่ยังไม่มีใน Journal" + ghost "ดูรายการ";
+  grouped summary "DELTAU26 · Long — 3 รายการ · รวม 6 สัญญา"; product-scope warning preserved; no create action.
+- **Separate summary scopes (§7):** current-open audit (`_reconOpenAudit`, opens only — excludes
+  historical D/C and closed-ambiguous, fixture U8) vs whole-report summary (`_reconReportSummary`),
+  both inside the disclosure so no raw counts sit above the fold.
+- **Report/staging precedence (§8):** a loaded report is the active surface — the stale staging list is
+  hidden (`_reconShowStagingList`, U9/U10) and replaced by a note; clearing the report restores it.
+  With no report the stale-safe staging UI is unchanged.
+- **Flag (§11):** the whole entry is behind `tj_mt5_inbox`; flag OFF renders nothing (no action, no
+  hero, no staging section). No write-gate flag exposed.
+- **No write controls:** no "ปิดใน Journal"/"ยืนยัน"/"เพิ่มเข้า Journal", no disabled future actions;
+  the only disabled state is the file-picker during load.
+
 ## Not in R0.5A (gated, separate `/design`)
 
 No write actions rendered (no "ยืนยันปิด"/"เพิ่มเข้า Journal"/materialize/writer). Class A cannot
