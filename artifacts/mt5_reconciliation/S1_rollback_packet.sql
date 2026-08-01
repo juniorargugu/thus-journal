@@ -35,22 +35,26 @@ begin
      and (select pg_get_userbyid(c.relowner) from pg_catalog.pg_class c where c.oid='public.mt5_sync_runs'::regclass)<>'postgres' then
     raise exception 'MT5_S1_ROLLBACK: mt5_sync_runs is not postgres-owned (name collision)';
   end if;
+  if to_regclass('public.mt5_sync_run_positions') is not null
+     and (select pg_get_userbyid(c.relowner) from pg_catalog.pg_class c where c.oid='public.mt5_sync_run_positions'::regclass)<>'postgres' then
+    raise exception 'MT5_S1_ROLLBACK: mt5_sync_run_positions is not postgres-owned (name collision)';
+  end if;
+  if to_regprocedure('public.mt5_run_positions_guard_v1()') is not null
+     and (select pg_get_userbyid(p.proowner) from pg_catalog.pg_proc p
+           where p.oid='public.mt5_run_positions_guard_v1()'::regprocedure)<>'postgres' then
+    raise exception 'MT5_S1_ROLLBACK: guard function is not postgres-owned (name collision)';
+  end if;
   perform pg_catalog.set_config('mt5.s1_ledger_created_by_s1',
     coalesce((v_schema.objects->>'ledger_created_by_s1'),'false'), true);
+  -- stage the EXACT pre-S1 service_role staging grants recorded by the schema packet (for restore).
+  perform pg_catalog.set_config('mt5.s1_staging_pre_grants',
+    coalesce((v_schema.objects->>'staging_pre_service_grants'),''), true);
 end
 $guard$;
 
--- 1) revoke + drop RPCs and internal helpers (exact signatures) -------------------------------
-revoke all on function public.mt5_get_current_snapshot_v1(text) from authenticated, service_role;
-revoke all on function public.mt5_create_run_v1(uuid,uuid,text,uuid,integer,timestamptz,text,integer,text,text) from service_role;
-revoke all on function public.mt5_heartbeat_run_v1(uuid,uuid,text,uuid,integer) from service_role;
-revoke all on function public.mt5_append_run_positions_v1(uuid,uuid,text,uuid,jsonb) from service_role;
-revoke all on function public.mt5_complete_snapshot_v1(uuid,uuid,text,uuid,integer,bigint[]) from service_role;
-revoke all on function public.mt5_reconcile_snapshot_v1(uuid,uuid,text,uuid) from service_role;
-revoke all on function public.mt5_mark_snapshot_failed_v1(uuid,uuid,text,uuid,text) from service_role;
-revoke all on function public.mt5_mark_reconcile_failed_v1(uuid,uuid,text,uuid,text) from service_role;
-revoke all on function public.mt5_expire_stale_run_v1(uuid,uuid,text) from service_role;
-
+-- 1) drop RPCs and internal helpers (exact signatures) ----------------------------------------
+--    No explicit REVOKE: DROP FUNCTION IF EXISTS removes each function AND all its ACLs, and is a
+--    no-op when the RPC packet was never (fully) applied — so rollback is safe for a partial install.
 drop function if exists public.mt5_get_current_snapshot_v1(text);
 drop function if exists public.mt5_create_run_v1(uuid,uuid,text,uuid,integer,timestamptz,text,integer,text,text);
 drop function if exists public.mt5_heartbeat_run_v1(uuid,uuid,text,uuid,integer);
@@ -70,10 +74,21 @@ drop trigger if exists mt5_run_positions_started_only_v1 on public.mt5_sync_run_
 drop policy if exists mt5_srp_service_read_v1 on public.mt5_sync_run_positions;
 drop policy if exists mt5_sync_runs_service_read_v1 on public.mt5_sync_runs;
 
--- 3) restore Phase 0A staging privileges + drop the S1 staging lifecycle dependencies ---------
---    (restore BEFORE dropping columns so the grant target still exists; column grants vanish with columns.)
-revoke insert, update on table public.mt5_import_staging from service_role;   -- clears the S1 column-scoped grants
-grant insert, update on table public.mt5_import_staging to service_role;       -- Phase 0A broad state restored
+-- 3) restore the EXACT pre-S1 staging privileges + drop the S1 staging lifecycle dependencies --
+--    Clear ALL S1-era service_role staging privileges (table- and column-scoped), then restore only
+--    the privileges that existed BEFORE S1 (captured in the schema ledger). Restore BEFORE dropping
+--    columns so the grant target still exists; any residual column grants vanish with the columns.
+do $restore$
+declare
+  v_pre text := coalesce(nullif(current_setting('mt5.s1_staging_pre_grants', true), ''), 'INSERT,SELECT,UPDATE');
+begin
+  revoke select, insert, update, delete on table public.mt5_import_staging from service_role;
+  if v_pre like '%SELECT%' then grant select on table public.mt5_import_staging to service_role; end if;
+  if v_pre like '%INSERT%' then grant insert on table public.mt5_import_staging to service_role; end if;
+  if v_pre like '%UPDATE%' then grant update on table public.mt5_import_staging to service_role; end if;
+  if v_pre like '%DELETE%' then grant delete on table public.mt5_import_staging to service_role; end if;
+end
+$restore$;
 
 alter table public.mt5_import_staging drop constraint if exists mt5_staging_missing_since_scope_fk;
 alter table public.mt5_import_staging drop constraint if exists mt5_staging_position_state_s1_chk;

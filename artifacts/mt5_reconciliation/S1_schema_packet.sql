@@ -13,6 +13,7 @@ declare
   v_ledger_existed boolean := to_regclass('public.mt5_schema_migrations') is not null;
   v_staging_count bigint;
   v_staging_checksum text;
+  v_staging_pre_grants text;
 begin
   perform pg_catalog.set_config('mt5.s1_ledger_preexisting', v_ledger_existed::text, true);
 
@@ -33,6 +34,12 @@ begin
     from public.mt5_import_staging s;
   perform pg_catalog.set_config('mt5.s1_staging_count',v_staging_count::text,true);
   perform pg_catalog.set_config('mt5.s1_staging_checksum',v_staging_checksum,true);
+  -- capture the pre-S1 service_role staging privileges so rollback restores EXACTLY what existed.
+  select coalesce(pg_catalog.string_agg(distinct p.privilege_type,',' order by p.privilege_type),'')
+    into v_staging_pre_grants
+    from information_schema.role_table_grants p
+   where p.table_schema='public' and p.table_name='mt5_import_staging' and p.grantee='service_role';
+  perform pg_catalog.set_config('mt5.s1_staging_pre_grants',v_staging_pre_grants,true);
 
   select pg_catalog.string_agg(x.expected, ', ' order by x.expected)
     into v_bad
@@ -93,6 +100,11 @@ begin
        )
     ) then
       raise exception 'MT5_S1_PREFLIGHT: incompatible mt5_schema_migrations definition';
+    end if;
+    -- reject an unexpected/extra-column ledger shape (exact column set = the 8 expected columns)
+    if (select count(*) from information_schema.columns
+         where table_schema='public' and table_name='mt5_schema_migrations') <> 8 then
+      raise exception 'MT5_S1_PREFLIGHT: mt5_schema_migrations has an unexpected column set';
     end if;
   end if;
 end
@@ -392,6 +404,7 @@ insert into public.mt5_schema_migrations(
     'staging_columns', array['lifecycle_updated_at','missing_since_run_id'],
     'staging_pre_count', current_setting('mt5.s1_staging_count')::bigint,
     'staging_pre_checksum', current_setting('mt5.s1_staging_checksum'),
+    'staging_pre_service_grants', current_setting('mt5.s1_staging_pre_grants'),
     'source_revision', 3
   ),
   now(),current_user

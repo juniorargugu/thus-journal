@@ -95,6 +95,9 @@ declare
   v_b uuid := gen_random_uuid(); v_lb uuid := gen_random_uuid();
   r record; v_snap jsonb; v_ids bigint[]; v_before jsonb; v_after jsonb; i int;
 begin
+  -- seed the 20 open staging candidate rows the writer would have inserted (lifecycle targets)
+  insert into public.mt5_import_staging(user_id,source_account,kind,symbol_raw,side,volume,position_id,position_state,state)
+    select v_user,v_acct,'open','GOU26','buy',1,g,'open','new' from generate_series(1,20) g;
   -- A healthy with 20 positions
   select array_agg(g) into v_ids from generate_series(1,20) g;
   select * into r from public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp()-interval '4 min','conn.v1',4200,'srv','s1.v1');
@@ -105,9 +108,13 @@ begin
   perform public.mt5_complete_snapshot_v1(v_a,v_user,v_acct,v_la,20,v_ids);
   perform public.mt5_reconcile_snapshot_v1(v_a,v_user,v_acct,v_la);
 
-  -- lifecycle snapshot BEFORE B's reconcile
+  -- lifecycle snapshot BEFORE B's reconcile (must be non-empty, else the comparison is vacuous)
   select jsonb_agg(jsonb_build_object('pid',s.position_id,'st',s.position_state,'b',s.missing_since_run_id) order by s.position_id)
     into v_before from public.mt5_import_staging s where s.user_id=v_user and s.source_account=v_acct and s.kind='open';
+  if v_before is null or jsonb_array_length(v_before)<>20 then raise exception 'MT5_S1_FIXTURE_3_FAIL: expected 20 seeded lifecycle rows (non-vacuous)'; end if;
+  if exists (select 1 from jsonb_array_elements(v_before) e where e->>'st'<>'still_open') then
+    raise exception 'MT5_S1_FIXTURE_3_FAIL: healthy A must have set all 20 rows to still_open';
+  end if;
 
   -- B completes with ZERO positions -> suspicious (prev 20, cur 0)
   select * into r from public.mt5_create_run_v1(v_b,v_user,v_acct,v_lb,900,clock_timestamp()-interval '1 min','conn.v1',4200,'srv','s1.v1');
@@ -137,8 +144,12 @@ declare
   v_user uuid := '00000000-0000-0000-0000-0000000000aa'; v_acct text := 'ACC_F4';
   v_a uuid := gen_random_uuid(); v_la uuid := gen_random_uuid();
   v_c uuid := gen_random_uuid(); v_lc uuid := gen_random_uuid();
-  r record; v_snap jsonb;
+  r record; v_snap jsonb; v_state text;
 begin
+  -- seed the open staging candidate rows for positions 1 and 2 (lifecycle targets)
+  insert into public.mt5_import_staging(user_id,source_account,kind,symbol_raw,side,volume,position_id,position_state,state)
+  values (v_user,v_acct,'open','GOU26','buy',1,1,'open','new'),
+         (v_user,v_acct,'open','GOU26','buy',1,2,'open','new');
   select * into r from public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp()-interval '4 min','conn.v1',4200,'srv','s1.v1');
   perform public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,
     '[{"position_id":1,"symbol_raw":"GOU26","side":"buy","volume":1,"price_open":2000,"price_current":2000,"profit":0,"source_time_msc":1,"contract_size":10},
@@ -157,10 +168,15 @@ begin
   v_snap := public.mt5_get_current_snapshot_v1(v_acct);
   if (v_snap->'snapshot'->>'run_id')::uuid <> v_c then raise exception 'MT5_S1_FIXTURE_4_FAIL: current must be C'; end if;
   if jsonb_array_length(v_snap->'positions')<>1 then raise exception 'MT5_S1_FIXTURE_4_FAIL: C must show 1 position'; end if;
-  -- position 2 absent in C -> missing_once
-  if (select position_state from public.mt5_import_staging where user_id=v_user and source_account=v_acct and kind='open' and position_id=2) <> 'missing_once' then
-    raise exception 'MT5_S1_FIXTURE_4_FAIL: absent position 2 must be missing_once';
-  end if;
+  -- position 2 absent in C -> missing_once (row MUST exist first, else the check would be vacuous)
+  select position_state into v_state from public.mt5_import_staging
+   where user_id=v_user and source_account=v_acct and kind='open' and position_id=2;
+  if not found then raise exception 'MT5_S1_FIXTURE_4_FAIL: staging row for position 2 missing (vacuous)'; end if;
+  if v_state <> 'missing_once' then raise exception 'MT5_S1_FIXTURE_4_FAIL: absent position 2 must be missing_once, got %',v_state; end if;
+  -- position 1 observed in C -> still_open
+  select position_state into v_state from public.mt5_import_staging
+   where user_id=v_user and source_account=v_acct and kind='open' and position_id=1;
+  if v_state <> 'still_open' then raise exception 'MT5_S1_FIXTURE_4_FAIL: observed position 1 must be still_open, got %',v_state; end if;
   raise notice 'MT5_S1_FIXTURE_4 PASS (healthy C atomically replaces A)';
 end $f4$;
 
@@ -306,10 +322,12 @@ begin
   -- exact replay -> stable success
   select * into r from public.mt5_complete_snapshot_v1(v_a,v_user,v_acct,v_la,1,array[1]::bigint[]);
   if not r.o_ok then raise exception 'MT5_S1_FIXTURE_12_FAIL: exact completion replay must succeed got %',r.o_error_code; end if;
-  -- replay with a different claimed set -> ERR_COUNT_MISMATCH/ERR_SET_MISMATCH surfaced as conflict path
+  -- replay an ALREADY-complete run with a set that diverges from the sealed children -> ERR_REPLAY_CONFLICT
+  -- (p_expected_count matches the claimed id array, so pre-fetch count validation passes; the sealed-evidence
+  --  recompute in the complete-branch is what must reject it.)
   select * into r from public.mt5_complete_snapshot_v1(v_a,v_user,v_acct,v_la,2,array[1,2]::bigint[]);
-  if r.o_error_code not in ('ERR_REPLAY_CONFLICT','ERR_COUNT_MISMATCH') then
-    raise exception 'MT5_S1_FIXTURE_13_FAIL: divergent completion replay must conflict got %',r.o_error_code;
+  if r.o_error_code <> 'ERR_REPLAY_CONFLICT' then
+    raise exception 'MT5_S1_FIXTURE_13_FAIL: divergent completion replay must be ERR_REPLAY_CONFLICT, got %',r.o_error_code;
   end if;
   raise notice 'MT5_S1_FIXTURE_12/13 PASS (completion replay success + conflict)';
 end $f12$;
@@ -483,8 +501,11 @@ end $f24$;
 -- (Structural note: enforced by S1_schema_packet.sql postflight $postflight$ using mt5.s1_staging_* GUCs.
 --  Re-asserted here read-only: no rows were deleted and the two new columns are the only additions.)
 do $f25$
-declare v_lifecycle_cols integer;
+declare
+  v_user uuid := '00000000-0000-0000-0000-0000000000aa'; v_acct text := 'ACC_F25';
+  v_lifecycle_cols integer; v_c1 bigint; v_c2 bigint; v_k1 text; v_k2 text;
 begin
+  -- structural: exactly the 2 S1 additions, and last_seen_run_id never exists
   select count(*) into v_lifecycle_cols from information_schema.columns
    where table_schema='public' and table_name='mt5_import_staging'
      and column_name in ('lifecycle_updated_at','missing_since_run_id');
@@ -492,26 +513,64 @@ begin
   if exists (select 1 from information_schema.columns where table_schema='public' and table_name='mt5_import_staging' and column_name='last_seen_run_id') then
     raise exception 'MT5_S1_FIXTURE_25_FAIL: last_seen_run_id must never exist';
   end if;
-  raise notice 'MT5_S1_FIXTURE_25 PASS (staging additions minimal; count/checksum guarded by schema postflight)';
+  -- the schema packet must have captured pre-migration staging evidence in the ledger
+  if not exists (select 1 from public.mt5_schema_migrations m where m.version='mt5_s1_append_only_schema_v1'
+       and (m.objects->>'staging_pre_count') is not null and (m.objects->>'staging_pre_checksum') is not null) then
+    raise exception 'MT5_S1_FIXTURE_25_FAIL: schema ledger did not record staging pre-migration evidence';
+  end if;
+
+  -- independently recompute the SAME non-lifecycle evidence checksum the schema postflight uses, over a
+  -- known seeded row-set, and prove a LIFECYCLE-COLUMN-ONLY mutation changes neither the count nor the
+  -- checksum (the exact exclusion the postflight relies on to certify migration data-preservation).
+  insert into public.mt5_import_staging(user_id,source_account,kind,symbol_raw,side,volume,position_id,position_state,state)
+  values (v_user,v_acct,'open','GOU26','buy',1,101,'open','new'),
+         (v_user,v_acct,'open','GOU26','buy',1,102,'open','new'),
+         (v_user,v_acct,'open','GOU26','buy',1,103,'open','new');
+  select count(*), pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
+           coalesce(pg_catalog.string_agg((pg_catalog.to_jsonb(s)-'lifecycle_updated_at'-'missing_since_run_id')::text,
+             '' order by s.id),''),'UTF8'),'sha256'),'hex')
+    into v_c1, v_k1 from public.mt5_import_staging s where s.user_id=v_user and s.source_account=v_acct;
+  update public.mt5_import_staging set lifecycle_updated_at=now()
+   where user_id=v_user and source_account=v_acct and position_id=101;   -- lifecycle column ONLY
+  select count(*), pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
+           coalesce(pg_catalog.string_agg((pg_catalog.to_jsonb(s)-'lifecycle_updated_at'-'missing_since_run_id')::text,
+             '' order by s.id),''),'UTF8'),'sha256'),'hex')
+    into v_c2, v_k2 from public.mt5_import_staging s where s.user_id=v_user and s.source_account=v_acct;
+  if v_c1<>3 or v_c2<>3 then raise exception 'MT5_S1_FIXTURE_25_FAIL: seeded staging count drifted'; end if;
+  if v_k1 is distinct from v_k2 then raise exception 'MT5_S1_FIXTURE_25_FAIL: non-lifecycle evidence checksum changed under a lifecycle-only mutation'; end if;
+  raise notice 'MT5_S1_FIXTURE_25 PASS (additions minimal; evidence count+checksum invariant under lifecycle-only change; ledger captured pre-evidence)';
 end $f25$;
 
 -- Fixture 26 — expiry: DB-time-expired lease only; started->failed, complete/pending->reconcile failed
 do $f26$
 declare
   v_user uuid := '00000000-0000-0000-0000-0000000000aa'; v_acct text := 'ACC_F26';
-  v_a uuid := gen_random_uuid(); v_la uuid := gen_random_uuid(); r record;
+  v_a uuid := gen_random_uuid(); v_la uuid := gen_random_uuid();
+  v_b uuid := gen_random_uuid(); v_lb uuid := gen_random_uuid(); r record;
 begin
+  -- (a) started + live lease -> ERR_LEASE_NOT_EXPIRED
   perform public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
-  -- not expired yet -> ERR_LEASE_NOT_EXPIRED
   select * into r from public.mt5_expire_stale_run_v1(v_a,v_user,v_acct);
   if r.o_error_code<>'ERR_LEASE_NOT_EXPIRED' then raise exception 'MT5_S1_FIXTURE_26_FAIL: live lease expected ERR_LEASE_NOT_EXPIRED got %',r.o_error_code; end if;
-  -- force expiry -> started->failed
+  -- (b) started + expired lease -> started->failed
   update public.mt5_sync_runs set lease_expires_at=clock_timestamp()-interval '1 h' where id=v_a;
   select * into r from public.mt5_expire_stale_run_v1(v_a,v_user,v_acct);
   if not r.o_ok or (select snapshot_status from public.mt5_sync_runs where id=v_a)<>'failed' then
     raise exception 'MT5_S1_FIXTURE_26_FAIL: expired started run must become failed got %',r.o_error_code;
   end if;
-  raise notice 'MT5_S1_FIXTURE_26 PASS (expiry only on DB-time-expired lease)';
+  -- (c) complete+pending + expired lease -> reconcile failed; snapshot stays complete (authority intact)
+  perform public.mt5_create_run_v1(v_b,v_user,v_acct,v_lb,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
+  perform public.mt5_append_run_positions_v1(v_b,v_user,v_acct,v_lb,
+    '[{"position_id":1,"symbol_raw":"GOU26","side":"buy","volume":1,"source_time_msc":1}]'::jsonb);
+  perform public.mt5_complete_snapshot_v1(v_b,v_user,v_acct,v_lb,1,array[1]::bigint[]);   -- now complete+pending
+  update public.mt5_sync_runs set lease_expires_at=clock_timestamp()-interval '1 h' where id=v_b;
+  select * into r from public.mt5_expire_stale_run_v1(v_b,v_user,v_acct);
+  if not r.o_ok then raise exception 'MT5_S1_FIXTURE_26_FAIL: expire complete/pending -> %',r.o_error_code; end if;
+  if (select snapshot_status from public.mt5_sync_runs where id=v_b)<>'complete'
+     or (select reconcile_status from public.mt5_sync_runs where id=v_b)<>'failed' then
+    raise exception 'MT5_S1_FIXTURE_26_FAIL: expired complete/pending must be complete + reconcile failed';
+  end if;
+  raise notice 'MT5_S1_FIXTURE_26 PASS (expiry: live->NOT_EXPIRED; started->failed; complete/pending->reconcile failed)';
 end $f26$;
 
 -- ============================================================================================

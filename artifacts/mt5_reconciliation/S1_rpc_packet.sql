@@ -79,7 +79,7 @@ create function public.mt5_position_fingerprint_v1(
   p_contract_size numeric,
   p_captured_at timestamptz
 ) returns text
-language sql immutable security definer set search_path=''
+language sql stable security definer set search_path=''
 as $fingerprint$
   select public.mt5_sha256_text_v1(
     pg_catalog.jsonb_build_array(
@@ -91,10 +91,10 @@ as $fingerprint$
       pg_catalog.to_jsonb(p_price_current),
       pg_catalog.to_jsonb(p_profit),
       pg_catalog.to_jsonb(case when p_open_time_utc is null then null else
-        pg_catalog.extract(epoch from p_open_time_utc)::numeric end),
+        extract(epoch from p_open_time_utc)::numeric end),
       pg_catalog.to_jsonb(p_source_time_msc),
       pg_catalog.to_jsonb(p_contract_size),
-      pg_catalog.to_jsonb(pg_catalog.extract(epoch from p_captured_at)::numeric)
+      pg_catalog.to_jsonb(extract(epoch from p_captured_at)::numeric)
     )::text
   )
 $fingerprint$;
@@ -139,6 +139,7 @@ begin
   if found then
     perform pg_catalog.pg_advisory_xact_lock(
       pg_catalog.hashtextextended(v_run.user_id::text||':'||v_run.source_account,0));
+    v_now := clock_timestamp();  -- refresh AFTER lock wait: lease decisions must use live DB time
     select r.* into v_run from public.mt5_sync_runs r where r.id=p_run_id for update;
     if p_user is distinct from v_run.user_id or p_account is distinct from v_run.source_account then
       return query select false,null::uuid,null::timestamptz,'ERR_RUN_CONFLICT'; return;
@@ -173,6 +174,7 @@ begin
 
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(p_user::text||':'||p_account,0));
+  v_now := clock_timestamp();  -- refresh AFTER lock wait: lease/expiry decisions must use live DB time
   select r.* into v_run from public.mt5_sync_runs r where r.id=p_run_id for update;
   if found then
     return query select false,null::uuid,null::timestamptz,'ERR_RUN_CONFLICT'; return;
@@ -341,7 +343,8 @@ begin
       on conflict (run_id,position_id) do nothing
       returning 1
     ) select count(*)::integer into v_inserted from ins;
-  exception when invalid_text_representation or numeric_value_out_of_range or datetime_field_overflow then
+  exception when others then
+    -- any payload parse/shape/cast failure inside this tightly scoped block -> stable contract error
     return query select false,0,'ERR_BAD_PAYLOAD'; return;
   end;
   return query select true,v_inserted,null::text;
@@ -659,6 +662,7 @@ as $fn$
 declare v_run public.mt5_sync_runs%rowtype; v_now timestamptz;
 begin
   if p_run_id is null or p_user is null or p_lease_token is null or p_account is null or btrim(p_account)=''
+     or p_reason_code is null
      or p_reason_code not in ('CAPTURE_FAILED','VALIDATION_FAILED','APPEND_FAILED','SEAL_FAILED',
        'UNSUPPORTED_MARGIN_MODE','OPERATOR_CANCELLED') then
     return query select false,'ERR_BAD_INPUT'; return;
@@ -693,6 +697,7 @@ as $fn$
 declare v_run public.mt5_sync_runs%rowtype; v_now timestamptz;
 begin
   if p_run_id is null or p_user is null or p_lease_token is null or p_account is null or btrim(p_account)=''
+     or p_reason_code is null
      or p_reason_code not in ('LIFECYCLE_INVARIANT','BASELINE_INVALID','RECONCILE_FAILED','OPERATOR_CANCELLED') then
     return query select false,'ERR_BAD_INPUT'; return;
   end if;
@@ -799,7 +804,7 @@ begin
   exception when others then
     return pg_catalog.jsonb_build_object('ok',false,'error_code','ERR_POLICY_INVALID');
   end;
-  v_age_seconds:=greatest(0,pg_catalog.extract(epoch from clock_timestamp()-v_run.captured_at));
+  v_age_seconds:=greatest(0,extract(epoch from clock_timestamp()-v_run.captured_at));
   if v_run.snapshot_health='suspicious' then v_state:='suspicious';
   elsif v_age_seconds>v_freshness_seconds then v_state:='stale';
   else v_state:='fresh'; end if;
@@ -889,7 +894,7 @@ begin
        'mt5_complete_snapshot_v1','mt5_reconcile_snapshot_v1','mt5_mark_snapshot_failed_v1',
        'mt5_mark_reconcile_failed_v1','mt5_expire_stale_run_v1','mt5_get_current_snapshot_v1'])
        and (not p.prosecdef or pg_get_userbyid(p.proowner)<>'postgres'
-         or not coalesce(p.proconfig,'{}'::text[]) @> array['search_path=""'])
+         or not (coalesce(p.proconfig,'{}'::text[]) @> array['search_path=""']))
   ) then raise exception 'MT5_S1_RPC_POSTFLIGHT: owner/security/search_path mismatch'; end if;
 end
 $postflight$;

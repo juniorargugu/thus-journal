@@ -28,7 +28,12 @@ ledger row exists with the exact recorded checksum + source hash.
 `public.mt5_schema_migrations` (version PK, description, checksum, `source_artifact_sha256`, status, `objects` jsonb,
 `applied_at`, `applied_by`). It is **created before it is queried**, records **separate** schema/RPC versions, and each
 packet **records success only at the very end** (the ledger `insert ... 'applied'` is the last statement before
-`commit`). Compatibility is proven by **exact catalog checks**, never name/substring markers:
+`commit`). Compatibility is proven by **catalog-definition checks (not name/substring markers)** — column
+names+types+nullability, the exact Phase-0A open-position partial-unique predicate, object ownership, grant privilege
+sets, function `prosecdef`/owner/`search_path`, and exact function signatures. **Scope note:** the *pre-existing-ledger*
+branch validates the ledger's exact column set (names+types+nullability + exact column count) but does not re-validate
+every constraint/default/ACL of a ledger it did not create; the authoritative integrity anchor across packets is the
+recorded checksum + `source_artifact_sha256`.
 
 - staging column names+types+nullability (`information_schema.columns`), the exact Phase-0A open-position partial-unique
   predicate (`pg_get_expr(indpred)`), absence of `last_seen_run_id`/lifecycle columns, absence of pre-existing S1 run
@@ -95,8 +100,11 @@ falls back to staging `kind='open'`.
 ## Phase-0A staging privilege matrix (before → after) — derived from the real writer
 
 Ground truth: `ops/mt5_import/writer.py` `PATCH_ALLOWLIST = ("last_seen_open_at","price","volume","mt5_time",
-"mt5_time_msc","mt5_time_raw_epoch")`; `grep position_state ops/mt5_import/writer.py` → **no matches** (the writer never
-writes lifecycle columns). So the narrowing is exact, not guessed, and cannot break ingestion.
+"mt5_time_msc","mt5_time_raw_epoch")` — the exact 6 columns the writer ever PATCHes (UPDATEs). The mapper
+`ops/mt5_import/build_rows.py` supplies `"position_state":"open"` on the initial **INSERT** of a new open row, but the
+writer **never UPDATEs `position_state`** (it is not in `PATCH_ALLOWLIST`). Therefore S1 keeps `service_role` **INSERT**
+on `position_state` (initial value only) and **denies UPDATE** on it and the two new lifecycle columns — this is exact,
+derived from the real writer, and cannot break ingestion.
 
 | Grant on `mt5_import_staging` to `service_role` | Before (Phase 0A) | After (S1) |
 |---|---|---|
@@ -145,12 +153,40 @@ disposable Postgres with the schema+RPC packets applied and are approval-gated (
 
 ## Rollback summary
 
-`S1_rollback_packet.sql`: operational writer-disable prerequisite (comment) → ledger + exact-checksum + owner guard →
-revoke/drop the 9 RPCs + 3 helpers (exact signatures) → drop triggers/policies → **restore Phase-0A broad staging
-INSERT/UPDATE** then drop the S1 staging FK/CHECK/indexes/columns → drop `mt5_sync_run_positions` (composite FK drops
-with it) + guard function → drop `mt5_sync_runs` → delete only the two S1 ledger rows (drop the ledger table only if S1
-created it and it is now empty) → postflight proving S1 objects gone + Phase-0A grant restored. Original staging rows and
-`raw` evidence untouched. `IF EXISTS` throughout; reconciliation failure is explicitly **not** a rollback reason.
+`S1_rollback_packet.sql`: operational writer-disable prerequisite (comment) → ledger + exact-checksum + **owner guard on
+both run tables and the guard function** → **drop** the 9 RPCs + 3 helpers via `DROP FUNCTION IF EXISTS` (which also
+removes their ACLs, so no separate REVOKE is needed and rollback is **safe for a partial RPC install**) → drop
+triggers/policies → **restore the EXACT pre-S1 `service_role` staging grants recorded in the schema ledger**
+(`staging_pre_service_grants`, falling back to the Phase-0A `INSERT,SELECT,UPDATE` baseline) then drop the S1 staging
+FK/CHECK/indexes/columns → drop `mt5_sync_run_positions` (composite FK drops with it) + guard function → drop
+`mt5_sync_runs` → delete only the two S1 ledger rows (drop the ledger table only if S1 created it and it is now empty) →
+postflight proving S1 objects gone + staging UPDATE grant restored. Every destructive `DROP` uses `IF EXISTS`;
+`REVOKE`/`GRANT` are inherently no-op-safe. Original staging rows and `raw` evidence untouched; reconciliation failure is
+explicitly **not** a rollback reason.
+
+## Corrections applied (review round 1)
+
+All blocking + gap findings from the first executable review were fixed in-place:
+- **Parse blocker** — `pg_catalog.extract(...)` (3 sites) → bare `extract(epoch from ...)`; the fingerprint helper is now
+  `stable` (it depends on `date_part`, which is stable), not `immutable`.
+- **NULL reason code** — `mt5_mark_snapshot_failed_v1` / `mt5_mark_reconcile_failed_v1` now explicitly reject
+  `p_reason_code is null` → `ERR_BAD_INPUT` (no raw CHECK failure).
+- **Stale post-lock clock** — `mt5_create_run_v1` re-captures `clock_timestamp()` **after** each advisory-lock acquisition
+  and row re-fetch, before any lease/expiry decision.
+- **Payload sanitization** — the append parsing block now catches `when others` → `ERR_BAD_PAYLOAD` (all parse/shape/cast
+  failures mapped to the stable contract).
+- **Vacuous fixtures** — fixtures 3 and 4 now seed the open staging rows and assert the rows exist + hold the expected
+  lifecycle state before comparing; fixture 13 expects exactly `ERR_REPLAY_CONFLICT`; fixture 25 independently recomputes
+  the non-lifecycle evidence checksum and proves a lifecycle-only change leaves it invariant + asserts the ledger captured
+  pre-migration evidence; fixture 26 now also tests `complete+pending → reconcile failed`.
+- **Partial-install-safe rollback** — dropped the unconditional function `REVOKE`s (DROP removes ACLs); added owner guards
+  for the run-position table and guard function.
+- **Grant provenance** — the schema packet captures the pre-S1 `service_role` staging privileges into the ledger; rollback
+  restores exactly those (fallback: Phase-0A `INSERT,SELECT,UPDATE`).
+- **Extra-column ledger guard** — the pre-existing-ledger preflight now also rejects an unexpected ledger column set.
+- **Postflight clarity** — parenthesized the `proconfig @>` search_path test.
+- **README consistency** — corrected the `position_state` statement (INSERT-only initial value; never UPDATEd) and
+  softened the "exact catalog checks" / "IF EXISTS throughout" wording to match what the SQL actually does.
 
 ## Remaining risks / open decisions (for review)
 
