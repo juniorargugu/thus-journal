@@ -2,7 +2,17 @@
 -- Contract source: S1_append_only_snapshot_membership_design.md revision 3
 -- Status: executable draft, intentionally UNAPPLIED.
 -- Ledger version: mt5_s1_append_only_schema_v1
--- Contract checksum: d72f7c1128226743508c6ea5b9218b7ea5946a13ed2f88de1e8c772550b9c338
+-- Packet revision: 4  (executable-packet correction round 4)
+--
+-- PACKET IDENTITY TOKEN (stored in the ledger `checksum` column)
+--   e99efc365560b6246f652817612de3bb4b19f49b58f80988067b0546f6d700dc
+--   = sha256('mt5_s1_append_only_schema_v1|packet-revision-4')
+--   This is a DETERMINISTIC PACKET REVISION TOKEN, reproducible by anyone from that literal string.
+--   It is NOT a hash of this .sql file's bytes and proves nothing about the file or the deployed
+--   objects. Its only job is to make packet revisions distinguishable in the ledger and to keep the
+--   schema/RPC/rollback packets of one revision mutually recognisable. The 64-hex shape satisfies the
+--   ledger CHECK constraint. DESTRUCTIVE AUTHORITY IS THE APPLY-TIME CATALOG FINGERPRINTS RECORDED
+--   IN objects->'provenance', never this token. See README "Packet identity vs deployed-object proof".
 
 begin;
 
@@ -588,9 +598,11 @@ begin
     -- foreign index/constraint must not be destroyed.
     'staging_objects', (
       select coalesce(pg_catalog.jsonb_object_agg(x.name, x.def),'{}'::jsonb) from (
+        -- namespace-qualified: a same-named index in another schema must not be recorded here
         select i.relname as name, pg_catalog.pg_get_indexdef(i.oid) as def
           from pg_catalog.pg_class i
-         where i.relname in ('mt5_staging_lifecycle_open_idx','mt5_staging_missing_since_idx')
+         where i.relnamespace='public'::regnamespace
+           and i.relname in ('mt5_staging_lifecycle_open_idx','mt5_staging_missing_since_idx')
            and i.relkind='i'
         union all
         select k.conname, pg_catalog.pg_get_constraintdef(k.oid)
@@ -598,6 +610,47 @@ begin
          where k.conrelid='public.mt5_import_staging'::regclass
            and k.conname in ('mt5_staging_missing_since_scope_fk','mt5_staging_position_state_s1_chk')
       ) x),
+    -- S1-ADDED COLUMNS on the pre-existing staging table. Rollback drops these BY NAME, so each one
+    -- carries a full apply-time definition fingerprint: a user/replacement column that merely shares
+    -- the name must never be destroyed.
+    'staging_columns_def', (
+      select coalesce(pg_catalog.jsonb_object_agg(x.attname, x.def),'{}'::jsonb) from (
+        select a.attname,
+               'public.mt5_import_staging|'||a.attname||'|'||
+               pg_catalog.format_type(a.atttypid,a.atttypmod)||'|'||
+               a.attnotnull::text||'|'||
+               coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||'|'||
+               a.attidentity||'|'||a.attgenerated as def
+          from pg_catalog.pg_attribute a
+          left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+         where a.attrelid='public.mt5_import_staging'::regclass
+           and a.attnum>0 and not a.attisdropped
+           and a.attname in ('lifecycle_updated_at','missing_since_run_id')
+      ) x),
+    -- Structural fingerprint of the migration ledger ITSELF (owner + columns + constraints + indexes,
+    -- ACL-free), so rollback gets an additional identity check on the table it draws authority from.
+    -- Recorded whether S1 created the ledger or reused an exactly-compatible pre-existing one; the
+    -- INSERT that follows changes rows, never structure, so this value stays valid.
+    'ledger_struct', (
+      select pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
+               pg_catalog.pg_get_userbyid(c.relowner)||'|'||
+               coalesce((select pg_catalog.string_agg(
+                           a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||
+                           a.attnotnull::text||':'||
+                           coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||':'||
+                           a.attidentity||':'||a.attgenerated, ',' order by a.attnum)
+                         from pg_catalog.pg_attribute a
+                         left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+                        where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped),'')||'|'||
+               coalesce((select pg_catalog.string_agg(k.conname||':'||pg_catalog.pg_get_constraintdef(k.oid),
+                           ',' order by k.conname)
+                         from pg_catalog.pg_constraint k where k.conrelid=c.oid),'')||'|'||
+               coalesce((select pg_catalog.string_agg(pg_catalog.pg_get_indexdef(i.indexrelid),
+                           ',' order by pg_catalog.pg_get_indexdef(i.indexrelid))
+                         from pg_catalog.pg_index i where i.indrelid=c.oid),'')
+             ,'UTF8'),'sha256'),'hex')
+        from pg_catalog.pg_class c where c.oid='public.mt5_schema_migrations'::regclass
+    ),
     -- the column ACLs S1 installed on staging, read back from the catalog (NOT a hardcoded list)
     'staging_col_grants', coalesce((
       select pg_catalog.jsonb_object_agg(a.attname, g.privs)
@@ -630,6 +683,12 @@ begin
   if (select count(*) from pg_catalog.jsonb_object_keys(v->'staging_objects'))<>4 then
     raise exception 'MT5_S1_PROVENANCE: expected 4 staging annotation fingerprints (2 indexes + 2 constraints)';
   end if;
+  if (select count(*) from pg_catalog.jsonb_object_keys(v->'staging_columns_def'))<>2 then
+    raise exception 'MT5_S1_PROVENANCE: expected definition fingerprints for both S1-added staging columns';
+  end if;
+  if (v->>'ledger_struct') is null then
+    raise exception 'MT5_S1_PROVENANCE: the migration ledger structural fingerprint was not recorded';
+  end if;
   perform pg_catalog.set_config('mt5.s1_provenance', v::text, true);
 end
 $prov$;
@@ -639,11 +698,15 @@ insert into public.mt5_schema_migrations(
 ) values (
   'mt5_s1_append_only_schema_v1',
   'MT5 S1 append-only snapshot schema and Phase 0A lifecycle privilege narrowing',
-  'd72f7c1128226743508c6ea5b9218b7ea5946a13ed2f88de1e8c772550b9c338',
+  -- packet identity token = sha256('mt5_s1_append_only_schema_v1|packet-revision-4'); NOT a file hash
+  'e99efc365560b6246f652817612de3bb4b19f49b58f80988067b0546f6d700dc',
+  -- source_artifact_sha256 = SHA-256 of the frozen design document's bytes (revision 3). This one IS
+  -- a real file hash: the .md is a static committed artifact and is verifiable outside the database.
   '9902B301B3E170A7FD5AA348C9892395CEBEE129DF1B5F63FAB9F62D53CA266D',
   'applied',
   pg_catalog.jsonb_build_object(
     'ledger_created_by_s1', not current_setting('mt5.s1_ledger_preexisting')::boolean,
+    'packet_revision', 4,
     'tables', array['mt5_sync_runs','mt5_sync_run_positions'],
     'staging_columns', array['lifecycle_updated_at','missing_since_run_id'],
     'staging_pre_count', current_setting('mt5.s1_staging_count')::bigint,

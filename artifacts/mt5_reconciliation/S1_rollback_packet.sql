@@ -11,8 +11,10 @@
 --   AND MUST RESTORE PRE-S1 PRIVILEGES EXACTLY.
 --
 -- AUTHORITY MODEL
---   1. Establish which S1 packets successfully applied, from ledger provenance.
---   2. Validate the ledger itself.
+--   1. Revalidate the CURRENT migration ledger against the canonical contract (structure, owner,
+--      exact ACL) AND against its own apply-time structural fingerprint, BEFORE any row is trusted.
+--      Rows copied into a replacement table are not evidence.
+--   2. Establish which S1 packets successfully applied, from ledger provenance.
 --   3. For every destructive target:
 --        packet never successfully applied  -> DO NOT DROP (no mandate; a same-named object is foreign)
 --        object absent in a supported state -> safe skip
@@ -20,9 +22,11 @@
 --                                              apply-time value recorded in the ledger
 --        mismatch                           -> STOP the entire rollback
 --        match                              -> may remove
---   4. Explicitly revoke the column ACLs S1 installed (table-level REVOKE does not remove them).
---   5. Restore the captured pre-S1 privilege state EXACTLY (empty restores to empty).
---   6. Exact postflight.
+--   4. Explicitly revoke the column ACLs S1 installed (table-level REVOKE does not remove them),
+--      driven by objects->'provenance'->'staging_col_grants'.
+--   5. Drop each S1-added staging column only after its recorded column definition matches.
+--   6. Restore the captured pre-S1 privilege state EXACTLY (empty restores to empty).
+--   7. Exact postflight.
 --   No name-only inference. No owner-only inference. No broad fallback restoration.
 --
 -- PROVENANCE HONESTY (see README "Packet identity vs deployed-object proof")
@@ -37,38 +41,188 @@
 
 begin;
 
--- 0) Ledger existence, identity, and provenance staging -----------------------------------------
+-- 0a) LEDGER REVALIDATION — the table this rollback draws destructive authority from ------------
+--     Rollback must not trust whatever relation happens to be named public.mt5_schema_migrations.
+--     Before ANY provenance row is consumed, the CURRENT ledger is revalidated against the exact
+--     canonical contract the schema packet enforces at apply time (structure, identity, ACL). A
+--     replaced/altered/re-privileged ledger STOPS the rollback before a single destructive statement,
+--     because rows copied into a foreign table are not evidence about deployed objects.
+do $ledger_valid$
+declare
+  v_acl text;
+begin
+  if to_regclass('public.mt5_schema_migrations') is null then
+    raise exception 'MT5_S1_ROLLBACK: migration ledger is missing; refusing blind rollback';
+  end if;
+
+  -- STRUCTURE: exact column set, types, nullability
+  if exists (
+    select 1
+      from (values
+        ('version','text','NO'), ('description','text','NO'), ('checksum','text','NO'),
+        ('source_artifact_sha256','text','NO'), ('status','text','NO'), ('objects','jsonb','NO'),
+        ('applied_at','timestamp with time zone','YES'), ('applied_by','text','NO')
+      ) x(column_name,data_type,is_nullable)
+     where not exists (
+       select 1 from information_schema.columns c
+        where c.table_schema='public' and c.table_name='mt5_schema_migrations'
+          and c.column_name=x.column_name and c.data_type=x.data_type and c.is_nullable=x.is_nullable
+     )
+  ) then
+    raise exception 'MT5_S1_ROLLBACK: current migration ledger definition is incompatible — refusing to trust its rows';
+  end if;
+  if (select count(*) from information_schema.columns
+       where table_schema='public' and table_name='mt5_schema_migrations') <> 8 then
+    raise exception 'MT5_S1_ROLLBACK: current migration ledger has an unexpected column set — refusing to trust its rows';
+  end if;
+
+  -- exact defaults S1 relies on
+  if (select pg_catalog.pg_get_expr(d.adbin,d.adrelid) from pg_catalog.pg_attrdef d
+       join pg_catalog.pg_attribute a on a.attrelid=d.adrelid and a.attnum=d.adnum
+      where d.adrelid='public.mt5_schema_migrations'::regclass and a.attname='objects')
+     is distinct from '''{}''::jsonb' then
+    raise exception 'MT5_S1_ROLLBACK: current ledger objects default differs — refusing to trust its rows';
+  end if;
+  if (select pg_catalog.pg_get_expr(d.adbin,d.adrelid) from pg_catalog.pg_attrdef d
+       join pg_catalog.pg_attribute a on a.attrelid=d.adrelid and a.attnum=d.adnum
+      where d.adrelid='public.mt5_schema_migrations'::regclass and a.attname='applied_by')
+     is distinct from 'CURRENT_USER' then
+    raise exception 'MT5_S1_ROLLBACK: current ledger applied_by default differs — refusing to trust its rows';
+  end if;
+
+  -- primary key + every CHECK constraint, by name AND definition
+  if not exists (
+    select 1 from pg_catalog.pg_constraint k
+     where k.conrelid='public.mt5_schema_migrations'::regclass and k.contype='p'
+       and pg_catalog.pg_get_constraintdef(k.oid)='PRIMARY KEY (version)'
+  ) then
+    raise exception 'MT5_S1_ROLLBACK: current ledger primary key differs — refusing to trust its rows';
+  end if;
+  if exists (
+    select 1 from (values
+      ('mt5_schema_migrations_version_nonblank_chk','CHECK ((btrim(version) <> ''''::text))'),
+      ('mt5_schema_migrations_checksum_chk','CHECK ((checksum ~ ''^[0-9a-f]{64}$''::text))'),
+      ('mt5_schema_migrations_source_checksum_chk','CHECK ((source_artifact_sha256 ~ ''^[0-9A-F]{64}$''::text))'),
+      ('mt5_schema_migrations_status_chk','CHECK ((status = ANY (ARRAY[''applied''::text, ''rolled_back''::text])))'),
+      ('mt5_schema_migrations_applied_at_chk','CHECK (((status = ''applied''::text) = (applied_at IS NOT NULL)))')
+    ) x(cname,cdef)
+    where not exists (
+      select 1 from pg_catalog.pg_constraint k
+       where k.conrelid='public.mt5_schema_migrations'::regclass
+         and k.contype='c' and k.conname=x.cname
+         and pg_catalog.pg_get_constraintdef(k.oid)=x.cdef
+    )
+  ) then
+    raise exception 'MT5_S1_ROLLBACK: current ledger CHECK constraints differ — refusing to trust its rows';
+  end if;
+  if (select count(*) from pg_catalog.pg_constraint k
+       where k.conrelid='public.mt5_schema_migrations'::regclass and k.contype in ('c','p','u','f')) <> 6 then
+    raise exception 'MT5_S1_ROLLBACK: current ledger carries unexpected constraints — refusing to trust its rows';
+  end if;
+
+  -- IDENTITY: owner
+  if (select pg_catalog.pg_get_userbyid(c.relowner) from pg_catalog.pg_class c
+       where c.oid='public.mt5_schema_migrations'::regclass) <> 'postgres' then
+    raise exception 'MT5_S1_ROLLBACK: current ledger is not postgres-owned — refusing to trust its rows';
+  end if;
+
+  -- ACL: EXACT normalized equality (owner's implicit entry excluded), not a subset search. Rejects
+  -- missing SELECT, extra privileges, WITH GRANT OPTION, PUBLIC access and unrelated-role grants.
+  select coalesce(pg_catalog.string_agg(
+           (case when e.grantee=0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(e.grantee) end)
+           ||':'||e.privilege_type||':'||e.is_grantable::text, ','
+           order by (case when e.grantee=0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(e.grantee) end),
+                    e.privilege_type),'')
+    into v_acl
+    from pg_catalog.pg_class c
+    cross join lateral pg_catalog.aclexplode(c.relacl) e
+   where c.oid='public.mt5_schema_migrations'::regclass
+     and (case when e.grantee=0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(e.grantee) end) <> 'postgres';
+  if v_acl is distinct from 'service_role:SELECT:false' then
+    raise exception 'MT5_S1_ROLLBACK: current ledger ACL is [%], expected exactly [service_role:SELECT:false] — refusing to trust its rows',
+      coalesce(nullif(v_acl,''),'<none>');
+  end if;
+  if exists (
+    select 1 from pg_catalog.pg_attribute a
+     where a.attrelid='public.mt5_schema_migrations'::regclass
+       and a.attnum>0 and not a.attisdropped and a.attacl is not null
+  ) then
+    raise exception 'MT5_S1_ROLLBACK: current ledger carries column-level ACLs — refusing to trust its rows';
+  end if;
+end
+$ledger_valid$;
+
+-- 0) Ledger row identity, structural cross-check, and provenance staging ------------------------
 --    `record`/scalar variables only: no %ROWTYPE against a relation whose existence is not yet
 --    proven, so a missing ledger yields the intended stable guard rather than a compile error.
 do $guard$
 declare
   v_schema record;
   v_rpc record;
+  v_prov jsonb;
   v_pre_grants text;
   v_has_rpc boolean := false;
+  v_ledger_now text;
 begin
-  if to_regclass('public.mt5_schema_migrations') is null then
-    raise exception 'MT5_S1_ROLLBACK: migration ledger is missing; refusing blind rollback';
-  end if;
-
-  select m.version, m.status, m.checksum, m.objects into v_schema
+  select m.version, m.status, m.checksum, m.source_artifact_sha256, m.objects into v_schema
     from public.mt5_schema_migrations m where m.version='mt5_s1_append_only_schema_v1';
   if not found or v_schema.status<>'applied'
-     or v_schema.checksum<>'d72f7c1128226743508c6ea5b9218b7ea5946a13ed2f88de1e8c772550b9c338' then
-    raise exception 'MT5_S1_ROLLBACK: schema ledger entry is missing or checksum mismatch (incompatible objects)';
+     or v_schema.checksum<>'e99efc365560b6246f652817612de3bb4b19f49b58f80988067b0546f6d700dc' then
+    raise exception 'MT5_S1_ROLLBACK: schema ledger entry is missing or is not this packet revision (incompatible objects)';
   end if;
-  if (v_schema.objects ? 'provenance') is not true then
+  -- all recorded packet identity metadata is compared, including the frozen-design source hash
+  if v_schema.source_artifact_sha256
+     <> '9902B301B3E170A7FD5AA348C9892395CEBEE129DF1B5F63FAB9F62D53CA266D' then
+    raise exception 'MT5_S1_ROLLBACK: schema ledger source_artifact_sha256 does not match the frozen revision-3 design';
+  end if;
+  if (v_schema.objects->>'packet_revision') is distinct from '4' then
+    raise exception 'MT5_S1_ROLLBACK: schema ledger packet_revision is not 4 — this rollback matches a different packet revision';
+  end if;
+  if (v_schema.objects ? 'provenance') is not true
+     or pg_catalog.jsonb_typeof(v_schema.objects->'provenance') is distinct from 'object' then
     raise exception 'MT5_S1_ROLLBACK: schema ledger carries no apply-time object provenance; refusing destructive rollback';
   end if;
-  perform pg_catalog.set_config('mt5.s1_prov_schema',(v_schema.objects->'provenance')::text,true);
+  v_prov := v_schema.objects->'provenance';
+  perform pg_catalog.set_config('mt5.s1_prov_schema', v_prov::text, true);
+
+  -- ADDITIONAL LEDGER IDENTITY CHECK: the apply-time structural fingerprint of the ledger itself.
+  -- 0a proved the ledger matches the canonical contract; this proves it is still the same relation
+  -- S1 recorded, catching an exactly-shaped replacement built to impersonate it.
+  if (v_prov->>'ledger_struct') is null then
+    raise exception 'MT5_S1_ROLLBACK: provenance carries no ledger structural fingerprint; refusing destructive rollback';
+  end if;
+  select pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
+           pg_catalog.pg_get_userbyid(c.relowner)||'|'||
+           coalesce((select pg_catalog.string_agg(
+                       a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||
+                       a.attnotnull::text||':'||
+                       coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||':'||
+                       a.attidentity||':'||a.attgenerated, ',' order by a.attnum)
+                     from pg_catalog.pg_attribute a
+                     left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+                    where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped),'')||'|'||
+           coalesce((select pg_catalog.string_agg(k.conname||':'||pg_catalog.pg_get_constraintdef(k.oid),
+                       ',' order by k.conname)
+                     from pg_catalog.pg_constraint k where k.conrelid=c.oid),'')||'|'||
+           coalesce((select pg_catalog.string_agg(pg_catalog.pg_get_indexdef(i.indexrelid),
+                       ',' order by pg_catalog.pg_get_indexdef(i.indexrelid))
+                     from pg_catalog.pg_index i where i.indrelid=c.oid),'')
+         ,'UTF8'),'sha256'),'hex')
+    into v_ledger_now
+    from pg_catalog.pg_class c where c.oid='public.mt5_schema_migrations'::regclass;
+  if v_ledger_now is distinct from (v_prov->>'ledger_struct') then
+    raise exception 'MT5_S1_ROLLBACK: the current migration ledger is not the relation S1 recorded at apply time — refusing to trust its rows';
+  end if;
 
   -- RPC packet authority: ONLY a successful RPC ledger record authorises dropping RPC functions.
-  select m.version, m.status, m.checksum, m.objects into v_rpc
+  select m.version, m.status, m.checksum, m.source_artifact_sha256, m.objects into v_rpc
     from public.mt5_schema_migrations m where m.version='mt5_s1_append_only_rpc_v1';
   if found then
     if v_rpc.status<>'applied'
-       or v_rpc.checksum<>'97f4e993f407fc49794e4e230d9a5071a138624e196fe7c2ed233727ccc73cd1' then
-      raise exception 'MT5_S1_ROLLBACK: rpc ledger row exists but is not a valid successful application';
+       or v_rpc.checksum<>'b032398010ddeeca290e6c1ac344d405f64ea69dbfcf570e087408457cb5b398'
+       or v_rpc.source_artifact_sha256<>'9902B301B3E170A7FD5AA348C9892395CEBEE129DF1B5F63FAB9F62D53CA266D'
+       or (v_rpc.objects->>'packet_revision') is distinct from '4' then
+      raise exception 'MT5_S1_ROLLBACK: rpc ledger row exists but is not a valid revision-4 application';
     end if;
     if (v_rpc.objects->'provenance') is null then
       raise exception 'MT5_S1_ROLLBACK: rpc ledger carries no apply-time function provenance; refusing to drop RPCs';
@@ -94,8 +248,26 @@ begin
     raise exception 'MT5_S1_ROLLBACK: unsupported privilege token in captured provenance (%)', v_pre_grants;
   end if;
   perform pg_catalog.set_config('mt5.s1_staging_pre_grants', v_pre_grants, true);
+
+  -- S1-installed COLUMN ACLs. The schema packet records these INSIDE the provenance object
+  -- (objects->'provenance'->'staging_col_grants'); reading objects->'staging_col_grants' would
+  -- silently yield an empty set and leave S1 column privileges behind. Missing/malformed provenance
+  -- must STOP: "no key" is not the same statement as "S1 granted nothing". A key that is present and
+  -- empty is a valid recorded fact meaning there are zero S1 column grants to revoke.
+  if (v_prov ? 'staging_col_grants') is not true
+     or pg_catalog.jsonb_typeof(v_prov->'staging_col_grants') is distinct from 'object' then
+    raise exception 'MT5_S1_ROLLBACK: provenance has no staging_col_grants object; refusing to guess which column privileges S1 installed';
+  end if;
   perform pg_catalog.set_config('mt5.s1_staging_col_grants',
-    coalesce((v_schema.objects->'staging_col_grants')::text,'{}'), true);
+    (v_prov->'staging_col_grants')::text, true);
+
+  -- S1-added staging column definitions, required before either column may be dropped by name
+  if (v_prov ? 'staging_columns_def') is not true
+     or pg_catalog.jsonb_typeof(v_prov->'staging_columns_def') is distinct from 'object' then
+    raise exception 'MT5_S1_ROLLBACK: provenance has no staging_columns_def object; refusing to drop S1 staging columns by name alone';
+  end if;
+  perform pg_catalog.set_config('mt5.s1_staging_cols_def',
+    (v_prov->'staging_columns_def')::text, true);
   perform pg_catalog.set_config('mt5.s1_ledger_created_by_s1',
     coalesce((v_schema.objects->>'ledger_created_by_s1'),'false'), true);
 end
@@ -109,6 +281,11 @@ declare
   v_pr jsonb := current_setting('mt5.s1_prov_rpc')::jsonb;
   v_bad text;
 begin
+  -- the Phase 0A staging table is a hard prerequisite for the annotation/column/ACL checks below
+  if to_regclass('public.mt5_import_staging') is null then
+    raise exception 'MT5_S1_ROLLBACK: public.mt5_import_staging is missing; cannot verify or restore Phase 0A state';
+  end if;
+
   -- ---- S1 tables: structural fingerprint (owner + columns + constraints + indexes; ACL-free) ---
   select pg_catalog.string_agg(x.rel, ', ' order by x.rel) into v_bad
     from (values ('mt5_sync_runs'),('mt5_sync_run_positions')) x(rel)
@@ -189,11 +366,15 @@ begin
   end if;
 
   -- ---- policies: name + command + permissive + roles + USING + WITH CHECK -----------------------
+  --      Policy lookups are restricted to the two S1 relations in `public` (to_regclass yields NULL
+  --      for an absent relation, which simply matches nothing), so a same-named policy on a
+  --      same-named table in another schema can neither satisfy nor false-block this check.
   select pg_catalog.string_agg(k.key, ', ' order by k.key) into v_bad
     from pg_catalog.jsonb_object_keys(v_ps->'policies') as k(key)
    where exists (
      select 1 from pg_catalog.pg_policy pol
-      where ((select c2.relname from pg_catalog.pg_class c2 where c2.oid=pol.polrelid)||'.'||pol.polname) = k.key
+      where pol.polrelid in (to_regclass('public.mt5_sync_runs'), to_regclass('public.mt5_sync_run_positions'))
+        and ((select c2.relname from pg_catalog.pg_class c2 where c2.oid=pol.polrelid)||'.'||pol.polname) = k.key
    )
      and (v_ps->'policies'->>k.key) is distinct from (
        select pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
@@ -204,7 +385,8 @@ begin
                 coalesce(pg_catalog.pg_get_expr(pol.polwithcheck,pol.polrelid),'')
               ,'UTF8'),'sha256'),'hex')
          from pg_catalog.pg_policy pol
-        where ((select c2.relname from pg_catalog.pg_class c2 where c2.oid=pol.polrelid)||'.'||pol.polname) = k.key
+        where pol.polrelid in (to_regclass('public.mt5_sync_runs'), to_regclass('public.mt5_sync_run_positions'))
+          and ((select c2.relname from pg_catalog.pg_class c2 where c2.oid=pol.polrelid)||'.'||pol.polname) = k.key
      );
   if v_bad is not null then
     raise exception 'MT5_S1_ROLLBACK: policy/policies % differ from the apply-time definition (replaced/altered) — refusing to drop', v_bad;
@@ -215,8 +397,9 @@ begin
   select pg_catalog.string_agg(k.name, ', ' order by k.name) into v_bad
     from pg_catalog.jsonb_object_keys(v_ps->'staging_objects') as k(name)
    where (v_ps->'staging_objects'->>k.name) is distinct from coalesce(
+     -- namespace-qualified: a same-named index in another schema must not satisfy (or block) this check
      (select pg_catalog.pg_get_indexdef(i.oid) from pg_catalog.pg_class i
-       where i.relname=k.name and i.relkind='i'),
+       where i.relnamespace='public'::regnamespace and i.relname=k.name and i.relkind='i'),
      (select pg_catalog.pg_get_constraintdef(c.oid) from pg_catalog.pg_constraint c
        where c.conrelid='public.mt5_import_staging'::regclass and c.conname=k.name),
      -- absent object: treat as "matches" so a supported partial install skips it rather than STOPping
@@ -224,6 +407,31 @@ begin
    );
   if v_bad is not null then
     raise exception 'MT5_S1_ROLLBACK: staging annotation(s) % differ from the apply-time definition (replaced/altered) — refusing to drop', v_bad;
+  end if;
+
+  -- ---- S1-added staging COLUMNS: full definition fingerprint before any DROP COLUMN -------------
+  --      Dropping by name alone would destroy a user/replacement column of the same name. Each
+  --      column's current definition must equal the apply-time definition exactly; a column that is
+  --      absent is a supported partial-install state and is treated as matching (the DROP below is
+  --      `if exists`, so it simply skips).
+  select pg_catalog.string_agg(k.col, ', ' order by k.col) into v_bad
+    from pg_catalog.jsonb_object_keys(v_ps->'staging_columns_def') as k(col)
+   where exists (select 1 from pg_catalog.pg_attribute a
+                  where a.attrelid='public.mt5_import_staging'::regclass
+                    and a.attname=k.col and a.attnum>0 and not a.attisdropped)
+     and (v_ps->'staging_columns_def'->>k.col) is distinct from (
+       select 'public.mt5_import_staging|'||a.attname||'|'||
+              pg_catalog.format_type(a.atttypid,a.atttypmod)||'|'||
+              a.attnotnull::text||'|'||
+              coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||'|'||
+              a.attidentity||'|'||a.attgenerated
+         from pg_catalog.pg_attribute a
+         left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+        where a.attrelid='public.mt5_import_staging'::regclass
+          and a.attname=k.col and a.attnum>0 and not a.attisdropped
+     );
+  if v_bad is not null then
+    raise exception 'MT5_S1_ROLLBACK: staging column(s) % differ from the apply-time S1 definition (replaced by a different column) — refusing to drop', v_bad;
   end if;
 end
 $provenance$;
@@ -322,12 +530,49 @@ end
 $restore$;
 
 -- 4) drop the S1 staging annotations -------------------------------------------------------------
+--    Each of these four names was fingerprinted in 0b (pg_get_indexdef / pg_get_constraintdef); a
+--    same-named foreign object would already have STOPped the rollback there.
 alter table public.mt5_import_staging drop constraint if exists mt5_staging_missing_since_scope_fk;
 alter table public.mt5_import_staging drop constraint if exists mt5_staging_position_state_s1_chk;
 drop index if exists public.mt5_staging_lifecycle_open_idx;
 drop index if exists public.mt5_staging_missing_since_idx;
-alter table public.mt5_import_staging drop column if exists missing_since_run_id;
-alter table public.mt5_import_staging drop column if exists lifecycle_updated_at;
+
+-- 4b) drop the S1-ADDED staging columns — each authorised individually by its recorded definition --
+--     The column name alone is not a mandate. Immediately before each DROP the current column
+--     definition is re-compared with the apply-time fingerprint, so a replacement column that merely
+--     reuses the name is never destroyed. Absent column = supported partial install = skip.
+do $drop_cols$
+declare
+  v_defs jsonb := current_setting('mt5.s1_staging_cols_def')::jsonb;
+  v_col text;
+  v_now text;
+begin
+  foreach v_col in array array['missing_since_run_id','lifecycle_updated_at'] loop
+    select 'public.mt5_import_staging|'||a.attname||'|'||
+           pg_catalog.format_type(a.atttypid,a.atttypmod)||'|'||
+           a.attnotnull::text||'|'||
+           coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||'|'||
+           a.attidentity||'|'||a.attgenerated
+      into v_now
+      from pg_catalog.pg_attribute a
+      left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+     where a.attrelid='public.mt5_import_staging'::regclass
+       and a.attname=v_col and a.attnum>0 and not a.attisdropped;
+
+    if v_now is null then
+      raise notice 'MT5_S1_ROLLBACK: staging column % is already absent — skipping', v_col;
+      continue;
+    end if;
+    if (v_defs->>v_col) is null then
+      raise exception 'MT5_S1_ROLLBACK: staging column % exists but has no apply-time definition provenance — refusing to drop', v_col;
+    end if;
+    if v_now is distinct from (v_defs->>v_col) then
+      raise exception 'MT5_S1_ROLLBACK: staging column % is not the column S1 added (definition differs) — refusing to drop', v_col;
+    end if;
+    execute pg_catalog.format('alter table public.mt5_import_staging drop column %I', v_col);
+  end loop;
+end
+$drop_cols$;
 
 -- 5) drop the run-position table (indexes drop with it), then its guard function -----------------
 drop table if exists public.mt5_sync_run_positions;      -- composite FK to mt5_sync_runs drops with it
