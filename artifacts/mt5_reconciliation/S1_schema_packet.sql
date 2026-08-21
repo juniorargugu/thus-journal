@@ -14,6 +14,7 @@ declare
   v_staging_count bigint;
   v_staging_checksum text;
   v_staging_pre_grants text;
+  v_staging_pre_relacl text;
 begin
   perform pg_catalog.set_config('mt5.s1_ledger_preexisting', v_ledger_existed::text, true);
 
@@ -34,12 +35,42 @@ begin
     from public.mt5_import_staging s;
   perform pg_catalog.set_config('mt5.s1_staging_count',v_staging_count::text,true);
   perform pg_catalog.set_config('mt5.s1_staging_checksum',v_staging_checksum,true);
-  -- capture the pre-S1 service_role staging privileges so rollback restores EXACTLY what existed.
+  -- ---------------------------------------------------------------------------------------
+  -- EXACT pre-S1 privilege provenance for public.mt5_import_staging / service_role.
+  -- S1 mutates ONLY service_role's privileges on this one table, so that is the only ACL state
+  -- whose exact restoration rollback must guarantee. Two states cannot be faithfully reproduced
+  -- by a plain GRANT list, so they are rejected BEFORE any mutation (fail-closed) rather than
+  -- being silently approximated:
+  --   (a) WITH GRANT OPTION held by service_role
+  --   (b) pre-existing explicit COLUMN-level ACLs (S1 installs its own column grants; afterwards a
+  --       pre-existing column ACL would be indistinguishable from S1's own)
+  -- ---------------------------------------------------------------------------------------
+  if exists (
+    select 1 from information_schema.role_table_grants p
+     where p.table_schema='public' and p.table_name='mt5_import_staging'
+       and p.grantee='service_role' and p.is_grantable='YES'
+  ) then
+    raise exception 'MT5_S1_PREFLIGHT: service_role holds WITH GRANT OPTION on mt5_import_staging; exact rollback restoration is unsupported — refusing to mutate';
+  end if;
+  if exists (
+    select 1 from pg_catalog.pg_attribute a
+     where a.attrelid = 'public.mt5_import_staging'::regclass
+       and a.attnum > 0 and not a.attisdropped and a.attacl is not null
+  ) then
+    raise exception 'MT5_S1_PREFLIGHT: mt5_import_staging already carries explicit column-level ACLs; exact rollback restoration is unsupported — refusing to mutate';
+  end if;
+  -- Exact table-level privilege set (may legitimately be the EMPTY string; rollback must then
+  -- restore NOTHING — an empty capture is a real state, never a licence to grant something).
   select coalesce(pg_catalog.string_agg(distinct p.privilege_type,',' order by p.privilege_type),'')
     into v_staging_pre_grants
     from information_schema.role_table_grants p
    where p.table_schema='public' and p.table_name='mt5_import_staging' and p.grantee='service_role';
   perform pg_catalog.set_config('mt5.s1_staging_pre_grants',v_staging_pre_grants,true);
+  -- Full raw relacl, recorded for audit/forensics alongside the restorable privilege list.
+  select coalesce(pg_catalog.array_to_string(c.relacl,'|'),'')
+    into v_staging_pre_relacl
+    from pg_catalog.pg_class c where c.oid = 'public.mt5_import_staging'::regclass;
+  perform pg_catalog.set_config('mt5.s1_staging_pre_relacl',v_staging_pre_relacl,true);
 
   select pg_catalog.string_agg(x.expected, ', ' order by x.expected)
     into v_bad
@@ -106,6 +137,68 @@ begin
          where table_schema='public' and table_name='mt5_schema_migrations') <> 8 then
       raise exception 'MT5_S1_PREFLIGHT: mt5_schema_migrations has an unexpected column set';
     end if;
+    -- A pre-existing ledger is REUSED ONLY IF it is already exactly the definition S1 relies on.
+    -- S1 must never re-own, re-privilege, or "repair" a foreign object into its own shape, so every
+    -- remaining property is validated here and any difference STOPS the migration before mutation.
+    -- Because these are validated as already-correct, the static owner/REVOKE/GRANT statements that
+    -- follow this preflight are no-ops for a pre-existing ledger.
+    if (select pg_get_userbyid(c.relowner) from pg_catalog.pg_class c
+         where c.oid='public.mt5_schema_migrations'::regclass) <> 'postgres' then
+      raise exception 'MT5_S1_PREFLIGHT: pre-existing mt5_schema_migrations is not postgres-owned — refusing to take ownership';
+    end if;
+    -- exact default expressions S1 depends on
+    if (select pg_catalog.pg_get_expr(d.adbin,d.adrelid) from pg_catalog.pg_attrdef d
+         join pg_catalog.pg_attribute a on a.attrelid=d.adrelid and a.attnum=d.adnum
+        where d.adrelid='public.mt5_schema_migrations'::regclass and a.attname='objects')
+       is distinct from '''{}''::jsonb' then
+      raise exception 'MT5_S1_PREFLIGHT: pre-existing ledger objects default differs';
+    end if;
+    if (select pg_catalog.pg_get_expr(d.adbin,d.adrelid) from pg_catalog.pg_attrdef d
+         join pg_catalog.pg_attribute a on a.attrelid=d.adrelid and a.attnum=d.adnum
+        where d.adrelid='public.mt5_schema_migrations'::regclass and a.attname='applied_by')
+       is distinct from 'CURRENT_USER' then
+      raise exception 'MT5_S1_PREFLIGHT: pre-existing ledger applied_by default differs';
+    end if;
+    -- primary key on (version)
+    if not exists (
+      select 1 from pg_catalog.pg_constraint k
+       where k.conrelid='public.mt5_schema_migrations'::regclass and k.contype='p'
+         and pg_catalog.pg_get_constraintdef(k.oid)='PRIMARY KEY (version)'
+    ) then
+      raise exception 'MT5_S1_PREFLIGHT: pre-existing ledger primary key differs';
+    end if;
+    -- every CHECK constraint S1 relies on, by name and by definition
+    if exists (
+      select 1 from (values
+        ('mt5_schema_migrations_version_nonblank_chk','CHECK ((btrim(version) <> ''''::text))'),
+        ('mt5_schema_migrations_checksum_chk','CHECK ((checksum ~ ''^[0-9a-f]{64}$''::text))'),
+        ('mt5_schema_migrations_source_checksum_chk','CHECK ((source_artifact_sha256 ~ ''^[0-9A-F]{64}$''::text))'),
+        ('mt5_schema_migrations_status_chk','CHECK ((status = ANY (ARRAY[''applied''::text, ''rolled_back''::text])))'),
+        ('mt5_schema_migrations_applied_at_chk','CHECK (((status = ''applied''::text) = (applied_at IS NOT NULL)))')
+      ) x(cname,cdef)
+      where not exists (
+        select 1 from pg_catalog.pg_constraint k
+         where k.conrelid='public.mt5_schema_migrations'::regclass
+           and k.contype='c' and k.conname=x.cname
+           and pg_catalog.pg_get_constraintdef(k.oid)=x.cdef
+      )
+    ) then
+      raise exception 'MT5_S1_PREFLIGHT: pre-existing ledger CHECK constraints differ from the S1 definition';
+    end if;
+    -- no extra constraints beyond the PK + the 5 S1 CHECKs (a foreign FK/UNIQUE would change semantics)
+    if (select count(*) from pg_catalog.pg_constraint k
+         where k.conrelid='public.mt5_schema_migrations'::regclass and k.contype in ('c','p','u','f')) <> 6 then
+      raise exception 'MT5_S1_PREFLIGHT: pre-existing ledger carries unexpected constraints';
+    end if;
+    -- privilege state must ALREADY equal S1's target (service_role SELECT only; nothing for anon/authenticated/public)
+    if exists (
+      select 1 from information_schema.role_table_grants p
+       where p.table_schema='public' and p.table_name='mt5_schema_migrations'
+         and (p.grantee in ('anon','authenticated','PUBLIC')
+              or (p.grantee='service_role' and p.privilege_type<>'SELECT'))
+    ) then
+      raise exception 'MT5_S1_PREFLIGHT: pre-existing ledger privileges differ from the S1 definition — refusing to re-privilege';
+    end if;
   end if;
 end
 $preflight$;
@@ -126,6 +219,10 @@ create table if not exists public.mt5_schema_migrations (
   constraint mt5_schema_migrations_status_chk check (status in ('applied','rolled_back')),
   constraint mt5_schema_migrations_applied_at_chk check ((status='applied') = (applied_at is not null))
 );
+-- These three statements establish the ledger's owner/ACL when S1 CREATED it. When the ledger
+-- pre-existed, the preflight above has already proven it is postgres-owned with exactly the
+-- service_role-SELECT-only privilege set, so these statements are no-ops and S1 never re-owns or
+-- re-privileges a foreign object (it stops instead).
 alter table public.mt5_schema_migrations owner to postgres;
 revoke all on table public.mt5_schema_migrations from public, anon, authenticated, service_role;
 grant select on table public.mt5_schema_migrations to service_role;
@@ -404,7 +501,11 @@ insert into public.mt5_schema_migrations(
     'staging_columns', array['lifecycle_updated_at','missing_since_run_id'],
     'staging_pre_count', current_setting('mt5.s1_staging_count')::bigint,
     'staging_pre_checksum', current_setting('mt5.s1_staging_checksum'),
+    -- exact restorable table-level privilege list for service_role (may be the EMPTY string,
+    -- which rollback MUST restore as "no privileges" rather than substituting a default)
     'staging_pre_service_grants', current_setting('mt5.s1_staging_pre_grants'),
+    -- full raw pre-S1 relacl, audit/forensics only (never used to synthesize a GRANT)
+    'staging_pre_relacl', current_setting('mt5.s1_staging_pre_relacl'),
     'source_revision', 3
   ),
   now(),current_user

@@ -256,11 +256,36 @@ language plpgsql security definer set search_path=''
 as $fn$
 declare v_run public.mt5_sync_runs%rowtype; v_now timestamptz; v_inserted integer:=0;
 begin
+  -- (1) scalar identity arguments — no payload inspection in this branch.
   if p_run_id is null or p_user is null or p_lease_token is null
-     or p_account is null or btrim(p_account)=''
-     or p_rows is null or pg_catalog.jsonb_typeof(p_rows)<>'array'
-     or pg_catalog.jsonb_array_length(p_rows)>10000 or pg_catalog.octet_length(p_rows::text)>8388608 then
+     or p_account is null or btrim(p_account)='' then
     return query select false,0,'ERR_BAD_INPUT'; return;
+  end if;
+  -- (2) payload container shape — STAGED, deliberately NOT one OR chain. PostgreSQL does not
+  --     guarantee left-to-right OR short-circuiting, so jsonb_array_length() must never share a
+  --     boolean expression with the jsonb_typeof() test that makes it safe. Each check below runs
+  --     only after the previous one has positively established the shape it depends on. Every
+  --     payload-shape rejection maps to the single stable code ERR_BAD_PAYLOAD.
+  if p_rows is null then                                            -- SQL NULL payload
+    return query select false,0,'ERR_BAD_PAYLOAD'; return;
+  end if;
+  if pg_catalog.jsonb_typeof(p_rows) is distinct from 'array' then  -- wrong JSON type (object/scalar/json null)
+    return query select false,0,'ERR_BAD_PAYLOAD'; return;
+  end if;
+  if pg_catalog.octet_length(p_rows::text)>8388608 then             -- safe for any jsonb
+    return query select false,0,'ERR_BAD_PAYLOAD'; return;
+  end if;
+  if pg_catalog.jsonb_array_length(p_rows)>10000 then               -- SAFE: type proven 'array' above
+    return query select false,0,'ERR_BAD_PAYLOAD'; return;
+  end if;
+  -- (3) every element must itself be a JSON object, otherwise jsonb_to_recordset would raise a raw
+  --     "argument must be an array of objects" error later. Empty array passes (0 elements) and keeps
+  --     the frozen Revision-3 valid-empty-snapshot semantics unchanged.
+  if exists (
+    select 1 from pg_catalog.jsonb_array_elements(p_rows) as e
+     where pg_catalog.jsonb_typeof(e) is distinct from 'object'
+  ) then
+    return query select false,0,'ERR_BAD_PAYLOAD'; return;
   end if;
   select r.* into v_run from public.mt5_sync_runs r where r.id=p_run_id;
   if not found then return query select false,0,'ERR_RUN_NOT_FOUND'; return; end if;
@@ -906,7 +931,24 @@ insert into public.mt5_schema_migrations(
   '97f4e993f407fc49794e4e230d9a5071a138624e196fe7c2ed233727ccc73cd1',
   '9902B301B3E170A7FD5AA348C9892395CEBEE129DF1B5F63FAB9F62D53CA266D',
   'applied',
-  pg_catalog.jsonb_build_object('connector_rpcs',8,'browser_rpcs',1,'internal_helpers',3,'source_revision',3),
+  pg_catalog.jsonb_build_object(
+    'connector_rpcs',8,'browser_rpcs',1,'internal_helpers',3,'source_revision',3,
+    -- exact signatures S1 owns. Rollback drops ONLY signatures listed here, and only after proving
+    -- each surviving object still matches the S1 property fingerprint (owner/kind/definer/search_path).
+    'functions', array[
+      'public.mt5_get_current_snapshot_v1(text)',
+      'public.mt5_create_run_v1(uuid,uuid,text,uuid,integer,timestamp with time zone,text,integer,text,text)',
+      'public.mt5_heartbeat_run_v1(uuid,uuid,text,uuid,integer)',
+      'public.mt5_append_run_positions_v1(uuid,uuid,text,uuid,jsonb)',
+      'public.mt5_complete_snapshot_v1(uuid,uuid,text,uuid,integer,bigint[])',
+      'public.mt5_reconcile_snapshot_v1(uuid,uuid,text,uuid)',
+      'public.mt5_mark_snapshot_failed_v1(uuid,uuid,text,uuid,text)',
+      'public.mt5_mark_reconcile_failed_v1(uuid,uuid,text,uuid,text)',
+      'public.mt5_expire_stale_run_v1(uuid,uuid,text)',
+      'public.mt5_s1_policy_v1(text)',
+      'public.mt5_position_fingerprint_v1(bigint,text,text,numeric,numeric,numeric,numeric,timestamp with time zone,bigint,numeric,timestamp with time zone)',
+      'public.mt5_sha256_text_v1(text)'
+    ]),
   now(),current_user
 );
 

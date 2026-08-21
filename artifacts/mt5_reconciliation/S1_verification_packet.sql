@@ -108,24 +108,60 @@ begin
   perform public.mt5_complete_snapshot_v1(v_a,v_user,v_acct,v_la,20,v_ids);
   perform public.mt5_reconcile_snapshot_v1(v_a,v_user,v_acct,v_la);
 
-  -- lifecycle snapshot BEFORE B's reconcile (must be non-empty, else the comparison is vacuous)
-  select jsonb_agg(jsonb_build_object('pid',s.position_id,'st',s.position_state,'b',s.missing_since_run_id) order by s.position_id)
+  -- lifecycle snapshot BEFORE B's reconcile — captures ALL THREE lifecycle fields
+  -- (position_state, lifecycle_updated_at, missing_since_run_id) for the FULL seeded set, so the
+  -- post-reconcile comparison covers every field S1 is permitted to touch. Must be non-empty.
+  select jsonb_agg(jsonb_build_object('pid',s.position_id,'st',s.position_state,
+                                      'lu',s.lifecycle_updated_at,'b',s.missing_since_run_id)
+                   order by s.position_id)
     into v_before from public.mt5_import_staging s where s.user_id=v_user and s.source_account=v_acct and s.kind='open';
   if v_before is null or jsonb_array_length(v_before)<>20 then raise exception 'MT5_S1_FIXTURE_3_FAIL: expected 20 seeded lifecycle rows (non-vacuous)'; end if;
-  if exists (select 1 from jsonb_array_elements(v_before) e where e->>'st'<>'still_open') then
+  if exists (select 1 from jsonb_array_elements(v_before) e where e->>'st' is distinct from 'still_open') then
     raise exception 'MT5_S1_FIXTURE_3_FAIL: healthy A must have set all 20 rows to still_open';
   end if;
 
   -- B completes with ZERO positions -> suspicious (prev 20, cur 0)
   select * into r from public.mt5_create_run_v1(v_b,v_user,v_acct,v_lb,900,clock_timestamp()-interval '1 min','conn.v1',4200,'srv','s1.v1');
+  if r.o_ok is distinct from true then raise exception 'MT5_S1_FIXTURE_3_FAIL: create B -> %/%',r.o_ok,r.o_error_code; end if;
   perform public.mt5_append_run_positions_v1(v_b,v_user,v_acct,v_lb,'[]'::jsonb);
   select * into r from public.mt5_complete_snapshot_v1(v_b,v_user,v_acct,v_lb,0,array[]::bigint[]);
-  if not r.o_ok or r.o_snapshot_health<>'suspicious' then raise exception 'MT5_S1_FIXTURE_3_FAIL: B must be suspicious -> %/%',r.o_ok,r.o_snapshot_health; end if;
-  perform public.mt5_reconcile_snapshot_v1(v_b,v_user,v_acct,v_lb);
+  if r.o_ok is distinct from true or r.o_error_code is distinct from null
+     or r.o_snapshot_health is distinct from 'suspicious' then
+    raise exception 'MT5_S1_FIXTURE_3_FAIL: B must complete ok with health=suspicious -> %/%/%',r.o_ok,r.o_error_code,r.o_snapshot_health;
+  end if;
 
-  select jsonb_agg(jsonb_build_object('pid',s.position_id,'st',s.position_state,'b',s.missing_since_run_id) order by s.position_id)
+  -- the suspicious reconcile must itself SUCCEED (success is asserted positively, never inferred
+  -- from "no exception was raised") and must then mutate ZERO lifecycle fields.
+  select * into r from public.mt5_reconcile_snapshot_v1(v_b,v_user,v_acct,v_lb);
+  if r.o_ok is distinct from true or r.o_error_code is distinct from null then
+    raise exception 'MT5_S1_FIXTURE_3_FAIL: suspicious reconcile must succeed -> %/%',r.o_ok,r.o_error_code;
+  end if;
+  if (select reconcile_status from public.mt5_sync_runs where id=v_b) is distinct from 'complete' then
+    raise exception 'MT5_S1_FIXTURE_3_FAIL: suspicious reconcile must leave reconcile_status=complete';
+  end if;
+  if (select snapshot_health from public.mt5_sync_runs where id=v_b) is distinct from 'suspicious' then
+    raise exception 'MT5_S1_FIXTURE_3_FAIL: B must remain suspicious after reconcile';
+  end if;
+
+  select jsonb_agg(jsonb_build_object('pid',s.position_id,'st',s.position_state,
+                                      'lu',s.lifecycle_updated_at,'b',s.missing_since_run_id)
+                   order by s.position_id)
     into v_after from public.mt5_import_staging s where s.user_id=v_user and s.source_account=v_acct and s.kind='open';
-  if v_before is distinct from v_after then raise exception 'MT5_S1_FIXTURE_3_FAIL: suspicious reconcile mutated lifecycle'; end if;
+  if v_after is null or jsonb_array_length(v_after)<>20 then
+    raise exception 'MT5_S1_FIXTURE_3_FAIL: post-reconcile lifecycle set is not the full 20 rows (vacuous compare)';
+  end if;
+  -- whole-document NULL-safe comparison over all 20 rows x 3 lifecycle fields
+  if v_before is distinct from v_after then
+    raise exception 'MT5_S1_FIXTURE_3_FAIL: suspicious reconcile mutated lifecycle: before=% after=%',v_before,v_after;
+  end if;
+  -- per-field NULL-safe re-assertion, so a failure names the offending field
+  for i in 0..19 loop
+    if (v_before->i->>'st') is distinct from (v_after->i->>'st')
+       or (v_before->i->>'lu') is distinct from (v_after->i->>'lu')
+       or (v_before->i->>'b')  is distinct from (v_after->i->>'b') then
+      raise exception 'MT5_S1_FIXTURE_3_FAIL: lifecycle field changed at element % : % -> %',i,v_before->i,v_after->i;
+    end if;
+  end loop;
 
   -- read RPC: suspicious -> metadata only, no trusted positions
   perform set_config('request.jwt.claims', json_build_object('sub',v_user::text)::text, true);
@@ -172,11 +208,12 @@ begin
   select position_state into v_state from public.mt5_import_staging
    where user_id=v_user and source_account=v_acct and kind='open' and position_id=2;
   if not found then raise exception 'MT5_S1_FIXTURE_4_FAIL: staging row for position 2 missing (vacuous)'; end if;
-  if v_state <> 'missing_once' then raise exception 'MT5_S1_FIXTURE_4_FAIL: absent position 2 must be missing_once, got %',v_state; end if;
-  -- position 1 observed in C -> still_open
+  if v_state is distinct from 'missing_once' then raise exception 'MT5_S1_FIXTURE_4_FAIL: absent position 2 must be missing_once, got %',v_state; end if;
+  -- position 1 observed in C -> still_open (row MUST exist first, else the check would be vacuous)
   select position_state into v_state from public.mt5_import_staging
    where user_id=v_user and source_account=v_acct and kind='open' and position_id=1;
-  if v_state <> 'still_open' then raise exception 'MT5_S1_FIXTURE_4_FAIL: observed position 1 must be still_open, got %',v_state; end if;
+  if not found then raise exception 'MT5_S1_FIXTURE_4_FAIL: staging row for position 1 missing (vacuous)'; end if;
+  if v_state is distinct from 'still_open' then raise exception 'MT5_S1_FIXTURE_4_FAIL: observed position 1 must be still_open, got %',v_state; end if;
   raise notice 'MT5_S1_FIXTURE_4 PASS (healthy C atomically replaces A)';
 end $f4$;
 
@@ -199,7 +236,8 @@ begin
   perform public.mt5_append_run_positions_v1(v_b,v_user,v_acct,v_lb,
     '[{"position_id":1,"symbol_raw":"GOU26","side":"buy","volume":1,"price_open":2000,"price_current":1999,"profit":-1,"source_time_msc":2,"contract_size":10}]'::jsonb);
   select * into r from public.mt5_complete_snapshot_v1(v_b,v_user,v_acct,v_lb,1,array[1]::bigint[]);
-  if r.o_error_code <> 'ERR_SUPERSEDED' then raise exception 'MT5_S1_FIXTURE_5_FAIL: expected ERR_SUPERSEDED got %',r.o_error_code; end if;
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_SUPERSEDED' then
+    raise exception 'MT5_S1_FIXTURE_5_FAIL: expected ok=false/ERR_SUPERSEDED got %/%',r.o_ok,r.o_error_code; end if;
   if (select snapshot_status from public.mt5_sync_runs where id=v_b) = 'complete' then raise exception 'MT5_S1_FIXTURE_5_FAIL: superseded run must not be complete'; end if;
   raise notice 'MT5_S1_FIXTURE_5 PASS (delayed older capture -> ERR_SUPERSEDED)';
 end $f5$;
@@ -215,7 +253,8 @@ begin
   select * into r from public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
   if not r.o_ok then raise exception 'MT5_S1_FIXTURE_6_FAIL: create A -> %',r.o_error_code; end if;
   select * into r from public.mt5_create_run_v1(v_b,v_user,v_acct,v_lb,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
-  if r.o_error_code <> 'ERR_RUN_ACTIVE' then raise exception 'MT5_S1_FIXTURE_6_FAIL: expected ERR_RUN_ACTIVE got %',r.o_error_code; end if;
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_RUN_ACTIVE' then
+    raise exception 'MT5_S1_FIXTURE_6_FAIL: expected ok=false/ERR_RUN_ACTIVE got %/%',r.o_ok,r.o_error_code; end if;
   raise notice 'MT5_S1_FIXTURE_6 PASS (live active cycle blocks create)';
 end $f6$;
 
@@ -248,10 +287,12 @@ begin
   -- same id, different price_current -> conflict; and a NULL-vs-value conflict
   select * into r from public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,
     '[{"position_id":1,"symbol_raw":"GOU26","side":"buy","volume":1,"price_open":2000,"price_current":2006,"profit":5,"source_time_msc":1,"contract_size":10}]'::jsonb);
-  if r.o_error_code <> 'ERR_POSITION_CONFLICT' then raise exception 'MT5_S1_FIXTURE_8_FAIL: value diff expected ERR_POSITION_CONFLICT got %',r.o_error_code; end if;
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_POSITION_CONFLICT' then
+    raise exception 'MT5_S1_FIXTURE_8_FAIL: value diff expected ok=false/ERR_POSITION_CONFLICT got %/%',r.o_ok,r.o_error_code; end if;
   select * into r from public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,
     '[{"position_id":1,"symbol_raw":"GOU26","side":"buy","volume":1,"price_open":null,"price_current":2005,"profit":5,"source_time_msc":1,"contract_size":10}]'::jsonb);
-  if r.o_error_code <> 'ERR_POSITION_CONFLICT' then raise exception 'MT5_S1_FIXTURE_8_FAIL: NULL-vs-value expected ERR_POSITION_CONFLICT got %',r.o_error_code; end if;
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_POSITION_CONFLICT' then
+    raise exception 'MT5_S1_FIXTURE_8_FAIL: NULL-vs-value expected ok=false/ERR_POSITION_CONFLICT got %/%',r.o_ok,r.o_error_code; end if;
   raise notice 'MT5_S1_FIXTURE_8 PASS (conflicting immutable payload)';
 end $f8$;
 
@@ -269,7 +310,8 @@ begin
   update public.mt5_sync_runs set lease_expires_at=clock_timestamp()-interval '1 h' where id=v_a;
   select * into r from public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,
     '[{"position_id":2,"symbol_raw":"GOU26","side":"buy","volume":1,"price_open":2001,"price_current":2001,"profit":0,"source_time_msc":2,"contract_size":10}]'::jsonb);
-  if r.o_error_code <> 'ERR_RUN_SEALED' then raise exception 'MT5_S1_FIXTURE_9_FAIL: expected ERR_RUN_SEALED (not lease) got %',r.o_error_code; end if;
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_RUN_SEALED' then
+    raise exception 'MT5_S1_FIXTURE_9_FAIL: expected ok=false/ERR_RUN_SEALED (not lease) got %/%',r.o_ok,r.o_error_code; end if;
   raise notice 'MT5_S1_FIXTURE_9 PASS (append after seal -> ERR_RUN_SEALED, status precedence)';
 end $f9$;
 
@@ -326,8 +368,9 @@ begin
   -- (p_expected_count matches the claimed id array, so pre-fetch count validation passes; the sealed-evidence
   --  recompute in the complete-branch is what must reject it.)
   select * into r from public.mt5_complete_snapshot_v1(v_a,v_user,v_acct,v_la,2,array[1,2]::bigint[]);
-  if r.o_error_code <> 'ERR_REPLAY_CONFLICT' then
-    raise exception 'MT5_S1_FIXTURE_13_FAIL: divergent completion replay must be ERR_REPLAY_CONFLICT, got %',r.o_error_code;
+  -- NULL-safe: an erroneous SUCCESS (o_ok true / o_error_code NULL) MUST fail this fixture.
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_REPLAY_CONFLICT' then
+    raise exception 'MT5_S1_FIXTURE_13_FAIL: divergent completion replay must be ok=false/ERR_REPLAY_CONFLICT, got %/%',r.o_ok,r.o_error_code;
   end if;
   raise notice 'MT5_S1_FIXTURE_12/13 PASS (completion replay success + conflict)';
 end $f12$;
@@ -341,7 +384,8 @@ begin
   perform public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
   select * into r from public.mt5_append_run_positions_v1(v_a,v_user,'ACC_OTHER',v_la,
     '[{"position_id":1,"symbol_raw":"GOU26","side":"buy","volume":1,"source_time_msc":1}]'::jsonb);
-  if r.o_error_code <> 'ERR_RUN_CONFLICT' then raise exception 'MT5_S1_FIXTURE_14_FAIL: cross-account append expected ERR_RUN_CONFLICT got %',r.o_error_code; end if;
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_RUN_CONFLICT' then
+    raise exception 'MT5_S1_FIXTURE_14_FAIL: cross-account append expected ok=false/ERR_RUN_CONFLICT got %/%',r.o_ok,r.o_error_code; end if;
   raise notice 'MT5_S1_FIXTURE_14 PASS (cross-account append denied)';
 end $f14$;
 
@@ -368,7 +412,8 @@ begin
   perform public.mt5_complete_snapshot_v1(v_h1,v_user,v_acct,v_l1,1,array[8]::bigint[]);
   perform public.mt5_reconcile_snapshot_v1(v_h1,v_user,v_acct,v_l1);
   select position_state into v_state from public.mt5_import_staging where user_id=v_user and source_account=v_acct and position_id=7;
-  if v_state<>'missing_once' then raise exception 'MT5_S1_FIXTURE_16_FAIL: H1 first absence must be missing_once got %',v_state; end if;
+  if not found then raise exception 'MT5_S1_FIXTURE_16_FAIL: staging row for position 7 missing (vacuous)'; end if;
+  if v_state is distinct from 'missing_once' then raise exception 'MT5_S1_FIXTURE_16_FAIL: H1 first absence must be missing_once got %',v_state; end if;
 
   -- H2: position 7 PRESENT again, but reconcile FAILS
   perform public.mt5_create_run_v1(v_h2,v_user,v_acct,v_l2,900,clock_timestamp()-interval '2 min','conn.v1',4200,'srv','s1.v1');
@@ -385,7 +430,8 @@ begin
   perform public.mt5_complete_snapshot_v1(v_h3,v_user,v_acct,v_l3,1,array[8]::bigint[]);
   perform public.mt5_reconcile_snapshot_v1(v_h3,v_user,v_acct,v_l3);
   select position_state into v_state from public.mt5_import_staging where user_id=v_user and source_account=v_acct and position_id=7;
-  if v_state<>'missing_once' then raise exception 'MT5_S1_FIXTURE_15_FAIL: H3 effective streak must be 1 (missing_once), got %',v_state; end if;
+  if not found then raise exception 'MT5_S1_FIXTURE_15_FAIL: staging row for position 7 missing (vacuous)'; end if;
+  if v_state is distinct from 'missing_once' then raise exception 'MT5_S1_FIXTURE_15_FAIL: H3 effective streak must be 1 (missing_once), got %',v_state; end if;
   raise notice 'MT5_S1_FIXTURE_15/16 PASS (H1/H2/H3 consecutive absence resets on membership presence)';
 end $f15$;
 
@@ -404,7 +450,8 @@ begin
   perform public.mt5_complete_snapshot_v1(v_a,v_user,v_acct,v_la,1,array[5]::bigint[]);
   perform public.mt5_reconcile_snapshot_v1(v_a,v_user,v_acct,v_la);
   select position_state into v_state from public.mt5_import_staging where user_id=v_user and source_account=v_acct and position_id=5;
-  if v_state<>'unknown' then raise exception 'MT5_S1_FIXTURE_17_FAIL: reappearing closed_confirmed must be unknown, not still_open, got %',v_state; end if;
+  if not found then raise exception 'MT5_S1_FIXTURE_17_FAIL: staging row for position 5 missing (vacuous)'; end if;
+  if v_state is distinct from 'unknown' then raise exception 'MT5_S1_FIXTURE_17_FAIL: reappearing closed_confirmed must be unknown, not still_open, got %',v_state; end if;
   raise notice 'MT5_S1_FIXTURE_17 PASS (conflict not promoted)';
 end $f17$;
 
@@ -498,12 +545,13 @@ begin
 end $f24$;
 
 -- Fixture 25 — migration preserved staging row count + non-lifecycle checksum -----------------
--- (Structural note: enforced by S1_schema_packet.sql postflight $postflight$ using mt5.s1_staging_* GUCs.
+-- (Structural note: enforced by the S1_schema_packet.sql postflight block using mt5.s1_staging_* GUCs.
 --  Re-asserted here read-only: no rows were deleted and the two new columns are the only additions.)
 do $f25$
 declare
   v_user uuid := '00000000-0000-0000-0000-0000000000aa'; v_acct text := 'ACC_F25';
   v_lifecycle_cols integer; v_c1 bigint; v_c2 bigint; v_k1 text; v_k2 text;
+  v_pre_c bigint; v_pre_k text; v_led_c bigint; v_led_k text;
 begin
   -- structural: exactly the 2 S1 additions, and last_seen_run_id never exists
   select count(*) into v_lifecycle_cols from information_schema.columns
@@ -514,9 +562,33 @@ begin
     raise exception 'MT5_S1_FIXTURE_25_FAIL: last_seen_run_id must never exist';
   end if;
   -- the schema packet must have captured pre-migration staging evidence in the ledger
-  if not exists (select 1 from public.mt5_schema_migrations m where m.version='mt5_s1_append_only_schema_v1'
-       and (m.objects->>'staging_pre_count') is not null and (m.objects->>'staging_pre_checksum') is not null) then
+  select (m.objects->>'staging_pre_count')::bigint, m.objects->>'staging_pre_checksum'
+    into v_led_c, v_led_k
+    from public.mt5_schema_migrations m where m.version='mt5_s1_append_only_schema_v1';
+  if not found then raise exception 'MT5_S1_FIXTURE_25_FAIL: schema ledger row is missing'; end if;
+  if v_led_c is null or v_led_k is null then
     raise exception 'MT5_S1_FIXTURE_25_FAIL: schema ledger did not record staging pre-migration evidence';
+  end if;
+
+  -- INDEPENDENT pre-migration reference: S1_test_preflight_packet.sql observed and PERSISTED the
+  -- staging evidence BEFORE the schema packet ran. Comparing the ledger against that recorded
+  -- observation is what makes this a genuine pre-migration proof — recomputing both sides now,
+  -- from the same post-migration state, would prove nothing. A missing reference is a HARD FAIL,
+  -- so skipping the test preflight can never yield a vacuous pass.
+  if to_regclass('public.mt5_s1_test_pre_evidence') is null then
+    raise exception 'MT5_S1_FIXTURE_25_FAIL: S1_test_preflight_packet.sql was not run first — no independent pre-migration reference exists';
+  end if;
+  select staging_count, staging_checksum into v_pre_c, v_pre_k
+    from public.mt5_s1_test_pre_evidence where id=1;
+  if not found then raise exception 'MT5_S1_FIXTURE_25_FAIL: independent pre-migration evidence row is missing'; end if;
+  if v_pre_c < 3 then
+    raise exception 'MT5_S1_FIXTURE_25_FAIL: pre-migration reference is vacuous (count=%)',v_pre_c;
+  end if;
+  if v_led_c is distinct from v_pre_c then
+    raise exception 'MT5_S1_FIXTURE_25_FAIL: ledger pre-count % <> independently observed pre-count %',v_led_c,v_pre_c;
+  end if;
+  if v_led_k is distinct from v_pre_k then
+    raise exception 'MT5_S1_FIXTURE_25_FAIL: ledger pre-checksum <> independently observed pre-checksum (% vs %)',v_led_k,v_pre_k;
   end if;
 
   -- independently recompute the SAME non-lifecycle evidence checksum the schema postflight uses, over a
@@ -538,7 +610,7 @@ begin
     into v_c2, v_k2 from public.mt5_import_staging s where s.user_id=v_user and s.source_account=v_acct;
   if v_c1<>3 or v_c2<>3 then raise exception 'MT5_S1_FIXTURE_25_FAIL: seeded staging count drifted'; end if;
   if v_k1 is distinct from v_k2 then raise exception 'MT5_S1_FIXTURE_25_FAIL: non-lifecycle evidence checksum changed under a lifecycle-only mutation'; end if;
-  raise notice 'MT5_S1_FIXTURE_25 PASS (additions minimal; evidence count+checksum invariant under lifecycle-only change; ledger captured pre-evidence)';
+  raise notice 'MT5_S1_FIXTURE_25 PASS (additions minimal; ledger provenance == INDEPENDENT pre-migration observation; evidence count+checksum invariant under lifecycle-only change)';
 end $f25$;
 
 -- Fixture 26 — expiry: DB-time-expired lease only; started->failed, complete/pending->reconcile failed
@@ -551,7 +623,8 @@ begin
   -- (a) started + live lease -> ERR_LEASE_NOT_EXPIRED
   perform public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
   select * into r from public.mt5_expire_stale_run_v1(v_a,v_user,v_acct);
-  if r.o_error_code<>'ERR_LEASE_NOT_EXPIRED' then raise exception 'MT5_S1_FIXTURE_26_FAIL: live lease expected ERR_LEASE_NOT_EXPIRED got %',r.o_error_code; end if;
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_LEASE_NOT_EXPIRED' then
+    raise exception 'MT5_S1_FIXTURE_26_FAIL: live lease expected ok=false/ERR_LEASE_NOT_EXPIRED got %/%',r.o_ok,r.o_error_code; end if;
   -- (b) started + expired lease -> started->failed
   update public.mt5_sync_runs set lease_expires_at=clock_timestamp()-interval '1 h' where id=v_a;
   select * into r from public.mt5_expire_stale_run_v1(v_a,v_user,v_acct);
@@ -572,6 +645,95 @@ begin
   end if;
   raise notice 'MT5_S1_FIXTURE_26 PASS (expiry: live->NOT_EXPIRED; started->failed; complete/pending->reconcile failed)';
 end $f26$;
+
+-- Fixture 27 — append payload containment: every malformed shape -> exact ERR_BAD_PAYLOAD --------
+-- Proves the staged shape guards (jsonb_array_length is never reached on a non-array) and the
+-- exception boundary around jsonb_to_recordset. No raw PostgreSQL error may escape.
+do $f27$
+declare
+  v_user uuid := '00000000-0000-0000-0000-0000000000aa'; v_acct text := 'ACC_F27';
+  v_a uuid := gen_random_uuid(); v_la uuid := gen_random_uuid(); r record;
+  v_bad jsonb; v_case text;
+begin
+  perform public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
+
+  -- (a) SQL NULL payload
+  select * into r from public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,null::jsonb);
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_BAD_PAYLOAD' then
+    raise exception 'MT5_S1_FIXTURE_27_FAIL: SQL NULL payload expected ok=false/ERR_BAD_PAYLOAD got %/%',r.o_ok,r.o_error_code;
+  end if;
+
+  -- (b) wrong JSON container types + array-of-non-objects + malformed row casts.
+  --     Each must return the SAME stable code; none may raise a raw PostgreSQL exception.
+  foreach v_case in array array[
+      '{"position_id":1}',                    -- JSON object, not an array
+      '5',                                    -- JSON scalar number
+      '"text"',                               -- JSON scalar string
+      'null',                                 -- JSON null (jsonb_typeof = 'null')
+      '[1,2,3]',                              -- array of scalars, not objects
+      '[null]',                               -- array containing JSON null
+      '[[{"position_id":1}]]',                -- nested array element
+      '[{"position_id":"not-a-bigint","symbol_raw":"GOU26","side":"buy","volume":1,"source_time_msc":1}]',
+      '[{"position_id":1,"symbol_raw":"GOU26","side":"buy","volume":"abc","source_time_msc":1}]',
+      '[{"position_id":1,"symbol_raw":"GOU26","side":"buy","volume":1,"open_time_utc":"not-a-timestamp","source_time_msc":1}]'
+    ] loop
+    v_bad := v_case::jsonb;
+    select * into r from public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,v_bad);
+    if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_BAD_PAYLOAD' then
+      raise exception 'MT5_S1_FIXTURE_27_FAIL: payload % expected ok=false/ERR_BAD_PAYLOAD got %/%',v_case,r.o_ok,r.o_error_code;
+    end if;
+  end loop;
+
+  -- (c) identity/scalar-argument faults keep the DISTINCT ERR_BAD_INPUT vocabulary
+  select * into r from public.mt5_append_run_positions_v1(v_a,v_user,'',v_la,'[]'::jsonb);
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_BAD_INPUT' then
+    raise exception 'MT5_S1_FIXTURE_27_FAIL: blank account expected ok=false/ERR_BAD_INPUT got %/%',r.o_ok,r.o_error_code;
+  end if;
+
+  -- (d) the frozen Revision-3 valid-empty-array semantics are UNCHANGED by the new guards
+  select * into r from public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,'[]'::jsonb);
+  if r.o_ok is distinct from true or r.o_error_code is distinct from null or r.o_inserted is distinct from 0 then
+    raise exception 'MT5_S1_FIXTURE_27_FAIL: valid empty array must still succeed with 0 inserted got %/%/%',r.o_ok,r.o_error_code,r.o_inserted;
+  end if;
+  -- no malformed attempt may have inserted anything
+  if (select count(*) from public.mt5_sync_run_positions where run_id=v_a)<>0 then
+    raise exception 'MT5_S1_FIXTURE_27_FAIL: a rejected payload inserted rows';
+  end if;
+  raise notice 'MT5_S1_FIXTURE_27 PASS (append payload containment -> ERR_BAD_PAYLOAD; empty-array semantics intact)';
+end $f27$;
+
+-- Fixture 28 — NULL / invalid reason codes on both failure RPCs -> exact ERR_BAD_INPUT ----------
+do $f28$
+declare
+  v_user uuid := '00000000-0000-0000-0000-0000000000aa'; v_acct text := 'ACC_F28';
+  v_a uuid := gen_random_uuid(); v_la uuid := gen_random_uuid(); r record;
+begin
+  perform public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
+
+  -- NULL reason must NOT slip past the allowlist via NULL-not-true `not in (...)` semantics
+  select * into r from public.mt5_mark_snapshot_failed_v1(v_a,v_user,v_acct,v_la,null);
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_BAD_INPUT' then
+    raise exception 'MT5_S1_FIXTURE_28_FAIL: snapshot_failed NULL reason expected ok=false/ERR_BAD_INPUT got %/%',r.o_ok,r.o_error_code;
+  end if;
+  select * into r from public.mt5_mark_reconcile_failed_v1(v_a,v_user,v_acct,v_la,null);
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_BAD_INPUT' then
+    raise exception 'MT5_S1_FIXTURE_28_FAIL: reconcile_failed NULL reason expected ok=false/ERR_BAD_INPUT got %/%',r.o_ok,r.o_error_code;
+  end if;
+  -- a non-NULL reason outside the allowlist is rejected identically
+  select * into r from public.mt5_mark_snapshot_failed_v1(v_a,v_user,v_acct,v_la,'NOT_AN_ALLOWED_REASON');
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_BAD_INPUT' then
+    raise exception 'MT5_S1_FIXTURE_28_FAIL: snapshot_failed bad reason expected ok=false/ERR_BAD_INPUT got %/%',r.o_ok,r.o_error_code;
+  end if;
+  select * into r from public.mt5_mark_reconcile_failed_v1(v_a,v_user,v_acct,v_la,'NOT_AN_ALLOWED_REASON');
+  if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_BAD_INPUT' then
+    raise exception 'MT5_S1_FIXTURE_28_FAIL: reconcile_failed bad reason expected ok=false/ERR_BAD_INPUT got %/%',r.o_ok,r.o_error_code;
+  end if;
+  -- the rejected calls must have left the run untouched
+  if (select snapshot_status from public.mt5_sync_runs where id=v_a) is distinct from 'started' then
+    raise exception 'MT5_S1_FIXTURE_28_FAIL: a rejected failure call mutated snapshot_status';
+  end if;
+  raise notice 'MT5_S1_FIXTURE_28 PASS (NULL/invalid reason codes -> ERR_BAD_INPUT on both failure RPCs)';
+end $f28$;
 
 -- ============================================================================================
 do $done$ begin raise notice 'MT5 S1 VERIFICATION PACKET: all fixtures asserted (EXECUTABLE DRAFT — this run is ROLLED BACK).'; end $done$;
