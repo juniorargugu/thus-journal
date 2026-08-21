@@ -924,6 +924,51 @@ begin
 end
 $postflight$;
 
+-- ==============================================================================================
+-- APPLY-TIME FUNCTION PROVENANCE (destructive-rollback authority)
+--
+-- Records a BODY-SENSITIVE fingerprint for every function this packet created, derived from the
+-- object that actually exists in the catalog after creation. pg_get_functiondef() includes the
+-- full body, language, volatility and SECURITY DEFINER / SET clauses, so a same-signature
+-- replacement with a different body produces a different fingerprint and rollback will STOP.
+--
+-- The presence of THIS ledger row is also the sole authority for dropping any of these functions:
+-- with no successful RPC ledger record, rollback has no mandate to touch a same-named function.
+-- ==============================================================================================
+do $prov$
+declare v jsonb; v_n integer;
+begin
+  select pg_catalog.jsonb_object_agg(x.sig, x.fp), count(*) into v, v_n
+    from (
+      select s.sig,
+             pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
+               pg_catalog.pg_get_functiondef(p.oid)||'|'||
+               pg_catalog.pg_get_userbyid(p.proowner)||'|'||p.prosecdef::text||'|'||
+               coalesce(pg_catalog.array_to_string(p.proconfig,','),'')
+             ,'UTF8'),'sha256'),'hex') as fp
+        from (values
+          ('public.mt5_get_current_snapshot_v1(text)'),
+          ('public.mt5_create_run_v1(uuid,uuid,text,uuid,integer,timestamptz,text,integer,text,text)'),
+          ('public.mt5_heartbeat_run_v1(uuid,uuid,text,uuid,integer)'),
+          ('public.mt5_append_run_positions_v1(uuid,uuid,text,uuid,jsonb)'),
+          ('public.mt5_complete_snapshot_v1(uuid,uuid,text,uuid,integer,bigint[])'),
+          ('public.mt5_reconcile_snapshot_v1(uuid,uuid,text,uuid)'),
+          ('public.mt5_mark_snapshot_failed_v1(uuid,uuid,text,uuid,text)'),
+          ('public.mt5_mark_reconcile_failed_v1(uuid,uuid,text,uuid,text)'),
+          ('public.mt5_expire_stale_run_v1(uuid,uuid,text)'),
+          ('public.mt5_s1_policy_v1(text)'),
+          ('public.mt5_position_fingerprint_v1(bigint,text,text,numeric,numeric,numeric,numeric,timestamptz,bigint,numeric,timestamptz)'),
+          ('public.mt5_sha256_text_v1(text)')
+        ) s(sig)
+        join pg_catalog.pg_proc p on p.oid = pg_catalog.to_regprocedure(s.sig)
+    ) x;
+  if v_n <> 12 then
+    raise exception 'MT5_S1_RPC_PROVENANCE: expected 12 function fingerprints, recorded %', v_n;
+  end if;
+  perform pg_catalog.set_config('mt5.s1_rpc_provenance', v::text, true);
+end
+$prov$;
+
 insert into public.mt5_schema_migrations(
   version,description,checksum,source_artifact_sha256,status,objects,applied_at,applied_by
 ) values (
@@ -933,22 +978,7 @@ insert into public.mt5_schema_migrations(
   'applied',
   pg_catalog.jsonb_build_object(
     'connector_rpcs',8,'browser_rpcs',1,'internal_helpers',3,'source_revision',3,
-    -- exact signatures S1 owns. Rollback drops ONLY signatures listed here, and only after proving
-    -- each surviving object still matches the S1 property fingerprint (owner/kind/definer/search_path).
-    'functions', array[
-      'public.mt5_get_current_snapshot_v1(text)',
-      'public.mt5_create_run_v1(uuid,uuid,text,uuid,integer,timestamp with time zone,text,integer,text,text)',
-      'public.mt5_heartbeat_run_v1(uuid,uuid,text,uuid,integer)',
-      'public.mt5_append_run_positions_v1(uuid,uuid,text,uuid,jsonb)',
-      'public.mt5_complete_snapshot_v1(uuid,uuid,text,uuid,integer,bigint[])',
-      'public.mt5_reconcile_snapshot_v1(uuid,uuid,text,uuid)',
-      'public.mt5_mark_snapshot_failed_v1(uuid,uuid,text,uuid,text)',
-      'public.mt5_mark_reconcile_failed_v1(uuid,uuid,text,uuid,text)',
-      'public.mt5_expire_stale_run_v1(uuid,uuid,text)',
-      'public.mt5_s1_policy_v1(text)',
-      'public.mt5_position_fingerprint_v1(bigint,text,text,numeric,numeric,numeric,numeric,timestamp with time zone,bigint,numeric,timestamp with time zone)',
-      'public.mt5_sha256_text_v1(text)'
-    ]),
+    'provenance', current_setting('mt5.s1_rpc_provenance')::jsonb),
   now(),current_user
 );
 

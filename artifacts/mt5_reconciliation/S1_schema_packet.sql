@@ -15,6 +15,7 @@ declare
   v_staging_checksum text;
   v_staging_pre_grants text;
   v_staging_pre_relacl text;
+  v_ledger_acl text;
 begin
   perform pg_catalog.set_config('mt5.s1_ledger_preexisting', v_ledger_existed::text, true);
 
@@ -190,14 +191,32 @@ begin
          where k.conrelid='public.mt5_schema_migrations'::regclass and k.contype in ('c','p','u','f')) <> 6 then
       raise exception 'MT5_S1_PREFLIGHT: pre-existing ledger carries unexpected constraints';
     end if;
-    -- privilege state must ALREADY equal S1's target (service_role SELECT only; nothing for anon/authenticated/public)
+    -- EXACT normalized ACL equality (not a forbidden-subset search). The owner's own implicit
+    -- aclitem is excluded; every remaining explicit grant is normalized to
+    -- 'grantee:PRIVILEGE:is_grantable' and the whole set must equal the canonical S1 target
+    -- exactly. This rejects missing SELECT, extra privileges, WITH GRANT OPTION, PUBLIC access,
+    -- and grants to any unrelated role — in one comparison.
+    select coalesce(pg_catalog.string_agg(
+             (case when e.grantee=0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(e.grantee) end)
+             ||':'||e.privilege_type||':'||e.is_grantable::text, ','
+             order by (case when e.grantee=0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(e.grantee) end),
+                      e.privilege_type),'')
+      into v_ledger_acl
+      from pg_catalog.pg_class c
+      cross join lateral pg_catalog.aclexplode(c.relacl) e
+     where c.oid='public.mt5_schema_migrations'::regclass
+       and (case when e.grantee=0 then 'PUBLIC' else pg_catalog.pg_get_userbyid(e.grantee) end) <> 'postgres';
+    if v_ledger_acl is distinct from 'service_role:SELECT:false' then
+      raise exception 'MT5_S1_PREFLIGHT: pre-existing ledger ACL is [%], expected exactly [service_role:SELECT:false] — refusing to re-privilege',
+        coalesce(nullif(v_ledger_acl,''),'<none>');
+    end if;
+    -- no column-level ACL may exist on a reusable ledger
     if exists (
-      select 1 from information_schema.role_table_grants p
-       where p.table_schema='public' and p.table_name='mt5_schema_migrations'
-         and (p.grantee in ('anon','authenticated','PUBLIC')
-              or (p.grantee='service_role' and p.privilege_type<>'SELECT'))
+      select 1 from pg_catalog.pg_attribute a
+       where a.attrelid='public.mt5_schema_migrations'::regclass
+         and a.attnum>0 and not a.attisdropped and a.attacl is not null
     ) then
-      raise exception 'MT5_S1_PREFLIGHT: pre-existing ledger privileges differ from the S1 definition — refusing to re-privilege';
+      raise exception 'MT5_S1_PREFLIGHT: pre-existing ledger carries column-level ACLs — refusing to reuse';
     end if;
   end if;
 end
@@ -487,6 +506,134 @@ begin
 end
 $postflight$;
 
+-- ==============================================================================================
+-- APPLY-TIME OBJECT PROVENANCE (destructive-rollback authority)
+--
+-- Every fingerprint below is derived from the object that ACTUALLY EXISTS after this migration
+-- created it — never from a self-declared constant. Rollback recomputes the same expressions and
+-- refuses to drop anything whose fingerprint has changed, which is what distinguishes an S1 object
+-- from a same-named replacement that merely shares owner/kind/security properties.
+--
+--   table   fingerprint = owner + columns(name,type,notnull,default,identity,generated)
+--                       + constraints(name,def) + indexes(def).   ACLs are EXCLUDED on purpose so
+--                       that privilege restoration cannot destabilise the structural identity.
+--   function fingerprint = pg_get_functiondef (includes the BODY) + owner + prosecdef + proconfig.
+--   trigger  fingerprint = pg_get_triggerdef + enabled state.
+--   policy   fingerprint = name + command + permissive + roles + USING + WITH CHECK.
+--   staging column grants = the column ACLs S1 itself installed, read back from pg_attribute so
+--                       rollback revokes EXACTLY those columns and never an unrelated one.
+-- ==============================================================================================
+do $prov$
+declare v jsonb;
+begin
+  select pg_catalog.jsonb_build_object(
+    'tables', (
+      select pg_catalog.jsonb_object_agg(x.relname, x.fp) from (
+        select c.relname,
+               pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
+                 pg_catalog.pg_get_userbyid(c.relowner)||'|'||
+                 coalesce((select pg_catalog.string_agg(
+                             a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||
+                             a.attnotnull::text||':'||
+                             coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||':'||
+                             a.attidentity||':'||a.attgenerated, ',' order by a.attnum)
+                           from pg_catalog.pg_attribute a
+                           left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
+                          where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped),'')||'|'||
+                 coalesce((select pg_catalog.string_agg(k.conname||':'||pg_catalog.pg_get_constraintdef(k.oid),
+                             ',' order by k.conname)
+                           from pg_catalog.pg_constraint k where k.conrelid=c.oid),'')||'|'||
+                 coalesce((select pg_catalog.string_agg(pg_catalog.pg_get_indexdef(i.indexrelid),
+                             ',' order by pg_catalog.pg_get_indexdef(i.indexrelid))
+                           from pg_catalog.pg_index i where i.indrelid=c.oid),'')
+               ,'UTF8'),'sha256'),'hex') as fp
+          from pg_catalog.pg_class c
+         where c.oid in ('public.mt5_sync_runs'::regclass,'public.mt5_sync_run_positions'::regclass)
+      ) x),
+    'functions', (
+      select pg_catalog.jsonb_object_agg(x.sig, x.fp) from (
+        select 'public.mt5_run_positions_guard_v1()' as sig,
+               pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
+                 pg_catalog.pg_get_functiondef(p.oid)||'|'||
+                 pg_catalog.pg_get_userbyid(p.proowner)||'|'||p.prosecdef::text||'|'||
+                 coalesce(pg_catalog.array_to_string(p.proconfig,','),'')
+               ,'UTF8'),'sha256'),'hex') as fp
+          from pg_catalog.pg_proc p where p.oid='public.mt5_run_positions_guard_v1()'::regprocedure
+      ) x),
+    'triggers', (
+      select pg_catalog.jsonb_object_agg(x.tgname, x.fp) from (
+        select t.tgname,
+               pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
+                 pg_catalog.pg_get_triggerdef(t.oid)||'|'||t.tgenabled
+               ,'UTF8'),'sha256'),'hex') as fp
+          from pg_catalog.pg_trigger t
+         where t.tgrelid='public.mt5_sync_run_positions'::regclass and not t.tgisinternal
+      ) x),
+    'policies', (
+      select pg_catalog.jsonb_object_agg(x.key, x.fp) from (
+        -- deterministic, search_path-independent key: relname.policyname
+        select ((select c2.relname from pg_catalog.pg_class c2 where c2.oid=pol.polrelid)||'.'||pol.polname) as key,
+               pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
+                 pol.polname||'|'||pol.polcmd||'|'||pol.polpermissive::text||'|'||
+                 coalesce((select pg_catalog.string_agg(pg_catalog.pg_get_userbyid(r),',' order by pg_catalog.pg_get_userbyid(r))
+                           from pg_catalog.unnest(pol.polroles) as r),'')||'|'||
+                 coalesce(pg_catalog.pg_get_expr(pol.polqual,pol.polrelid),'')||'|'||
+                 coalesce(pg_catalog.pg_get_expr(pol.polwithcheck,pol.polrelid),'')
+               ,'UTF8'),'sha256'),'hex') as fp
+          from pg_catalog.pg_policy pol
+         where pol.polrelid in ('public.mt5_sync_runs'::regclass,'public.mt5_sync_run_positions'::regclass)
+      ) x),
+    -- S1-created ANNOTATIONS on the pre-existing staging table (indexes + constraints). These are
+    -- dropped by name during rollback, so their definitions are fingerprinted too — a same-named
+    -- foreign index/constraint must not be destroyed.
+    'staging_objects', (
+      select coalesce(pg_catalog.jsonb_object_agg(x.name, x.def),'{}'::jsonb) from (
+        select i.relname as name, pg_catalog.pg_get_indexdef(i.oid) as def
+          from pg_catalog.pg_class i
+         where i.relname in ('mt5_staging_lifecycle_open_idx','mt5_staging_missing_since_idx')
+           and i.relkind='i'
+        union all
+        select k.conname, pg_catalog.pg_get_constraintdef(k.oid)
+          from pg_catalog.pg_constraint k
+         where k.conrelid='public.mt5_import_staging'::regclass
+           and k.conname in ('mt5_staging_missing_since_scope_fk','mt5_staging_position_state_s1_chk')
+      ) x),
+    -- the column ACLs S1 installed on staging, read back from the catalog (NOT a hardcoded list)
+    'staging_col_grants', coalesce((
+      select pg_catalog.jsonb_object_agg(a.attname, g.privs)
+        from pg_catalog.pg_attribute a
+        cross join lateral (
+          select pg_catalog.string_agg(distinct e.privilege_type,',' order by e.privilege_type) as privs
+            from pg_catalog.aclexplode(a.attacl) e
+           where pg_catalog.pg_get_userbyid(e.grantee)='service_role'
+        ) g
+       where a.attrelid='public.mt5_import_staging'::regclass
+         and a.attnum>0 and not a.attisdropped and a.attacl is not null and g.privs is not null
+    ),'{}'::jsonb)
+  ) into v;
+
+  if (v->'tables') is null or (select count(*) from pg_catalog.jsonb_object_keys(v->'tables'))<>2 then
+    raise exception 'MT5_S1_PROVENANCE: expected fingerprints for both S1 tables';
+  end if;
+  if (v->'functions') is null or (select count(*) from pg_catalog.jsonb_object_keys(v->'functions'))<>1 then
+    raise exception 'MT5_S1_PROVENANCE: expected the guard function fingerprint';
+  end if;
+  if (select count(*) from pg_catalog.jsonb_object_keys(v->'triggers'))<>2 then
+    raise exception 'MT5_S1_PROVENANCE: expected both immutability trigger fingerprints';
+  end if;
+  if (select count(*) from pg_catalog.jsonb_object_keys(v->'policies'))<>2 then
+    raise exception 'MT5_S1_PROVENANCE: expected both service-read policy fingerprints';
+  end if;
+  if (select count(*) from pg_catalog.jsonb_object_keys(v->'staging_col_grants'))=0 then
+    raise exception 'MT5_S1_PROVENANCE: S1 column grants on mt5_import_staging were not recorded';
+  end if;
+  if (select count(*) from pg_catalog.jsonb_object_keys(v->'staging_objects'))<>4 then
+    raise exception 'MT5_S1_PROVENANCE: expected 4 staging annotation fingerprints (2 indexes + 2 constraints)';
+  end if;
+  perform pg_catalog.set_config('mt5.s1_provenance', v::text, true);
+end
+$prov$;
+
 insert into public.mt5_schema_migrations(
   version,description,checksum,source_artifact_sha256,status,objects,applied_at,applied_by
 ) values (
@@ -506,6 +653,8 @@ insert into public.mt5_schema_migrations(
     'staging_pre_service_grants', current_setting('mt5.s1_staging_pre_grants'),
     -- full raw pre-S1 relacl, audit/forensics only (never used to synthesize a GRANT)
     'staging_pre_relacl', current_setting('mt5.s1_staging_pre_relacl'),
+    -- apply-time fingerprints of the objects THIS migration created; rollback's destructive authority
+    'provenance', current_setting('mt5.s1_provenance')::jsonb,
     'source_revision', 3
   ),
   now(),current_user

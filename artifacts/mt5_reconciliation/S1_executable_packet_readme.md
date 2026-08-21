@@ -179,8 +179,9 @@ exact `ERR_BAD_INPUT`, run left untouched**.
 
 **Assertion style:** every expected-error fixture asserts **both** `o_ok IS DISTINCT FROM false` **and**
 `o_error_code IS DISTINCT FROM '<exact code>'`. Plain `<>` is not used for error assertions anywhere, because a NULL
-`o_error_code` (i.e. an erroneous success) satisfies neither branch of `<>` and would pass silently. Every fixture that
-reads a row asserts existence (`IF NOT FOUND`) before comparing.
+`o_error_code` (i.e. an erroneous success) satisfies neither branch of `<>` and would pass silently. Success assertions
+are likewise `r.o_ok IS DISTINCT FROM true` rather than `NOT r.o_ok`, which had the same NULL-passes flaw. Every fixture
+that reads a row asserts existence (`IF NOT FOUND`) before comparing.
 
 **STATIC REVIEW vs EXECUTED DB VERIFICATION — these are different things.** Everything claimed in this README is the
 result of **static review only**. **0 fixtures have been executed.** All 28 are drafted and marked
@@ -191,47 +192,86 @@ are approval-gated. **No statement in this repository may be read as evidence th
 
 Two governing rules, both enforced before any destructive statement runs:
 
-> **ROLLBACK MAY REMOVE ONLY AN OBJECT IT CAN PROVE IS STILL THE OBJECT S1 OWNS.**
-> **ROLLBACK NEVER INVENTS A PRIVILEGE THAT DID NOT EXIST BEFORE S1.**
+> **ROLLBACK MAY REMOVE OR RESTORE ONLY STATE IT CAN PROVE S1 OWNS.**
+> **ROLLBACK MUST RESTORE PRE-S1 PRIVILEGES EXACTLY.**
 
-Order: operational writer-disable prerequisite (comment) → ledger + exact-checksum guard, which also **refuses to
-proceed at all if `staging_pre_service_grants` provenance is absent** → **provenance verification block** (see below) →
-drop the 9 RPCs + 3 helpers via `DROP FUNCTION IF EXISTS` (which also removes their ACLs, so no separate REVOKE is needed
-and rollback is safe for a partial RPC install) → **relation-guarded** trigger/policy drops → restore the **exact**
-pre-S1 `service_role` staging privileges → drop the S1 staging FK/CHECK/indexes/columns → drop
-`mt5_sync_run_positions` + guard function → drop `mt5_sync_runs` → delete only the two S1 ledger rows (drop the ledger
-table only if S1 created it and it is now empty) → postflight.
+### Packet identity vs deployed-object proof (honest limitation)
 
-**Provenance verification.** Tables must be `relkind='r'` and postgres-owned. Every S1 function — 12 RPC-packet
-functions plus the trigger guard — must, *if it still exists*, match the full S1 fingerprint: postgres-owned,
-`prokind='f'`, `SECURITY DEFINER`, and `proconfig` pinning `search_path=""`; the guard must additionally still return
-`trigger`; the S1 triggers must still point at the S1 guard function. When the RPC packet ran, the ledger's recorded
-`functions` signature inventory is cross-checked as well. **Any same-named object that fails these checks aborts the
-entire rollback and destroys nothing** — a replacement is never dropped, and object name alone is never accepted as
-provenance.
+The database cannot read the `.sql` files, so **nothing in these packets verifies packet file bytes**, and no
+self-referential "file SHA" is fabricated to imply otherwise.
+
+| Kind | What it is | What it proves |
+|---|---|---|
+| `checksum`, `source_artifact_sha256` | **packet identity metadata** declared by the packet | which contract revision/packet claims to have applied — a coordination marker, **not** evidence about deployed objects |
+| `objects->'provenance'` fingerprints | **apply-time catalog fingerprints**, computed from the objects that actually exist after creation | that a surviving object is byte-for-byte the definition S1 created |
+
+**Destructive authority is the fingerprints, not the checksums.** The checksum guard only establishes *which* migration
+this rollback belongs to; every DROP is gated on a recomputed fingerprint match. Under the current manual SQL-Editor
+execution model an exact full-file SHA could not be made trustworthy without an external runner, so it is deliberately
+not claimed. **This limitation is raised explicitly for reviewer acceptance.**
+
+### Apply-time provenance recorded (rollback authority)
+
+| Object class | Fingerprint inputs |
+|---|---|
+| tables (`mt5_sync_runs`, `mt5_sync_run_positions`) | owner + columns (name, type, notnull, default, identity, generated) + all constraints (name + `pg_get_constraintdef`) + all indexes (`pg_get_indexdef`). **ACLs excluded on purpose**, so privilege restoration cannot destabilise structural identity. |
+| functions (12 RPC/helpers + the trigger guard) | `pg_get_functiondef` (**includes the body**) + owner + `prosecdef` + `proconfig` |
+| triggers (both immutability triggers) | `pg_get_triggerdef` + `tgenabled` |
+| policies (both service-read policies) | name + command + permissive + roles + `USING` + `WITH CHECK` |
+| staging annotations (2 indexes, 2 constraints) | `pg_get_indexdef` / `pg_get_constraintdef` — these are dropped **by name** from a pre-existing table, so a same-named foreign object must not be destroyed |
+| staging column grants | the column ACLs S1 installed, read back from `pg_attribute` — **not** a hardcoded column list |
+
+A same-signature replacement that matches owner, kind, `SECURITY DEFINER` and `search_path` but has a **different body**
+now produces a different fingerprint and **STOPs** the rollback. That was the gap in round 2.
+
+Order: writer-disable prerequisite (comment) → ledger existence/identity guard (`record`/scalar variables only, so a
+missing ledger raises the intended stable error rather than a `%ROWTYPE` compile failure) → **provenance verification**
+(all four object classes) → RPC-function drops **gated on a successful RPC ledger record** → relation-guarded
+trigger/policy drops → **S1 column-ACL revokes** → exact pre-S1 table-ACL restore → staging FK/CHECK/index/column
+drops → `mt5_sync_run_positions` + guard function → `mt5_sync_runs` → delete only the two S1 ledger rows (drop the
+ledger table only if S1 created it and it is now empty) → exact postflight.
+
+**RPC ledger gating.** *No successful RPC ledger record = no authority to drop any RPC-packet function.* With the RPC
+row absent, the drop block is a complete no-op and logs a notice; a same-named survivor is treated as **foreign** and is
+never inspected, inferred about, or removed. When the row is present, the signatures come from the ledger's recorded
+provenance (never a hardcoded list), each is re-rendered from the catalog via `regprocedure` before execution, and each
+must match its apply-time body fingerprint.
+
+**Column-ACL revocation (round-3 correctness fix).** `REVOKE INSERT/UPDATE ON TABLE …` does **not** remove
+independently granted **column** privileges. S1 installs column-scoped INSERT (40 columns) and UPDATE (6 columns)
+grants on `mt5_import_staging`, so a normal full install previously left S1 column ACLs behind and the rollback
+postflight would fail — aborting the rollback transaction. Rollback now revokes each recorded column privilege
+individually, driven by the `staging_col_grants` provenance captured from `pg_attribute` at apply time, so exactly the
+S1-granted columns are cleared and no unrelated column ACL is touched. The revoke is asserted complete *before* the
+columns are dropped, and again in the postflight.
 
 **Privilege restoration.** The schema packet captures the exact pre-S1 `service_role` table privileges (plus the raw
 `relacl` for audit) and **refuses to migrate at all** if service_role holds `WITH GRANT OPTION` or the table already
-carries explicit column-level ACLs — states a plain GRANT list could not faithfully reproduce. Rollback revokes all
-seven table privileges and re-grants **only** the captured ones. **An empty captured set restores to empty; there is no
+carries explicit column-level ACLs — states a plain GRANT list could not faithfully reproduce. Rollback clears all seven
+table privileges and re-grants **only** the captured ones. **An empty captured set restores to empty; there is no
 fallback grant of any kind.** The postflight asserts the resulting privilege set equals the captured pre-S1 set exactly
-and that no S1 column-level ACL survived.
+and that no column-level ACL survived.
 
 ### Supported rollback matrix (static review)
 
-| # | State | Behavior |
-|---|---|---|
-| 1 | full expected S1 install | restores exactly |
-| 2 | schema packet only / RPC packet incomplete | function drops are no-ops; ledger rpc row absent → skipped; restores exactly |
-| 3 | some S1 functions absent | absent ones skipped; present ones provenance-checked then dropped |
-| 4 | parent table absent | trigger/policy drops skipped via `to_regclass` guard (no relation-scoped error) |
-| 5 | same-name function replaced after S1 | **STOP** — fingerprint mismatch aborts; nothing dropped |
-| 6 | same-name trigger/policy collision | **STOP** — trigger no longer pointing at the S1 guard aborts |
-| 7 | pre-existing ledger, exactly compatible | reused; only the two S1 rows deleted; ledger table kept |
-| 8 | pre-existing ledger, incompatible | **STOP in the schema packet preflight**, before any mutation |
-| 9 | pre-S1 service_role had no relevant grant | restores to **no grant** (never a fallback) |
-| 10 | pre-S1 service_role had narrower grants | restores exactly that narrower set |
-| 11 | grant options / pre-existing column ACLs | **STOP in the schema packet preflight** — never migrated, so never mis-restored |
+Each row states what the **executable code now proves**, not intent.
+
+| # | State | Behavior | Enforced by |
+|---|---|---|---|
+| 1 | full expected S1 install | rollback succeeds and restores **exact** pre-S1 ACLs, including the S1 column grants | `$col_acl$` per-column revokes + `$restore$` + postflight equality |
+| 2 | schema packet only / RPC absent | **no foreign function is touched** — the drop block returns immediately on a notice | `mt5.s1_has_rpc` gate in `$drop_rpcs$` |
+| 3 | a recorded function is absent | skipped (`to_regprocedure … is not null`); present ones fingerprint-checked then dropped | `$provenance$` + `$drop_rpcs$` |
+| 4 | parent relation absent | relation-scoped trigger/policy statements are skipped, not executed | `to_regclass` guards in `$rel_scoped$` |
+| 5 | S1 function replaced — same signature/owner/definer/search_path, **different body** | **STOP** | `pg_get_functiondef` fingerprint mismatch |
+| 6 | trigger definition altered (timing/events/level/WHEN/enabled) | **STOP** | `pg_get_triggerdef` + `tgenabled` fingerprint |
+| 7 | policy definition altered (cmd/roles/permissive/USING/WITH CHECK) | **STOP** | policy fingerprint |
+| 8 | table materially altered or replaced | **STOP** | structural fingerprint (columns/constraints/indexes/owner) |
+| 9 | pre-existing ledger, exactly compatible | reused; foreign provenance unchanged; only the two S1 rows deleted | exact-ACL + structural preflight |
+| 10 | pre-existing ledger, incompatible in any respect | **STOP in the schema packet preflight**, before any mutation | exact normalized ACL equality + defaults/PK/CHECKs/owner |
+| 11 | pre-S1 `service_role` grants empty or narrow | restores **exactly** empty/narrow — no fallback | `$restore$` conditional grants + postflight equality |
+
+Additionally: grant options or pre-existing column ACLs on `mt5_import_staging` **STOP in the schema packet preflight**,
+so those states are never migrated and therefore never mis-restored.
 
 Original staging rows and `raw` evidence untouched; reconciliation failure is explicitly **not** a rollback reason.
 `public.mt5_s1_test_pre_evidence` is test-only, is not an S1 migration object, and is deliberately left alone.
@@ -311,6 +351,38 @@ Codex verdict `REVISE_BEFORE_DB_TEST`. Frozen rev-3 confirmed valid unchanged; n
   `position_state`/`lifecycle_updated_at`/`missing_since_run_id` (fixture 24), while Phase-0A insert/mapping still
   works. Rollback provenance was **not** "solved" by restoring broad UPDATE during normal S1 operation.
 
+## Corrections applied (review round 3)
+
+Codex verdict `REVISE_BEFORE_DB_TEST`, with all core RPC behavior, atomicity, supersession, K, lifecycle and the browser
+read boundary marked **PASS** and the harness judged adequate to execute. The **only** blocking area was
+migration/rollback provenance safety. Frozen rev-3 unchanged; no RPC behavior altered.
+
+- **Column-ACL rollback bug (immediate correctness blocker)** — table-level `REVOKE` leaves column privileges in place,
+  so a **normal full install** would have left S1 column ACLs behind and failed its own postflight, rolling back the
+  rollback. Rollback now revokes each S1-granted column privilege individually, driven by apply-time
+  `staging_col_grants` provenance, and asserts completion twice.
+- **RPC ledger gating** — with no successful RPC ledger record, rollback has **no authority** over any RPC-packet
+  signature: the drop block short-circuits and a same-named survivor is left untouched. Signatures now come from ledger
+  provenance, not a hardcoded list, and are re-rendered from the catalog before execution.
+- **Real function-definition provenance** — apply-time fingerprints over `pg_get_functiondef` (body-sensitive) + owner +
+  `prosecdef` + `proconfig`, recorded by the RPC packet for all 12 functions and by the schema packet for the trigger
+  guard. Same signature + same properties + **different body** now STOPs.
+- **Table provenance beyond owner/relkind** — structural fingerprint over owner, columns (type/notnull/default/
+  identity/generated), all constraints, and all indexes. ACLs excluded so privilege restoration cannot destabilise it.
+- **Trigger provenance** — `pg_get_triggerdef` (target, function, timing, events, level, WHEN) plus `tgenabled`.
+- **Policy provenance** — name, command, permissive, roles, `USING`, `WITH CHECK`.
+- **Pre-existing ledger exact ACL equality** — replaced the forbidden-subset search with a normalized
+  `grantee:PRIVILEGE:is_grantable` set comparison (owner entries excluded) that must equal exactly
+  `service_role:SELECT:false`, plus a no-column-ACL check. Missing SELECT, extra privileges, grant options, PUBLIC
+  access and unrelated-role grants are all rejected in one comparison.
+- **Missing-ledger type resolution** — the rollback guard no longer declares `public.mt5_schema_migrations%ROWTYPE`
+  before proving the relation exists; it uses `record`/scalars so a missing ledger produces the intended stable guard.
+- **Source identity honesty** — no fake self-hash was introduced. The README now separates *packet identity metadata*
+  from *deployed-object proof* and states that destructive authority rests on the apply-time fingerprints.
+- **Harness (non-blocking)** — did **not** expand fixture scope. Only normalized the 11 remaining `IF NOT r.o_ok`
+  success assertions to `r.o_ok IS DISTINCT FROM true`, which closes the same NULL-passes-silently flaw on the success
+  side. Fixture count unchanged at 28.
+
 ## Remaining risks / open decisions (for review)
 
 - **`extensions.digest` dependency** — fingerprints/manifest use sha256 via `extensions.digest`; preflight requires it.
@@ -330,11 +402,12 @@ Codex verdict `REVISE_BEFORE_DB_TEST`. Frozen rev-3 confirmed valid unchanged; n
 - **Contract self-checksums** (`d72f7c…`, `97f4e99…`) are declared provenance constants recorded in the ledger; they are
   not recomputed from file bytes at apply time (they cannot self-contain their own hash). The **source-artifact** hash
   `9902B301…` is the authoritative gate.
-- **Function-provenance limit (honest bound)** — rollback proves owner + `prokind` + `SECURITY DEFINER` +
-  `search_path=""` at an exact S1 signature, cross-checked against the ledger's recorded signature list. A hostile
-  replacement that matched **all** of those at the same signature would still be indistinguishable from S1's own
-  function without storing and comparing a body fingerprint (`prosrc` hash) at apply time. That was judged out of scope
-  for a safety-correction round because it changes the ledger contract; flagged for reviewer acceptance.
+- ~~Function-provenance limit~~ — **RESOLVED in round 3.** Apply-time `pg_get_functiondef`-based fingerprints are now
+  recorded and compared, so a same-signature different-body replacement is detected and STOPs the rollback.
+- **Packet-file identity cannot be proven from inside the database** — see "Packet identity vs deployed-object proof"
+  above. `checksum`/`source_artifact_sha256` are declared packet metadata, not file-byte verification; the destructive
+  authority is the apply-time object fingerprints. Making a true file SHA trustworthy would require an external runner
+  rather than the manual SQL-Editor model. **Explicitly flagged for reviewer acceptance.**
 - **`information_schema.role_table_grants` grantee matching** — privilege capture/restore matches `grantee='service_role'`
   literally and does not attempt to resolve privileges inherited through role membership. S1 only ever grants/revokes
   directly to `service_role`, so the captured set is exactly the set S1 can alter; inherited privileges are neither

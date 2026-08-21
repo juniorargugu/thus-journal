@@ -32,12 +32,12 @@ declare
 begin
   -- A: healthy with P1,P2
   select * into r from public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp()-interval '2 min','conn.v1',4200,'srv','s1.v1');
-  if not r.o_ok then raise exception 'MT5_S1_FIXTURE_1_FAIL: create A -> %',r.o_error_code; end if;
+  if r.o_ok is distinct from true then raise exception 'MT5_S1_FIXTURE_1_FAIL: create A -> %',r.o_error_code; end if;
   perform public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,
     '[{"position_id":1,"symbol_raw":"GOU26","side":"buy","volume":1,"price_open":2000,"price_current":2010,"profit":10,"open_time_utc":"2026-07-01T00:00:00Z","source_time_msc":1,"contract_size":10},
       {"position_id":2,"symbol_raw":"GOU26","side":"sell","volume":2,"price_open":2005,"price_current":2004,"profit":2,"open_time_utc":"2026-07-01T00:00:00Z","source_time_msc":2,"contract_size":10}]'::jsonb);
   select * into r from public.mt5_complete_snapshot_v1(v_a,v_user,v_acct,v_la,2,array[1,2]::bigint[]);
-  if not r.o_ok or r.o_snapshot_health<>'healthy' then raise exception 'MT5_S1_FIXTURE_1_FAIL: complete A -> %',r.o_error_code; end if;
+  if r.o_ok is distinct from true or r.o_snapshot_health is distinct from 'healthy' then raise exception 'MT5_S1_FIXTURE_1_FAIL: complete A -> %',r.o_error_code; end if;
   perform public.mt5_reconcile_snapshot_v1(v_a,v_user,v_acct,v_la);
 
   -- B: started, appends P1 only, then "crashes" (never completes)
@@ -77,7 +77,7 @@ begin
     '[{"position_id":1,"symbol_raw":"S50U26","side":"buy","volume":1,"price_open":900,"price_current":906,"profit":6,"open_time_utc":"2026-07-01T00:00:00Z","source_time_msc":2,"contract_size":200},
       {"position_id":2,"symbol_raw":"S50U26","side":"sell","volume":1,"price_open":901,"price_current":900,"profit":1,"open_time_utc":"2026-07-01T00:00:00Z","source_time_msc":3,"contract_size":200}]'::jsonb);
   select * into r from public.mt5_mark_snapshot_failed_v1(v_b,v_user,v_acct,v_lb,'SEAL_FAILED');
-  if not r.o_ok then raise exception 'MT5_S1_FIXTURE_2_FAIL: mark B failed -> %',r.o_error_code; end if;
+  if r.o_ok is distinct from true then raise exception 'MT5_S1_FIXTURE_2_FAIL: mark B failed -> %',r.o_error_code; end if;
 
   perform set_config('request.jwt.claims', json_build_object('sub',v_user::text)::text, true);
   v_snap := public.mt5_get_current_snapshot_v1(v_acct);
@@ -197,7 +197,7 @@ begin
   perform public.mt5_append_run_positions_v1(v_c,v_user,v_acct,v_lc,
     '[{"position_id":1,"symbol_raw":"GOU26","side":"buy","volume":1,"price_open":2000,"price_current":2020,"profit":20,"source_time_msc":9,"contract_size":10}]'::jsonb);
   select * into r from public.mt5_complete_snapshot_v1(v_c,v_user,v_acct,v_lc,1,array[1]::bigint[]);
-  if not r.o_ok then raise exception 'MT5_S1_FIXTURE_4_FAIL: complete C -> %',r.o_error_code; end if;
+  if r.o_ok is distinct from true then raise exception 'MT5_S1_FIXTURE_4_FAIL: complete C -> %',r.o_error_code; end if;
   perform public.mt5_reconcile_snapshot_v1(v_c,v_user,v_acct,v_lc);
 
   perform set_config('request.jwt.claims', json_build_object('sub',v_user::text)::text, true);
@@ -251,7 +251,7 @@ declare
   r record;
 begin
   select * into r from public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
-  if not r.o_ok then raise exception 'MT5_S1_FIXTURE_6_FAIL: create A -> %',r.o_error_code; end if;
+  if r.o_ok is distinct from true then raise exception 'MT5_S1_FIXTURE_6_FAIL: create A -> %',r.o_error_code; end if;
   select * into r from public.mt5_create_run_v1(v_b,v_user,v_acct,v_lb,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
   if r.o_ok is distinct from false or r.o_error_code is distinct from 'ERR_RUN_ACTIVE' then
     raise exception 'MT5_S1_FIXTURE_6_FAIL: expected ok=false/ERR_RUN_ACTIVE got %/%',r.o_ok,r.o_error_code; end if;
@@ -268,9 +268,9 @@ declare
 begin
   perform public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
   select * into r from public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,v_rows);
-  if not r.o_ok or r.o_inserted<>1 then raise exception 'MT5_S1_FIXTURE_7_FAIL: first append'; end if;
+  if r.o_ok is distinct from true or r.o_inserted is distinct from 1 then raise exception 'MT5_S1_FIXTURE_7_FAIL: first append'; end if;
   select * into r from public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,v_rows);
-  if not r.o_ok or r.o_inserted<>0 then raise exception 'MT5_S1_FIXTURE_7_FAIL: replay must insert 0 and succeed'; end if;
+  if r.o_ok is distinct from true or r.o_inserted is distinct from 0 then raise exception 'MT5_S1_FIXTURE_7_FAIL: replay must insert 0 and succeed'; end if;
   if (select count(*) from public.mt5_sync_run_positions where run_id=v_a)<>1 then raise exception 'MT5_S1_FIXTURE_7_FAIL: replay duplicated a row'; end if;
   raise notice 'MT5_S1_FIXTURE_7 PASS (exact append replay)';
 end $f7$;
@@ -342,7 +342,7 @@ begin
   perform public.mt5_create_run_v1(v_a,v_user,v_acct,v_la,900,clock_timestamp(),'conn.v1',4200,'srv','s1.v1');
   perform public.mt5_append_run_positions_v1(v_a,v_user,v_acct,v_la,'[]'::jsonb);
   select * into r from public.mt5_complete_snapshot_v1(v_a,v_user,v_acct,v_la,0,array[]::bigint[]);
-  if not r.o_ok or r.o_snapshot_health<>'healthy' then raise exception 'MT5_S1_FIXTURE_11_FAIL: first zero snapshot must be healthy -> %/%',r.o_ok,r.o_error_code; end if;
+  if r.o_ok is distinct from true or r.o_snapshot_health is distinct from 'healthy' then raise exception 'MT5_S1_FIXTURE_11_FAIL: first zero snapshot must be healthy -> %/%',r.o_ok,r.o_error_code; end if;
   perform set_config('request.jwt.claims', json_build_object('sub',v_user::text)::text, true);
   v_snap := public.mt5_get_current_snapshot_v1(v_acct);
   if (v_snap->>'freshness_state')<>'fresh' or jsonb_array_length(v_snap->'positions')<>0 or (v_snap->'snapshot'->>'positions_count')<>'0' then
@@ -363,7 +363,7 @@ begin
   perform public.mt5_complete_snapshot_v1(v_a,v_user,v_acct,v_la,1,array[1]::bigint[]);
   -- exact replay -> stable success
   select * into r from public.mt5_complete_snapshot_v1(v_a,v_user,v_acct,v_la,1,array[1]::bigint[]);
-  if not r.o_ok then raise exception 'MT5_S1_FIXTURE_12_FAIL: exact completion replay must succeed got %',r.o_error_code; end if;
+  if r.o_ok is distinct from true then raise exception 'MT5_S1_FIXTURE_12_FAIL: exact completion replay must succeed got %',r.o_error_code; end if;
   -- replay an ALREADY-complete run with a set that diverges from the sealed children -> ERR_REPLAY_CONFLICT
   -- (p_expected_count matches the claimed id array, so pre-fetch count validation passes; the sealed-evidence
   --  recompute in the complete-branch is what must reject it.)
@@ -628,7 +628,7 @@ begin
   -- (b) started + expired lease -> started->failed
   update public.mt5_sync_runs set lease_expires_at=clock_timestamp()-interval '1 h' where id=v_a;
   select * into r from public.mt5_expire_stale_run_v1(v_a,v_user,v_acct);
-  if not r.o_ok or (select snapshot_status from public.mt5_sync_runs where id=v_a)<>'failed' then
+  if r.o_ok is distinct from true or (select snapshot_status from public.mt5_sync_runs where id=v_a)<>'failed' then
     raise exception 'MT5_S1_FIXTURE_26_FAIL: expired started run must become failed got %',r.o_error_code;
   end if;
   -- (c) complete+pending + expired lease -> reconcile failed; snapshot stays complete (authority intact)
@@ -638,7 +638,7 @@ begin
   perform public.mt5_complete_snapshot_v1(v_b,v_user,v_acct,v_lb,1,array[1]::bigint[]);   -- now complete+pending
   update public.mt5_sync_runs set lease_expires_at=clock_timestamp()-interval '1 h' where id=v_b;
   select * into r from public.mt5_expire_stale_run_v1(v_b,v_user,v_acct);
-  if not r.o_ok then raise exception 'MT5_S1_FIXTURE_26_FAIL: expire complete/pending -> %',r.o_error_code; end if;
+  if r.o_ok is distinct from true then raise exception 'MT5_S1_FIXTURE_26_FAIL: expire complete/pending -> %',r.o_error_code; end if;
   if (select snapshot_status from public.mt5_sync_runs where id=v_b)<>'complete'
      or (select reconcile_status from public.mt5_sync_runs where id=v_b)<>'failed' then
     raise exception 'MT5_S1_FIXTURE_26_FAIL: expired complete/pending must be complete + reconcile failed';
