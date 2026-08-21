@@ -3,13 +3,13 @@
 -- Status: executable draft, intentionally UNAPPLIED.
 -- Requires successful mt5_s1_append_only_schema_v1.
 -- Ledger version: mt5_s1_append_only_rpc_v1
--- Packet revision: 4  (executable-packet correction round 4)
+-- Packet revision: 5  (executable-packet correction round 5 — runtime parse fix)
 --
 -- PACKET IDENTITY TOKEN (stored in the ledger `checksum` column)
---   b032398010ddeeca290e6c1ac344d405f64ea69dbfcf570e087408457cb5b398
---   = sha256('mt5_s1_append_only_rpc_v1|packet-revision-4')
+--   65a21a632f3826f661de6ce516cf804272a26ccea35275bde99b3b225953c835
+--   = sha256('mt5_s1_append_only_rpc_v1|packet-revision-5')
 --   A DETERMINISTIC PACKET REVISION TOKEN, not a hash of this .sql file's bytes. It only makes
---   packet revisions distinguishable in the ledger and pins this packet to the revision-4 schema
+--   packet revisions distinguishable in the ledger and pins this packet to the revision-5 schema
 --   packet. Destructive rollback authority is the apply-time catalog fingerprints below.
 
 begin;
@@ -23,7 +23,7 @@ begin
     from public.mt5_schema_migrations m
    where m.version='mt5_s1_append_only_schema_v1';
   if not found or v_schema.status <> 'applied'
-     or v_schema.checksum <> 'e99efc365560b6246f652817612de3bb4b19f49b58f80988067b0546f6d700dc'
+     or v_schema.checksum <> '7cd1e9783853798e31f907cf567cfdfb0b90071427fa4132d56eb177a948139b'
      or v_schema.source_artifact_sha256 <> '9902B301B3E170A7FD5AA348C9892395CEBEE129DF1B5F63FAB9F62D53CA266D' then
     raise exception 'MT5_S1_RPC_PREFLIGHT: exact schema ledger entry is missing';
   end if;
@@ -980,12 +980,12 @@ insert into public.mt5_schema_migrations(
   version,description,checksum,source_artifact_sha256,status,objects,applied_at,applied_by
 ) values (
   'mt5_s1_append_only_rpc_v1','MT5 S1 rewritten connector and browser RPCs',
-  -- packet identity token = sha256('mt5_s1_append_only_rpc_v1|packet-revision-4'); NOT a file hash
-  'b032398010ddeeca290e6c1ac344d405f64ea69dbfcf570e087408457cb5b398',
+  -- packet identity token = sha256('mt5_s1_append_only_rpc_v1|packet-revision-5'); NOT a file hash
+  '65a21a632f3826f661de6ce516cf804272a26ccea35275bde99b3b225953c835',
   '9902B301B3E170A7FD5AA348C9892395CEBEE129DF1B5F63FAB9F62D53CA266D',
   'applied',
   pg_catalog.jsonb_build_object(
-    'connector_rpcs',8,'browser_rpcs',1,'internal_helpers',3,'source_revision',3,'packet_revision',4,
+    'connector_rpcs',8,'browser_rpcs',1,'internal_helpers',3,'source_revision',3,'packet_revision',5,
     'provenance', current_setting('mt5.s1_rpc_provenance')::jsonb),
   now(),current_user
 );

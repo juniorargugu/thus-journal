@@ -167,7 +167,7 @@ begin
   select m.version, m.status, m.checksum, m.source_artifact_sha256, m.objects into v_schema
     from public.mt5_schema_migrations m where m.version='mt5_s1_append_only_schema_v1';
   if not found or v_schema.status<>'applied'
-     or v_schema.checksum<>'e99efc365560b6246f652817612de3bb4b19f49b58f80988067b0546f6d700dc' then
+     or v_schema.checksum<>'7cd1e9783853798e31f907cf567cfdfb0b90071427fa4132d56eb177a948139b' then
     raise exception 'MT5_S1_ROLLBACK: schema ledger entry is missing or is not this packet revision (incompatible objects)';
   end if;
   -- all recorded packet identity metadata is compared, including the frozen-design source hash
@@ -175,8 +175,8 @@ begin
      <> '9902B301B3E170A7FD5AA348C9892395CEBEE129DF1B5F63FAB9F62D53CA266D' then
     raise exception 'MT5_S1_ROLLBACK: schema ledger source_artifact_sha256 does not match the frozen revision-3 design';
   end if;
-  if (v_schema.objects->>'packet_revision') is distinct from '4' then
-    raise exception 'MT5_S1_ROLLBACK: schema ledger packet_revision is not 4 — this rollback matches a different packet revision';
+  if (v_schema.objects->>'packet_revision') is distinct from '5' then
+    raise exception 'MT5_S1_ROLLBACK: schema ledger packet_revision is not 5 — this rollback matches a different packet revision';
   end if;
   if (v_schema.objects ? 'provenance') is not true
      or pg_catalog.jsonb_typeof(v_schema.objects->'provenance') is distinct from 'object' then
@@ -197,7 +197,7 @@ begin
                        a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||
                        a.attnotnull::text||':'||
                        coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||':'||
-                       a.attidentity||':'||a.attgenerated, ',' order by a.attnum)
+                       a.attidentity::text||':'||a.attgenerated::text, ',' order by a.attnum)
                      from pg_catalog.pg_attribute a
                      left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
                     where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped),'')||'|'||
@@ -219,10 +219,10 @@ begin
     from public.mt5_schema_migrations m where m.version='mt5_s1_append_only_rpc_v1';
   if found then
     if v_rpc.status<>'applied'
-       or v_rpc.checksum<>'b032398010ddeeca290e6c1ac344d405f64ea69dbfcf570e087408457cb5b398'
+       or v_rpc.checksum<>'65a21a632f3826f661de6ce516cf804272a26ccea35275bde99b3b225953c835'
        or v_rpc.source_artifact_sha256<>'9902B301B3E170A7FD5AA348C9892395CEBEE129DF1B5F63FAB9F62D53CA266D'
-       or (v_rpc.objects->>'packet_revision') is distinct from '4' then
-      raise exception 'MT5_S1_ROLLBACK: rpc ledger row exists but is not a valid revision-4 application';
+       or (v_rpc.objects->>'packet_revision') is distinct from '5' then
+      raise exception 'MT5_S1_ROLLBACK: rpc ledger row exists but is not a valid revision-5 application';
     end if;
     if (v_rpc.objects->'provenance') is null then
       raise exception 'MT5_S1_ROLLBACK: rpc ledger carries no apply-time function provenance; refusing to drop RPCs';
@@ -297,7 +297,7 @@ begin
                             a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||
                             a.attnotnull::text||':'||
                             coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||':'||
-                            a.attidentity||':'||a.attgenerated, ',' order by a.attnum)
+                            a.attidentity::text||':'||a.attgenerated::text, ',' order by a.attnum)
                           from pg_catalog.pg_attribute a
                           left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
                          where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped),'')||'|'||
@@ -354,7 +354,7 @@ begin
                       and t.tgname=k.tg and not t.tgisinternal)
        and (v_ps->'triggers'->>k.tg) is distinct from (
          select pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
-                  pg_catalog.pg_get_triggerdef(t.oid)||'|'||t.tgenabled
+                  pg_catalog.pg_get_triggerdef(t.oid)||'|'||t.tgenabled::text
                 ,'UTF8'),'sha256'),'hex')
            from pg_catalog.pg_trigger t
           where t.tgrelid='public.mt5_sync_run_positions'::regclass
@@ -378,7 +378,7 @@ begin
    )
      and (v_ps->'policies'->>k.key) is distinct from (
        select pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
-                pol.polname||'|'||pol.polcmd||'|'||pol.polpermissive::text||'|'||
+                pol.polname||'|'||pol.polcmd::text||'|'||pol.polpermissive::text||'|'||
                 coalesce((select pg_catalog.string_agg(pg_catalog.pg_get_userbyid(r),',' order by pg_catalog.pg_get_userbyid(r))
                           from pg_catalog.unnest(pol.polroles) as r),'')||'|'||
                 coalesce(pg_catalog.pg_get_expr(pol.polqual,pol.polrelid),'')||'|'||
@@ -424,7 +424,7 @@ begin
               pg_catalog.format_type(a.atttypid,a.atttypmod)||'|'||
               a.attnotnull::text||'|'||
               coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||'|'||
-              a.attidentity||'|'||a.attgenerated
+              a.attidentity::text||'|'||a.attgenerated::text
          from pg_catalog.pg_attribute a
          left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
         where a.attrelid='public.mt5_import_staging'::regclass
@@ -552,7 +552,7 @@ begin
            pg_catalog.format_type(a.atttypid,a.atttypmod)||'|'||
            a.attnotnull::text||'|'||
            coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||'|'||
-           a.attidentity||'|'||a.attgenerated
+           a.attidentity::text||'|'||a.attgenerated::text
       into v_now
       from pg_catalog.pg_attribute a
       left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum

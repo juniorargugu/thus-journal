@@ -1,7 +1,9 @@
 # MT5 S1 Append-Only Executable Packet — README
 
-**Status:** `EXECUTABLE DRAFT — UNAPPLIED / NOT RUN`. Review artifacts only. No SQL was applied, no RPC invoked, no
-Supabase write, no MT5 writer run, no schedule, no deploy.
+**Status:** `EXECUTABLE DRAFT — NOT APPLIED TO PRODUCTION`. No production SQL was applied, no production RPC invoked,
+no production Supabase write, no MT5 writer run, no schedule, no deploy. The packet **has** been executed once against a
+disposable local Supabase database; that run **failed at the schema stage** and is recorded under
+"Runtime execution record" below.
 **Contract source (frozen):** `S1_append_only_snapshot_membership_design.md` — Revision 3 · SHA-256
 `9902B301B3E170A7FD5AA348C9892395CEBEE129DF1B5F63FAB9F62D53CA266D` (33,189 B / 500 lines). Every SQL file records this
 source hash in its migration-ledger row.
@@ -202,7 +204,7 @@ self-referential "file SHA" is fabricated to imply otherwise.
 
 | Kind | What it is | What it proves |
 |---|---|---|
-| `checksum` | a **deterministic packet revision token**: `sha256('<ledger version>\|packet-revision-4')` | *which packet revision* wrote the row, and that the schema/RPC/rollback packets belong to the same revision — **nothing** about file bytes or deployed objects |
+| `checksum` | a **deterministic packet revision token**: `sha256('<ledger version>\|packet-revision-5')` | *which packet revision* wrote the row, and that the schema/RPC/rollback packets belong to the same revision — **nothing** about file bytes or deployed objects |
 | `source_artifact_sha256` | SHA-256 of the **frozen design document's** bytes (a static committed `.md`) | which contract revision the packet was written against; verifiable outside the DB, but still a statement about the design doc, not about deployed objects |
 | `objects->'provenance'` fingerprints | **apply-time catalog fingerprints**, computed from the objects that actually exist after creation | that a surviving object is byte-for-byte the definition S1 created |
 
@@ -211,15 +213,15 @@ this rollback belongs to; every DROP is gated on a recomputed fingerprint match.
 execution model an exact full-file SHA could not be made trustworthy without an external runner, so it is deliberately
 not claimed. **This limitation is raised explicitly for reviewer acceptance.**
 
-**Why the `checksum` column is not a file hash (round 4).** The ledger's `checksum` CHECK requires 64 lowercase hex, so
+**Why the `checksum` column is not a file hash (round 4; tokens re-derived in round 5).** The ledger's `checksum` CHECK requires 64 lowercase hex, so
 the value keeps that shape — but it is now an explicitly derived revision token, not a pretend file digest:
 
 | Ledger version | Token preimage | Value |
 |---|---|---|
-| `mt5_s1_append_only_schema_v1` | `mt5_s1_append_only_schema_v1\|packet-revision-4` | `e99efc36…d700dc` |
-| `mt5_s1_append_only_rpc_v1` | `mt5_s1_append_only_rpc_v1\|packet-revision-4` | `b0323980…5cb5b398` |
+| `mt5_s1_append_only_schema_v1` | `mt5_s1_append_only_schema_v1\|packet-revision-5` | `7cd1e978…a948139b` |
+| `mt5_s1_append_only_rpc_v1` | `mt5_s1_append_only_rpc_v1\|packet-revision-5` | `65a21a63…5953c835` |
 
-Anyone can reproduce these from the literal preimage strings. The packets also record `objects->'packet_revision' = 4`,
+Anyone can reproduce these from the literal preimage strings. The packets also record `objects->'packet_revision' = 5`,
 and the rollback requires it. Earlier revisions carried an unchanged constant across three correction rounds, so a
 revision-3-era ledger row was indistinguishable from this one; that ambiguity is now closed. Nothing has been applied to
 any database, so no historical ledger row exists to migrate.
@@ -265,7 +267,7 @@ replaced/altered/re-privileged → **STOP before any destructive action**.
 
 **Packet identity metadata comparison.** Rollback compares every identity field the packets record: `status`, ledger
 `version`, the packet revision token (`checksum`), `source_artifact_sha256` against the frozen rev-3 design hash, and
-`objects->'packet_revision' = 4` — for the schema row and, when present, the RPC row. As stated above, none of this
+`objects->'packet_revision' = 5` — for the schema row and, when present, the RPC row. As stated above, none of this
 proves the `.sql` files' bytes; it establishes packet identity only.
 
 **Staging column provenance (round-4).** `lifecycle_updated_at` and `missing_since_run_id` are S1 additions to a
@@ -411,6 +413,82 @@ Codex verdict `REVISE_BEFORE_DB_TEST`. Frozen rev-3 confirmed valid unchanged; n
   `position_state`/`lifecycle_updated_at`/`missing_since_run_id` (fixture 24), while Phase-0A insert/mapping still
   works. Rollback provenance was **not** "solved" by restoring broad UPDATE during normal S1 operation.
 
+## Runtime execution record — disposable DB attempt #1
+
+First execution of the packet against a real PostgreSQL. Target: a local `supabase start` stack (PostgreSQL **17.6**,
+`supabase/postgres:17.6.1.143`) in a disposable project outside every git worktree, reached only through the container's
+local socket. **No production database was involved.** Packet under test: `92e102b`.
+
+| Stage | Result |
+|---|---|
+| Phase-0A baseline (repo-controlled, `phase_0a_sql_rpc_packet.md` §4.0–§7.3) | **PASS** |
+| `S1_test_preflight_packet.sql` | **PASS** — 3 staging rows + evidence row, checksum `2c4a7275b242…` |
+| `S1_schema_packet.sql` | **FAIL — SQLSTATE 42725** |
+| `S1_rpc_packet.sql` | **NOT RUN** |
+| `S1_verification_packet.sql` (28 fixtures) | **NOT RUN** — 0 of 28 executed |
+| two-session concurrency test | **NOT RUN** |
+| `S1_rollback_packet.sql` | **NOT RUN** |
+
+**Root cause.** All schema DDL succeeded; the transaction aborted inside the apply-time provenance block (`$prov$`) with:
+
+```
+ERROR:  42725: operator is not unique: text || "char"
+HINT:  Could not choose a best candidate operator.
+```
+
+Four `pg_catalog` columns are of the internal type `"char"` — `pg_attribute.attidentity`, `pg_attribute.attgenerated`,
+`pg_trigger.tgenabled`, `pg_policy.polcmd` — and were concatenated directly into fingerprint preimages. Both
+`text || anynonarray` and `anynonarray || text` match, so PostgreSQL cannot resolve the operator. This is a
+**deterministic type-resolution defect, not environment-specific**: it would fail identically on any supported version,
+including production. Consequence: **every provenance fingerprint added in rounds 3 and 4 was never executable.** Static
+review cannot detect operator ambiguity, which is precisely what this gate exists to catch.
+
+**Nothing committed.** The schema packet is one transaction, so the abort rolled everything back — verified afterwards:
+ledger, both run tables and the guard function all absent, and the staging evidence checksum still matched the
+independently recorded value. Only stage 1's committed artifacts remained.
+
+**No runtime conclusion may be drawn beyond the failing schema stage.** The RPC packet, the 28 fixtures, the concurrency
+invariant and the entire rollback matrix remain **unproven at runtime**; they are still static review only.
+
+**Environment note (not a defect, no change made).** On PostgreSQL 17 `aclexplode` reports a `MAINTAIN` privilege for
+`service_role` on staging, while `information_schema.role_table_grants` — which the packet uses for **both** privilege
+capture and postflight comparison — does not list it. S1 therefore never revokes, restores, or compares `MAINTAIN`, and
+the behavior is self-consistent. The string `MAINTAIN` appears nowhere in any packet.
+
+## Corrections applied (review round 5)
+
+Runtime verdict `FAIL_DISPOSABLE_DB` from disposable attempt #1 (above). A pure executable-SQL type fix — **no
+architectural change, no fingerprint-format change, no ACL-model change, no fixture change.**
+
+- **`pg_catalog` `"char"` concatenation ambiguity (runtime blocker)** — all **11** affected sites made type-explicit with
+  `::text`: 5 in `S1_schema_packet.sql` (table, trigger, policy, `staging_columns_def`, `ledger_struct` fingerprints) and
+  6 in `S1_rollback_packet.sql` (`ledger_struct` recompute, table, trigger, policy, `staging_columns_def`, and the
+  per-column recompute before `DROP COLUMN`). `S1_rpc_packet.sql` and `S1_verification_packet.sql` had no affected site.
+- **Full internal-`"char"` audit, not just the four failing names** — every catalog column of type `"char"` in the
+  packets was inspected. `pg_class.relkind` and `pg_constraint.contype` also appear, but **only in equality comparisons**
+  against unknown-type literals, which resolve unambiguously and were correctly left alone. `polpermissive`,
+  `prosecdef` and `indisunique` are boolean, already cast or used as predicates. No other `"char"` field participates in
+  any concatenation.
+- **No `COALESCE` added** — all four fields are `NOT NULL` in the catalog, so `::text` alone is deterministic (a
+  non-identity/non-generated column yields the empty string, matching the intended representation). The surrounding
+  `string_agg` results keep their existing `coalesce(…,'')` normalization.
+- **Apply/rollback preimage symmetry re-proven** after the casts — see the table below.
+- **Packet revision bumped 4 → 5** across schema, RPC and rollback, since the executable content changed.
+
+### Fingerprint preimage symmetry (round-5 audit)
+
+Each family's preimage was extracted from inside `convert_to(…)`, normalized (comments and whitespace removed) and
+compared between the write side and the rollback read side. All identical:
+
+| Fingerprint family | Apply side | Rollback side | Preimage identical |
+|---|---|---|---|
+| run-table structural | schema `$prov$` `tables` | `$provenance$` tables check | **YES** |
+| ledger structural | schema `$prov$` `ledger_struct` | `$guard$` recompute | **YES** (same recipe as run-table) |
+| function / guard | schema `$prov$` + RPC `$prov$` | `$provenance$` guard + RPC checks | **YES** |
+| trigger | schema `$prov$` `triggers` | `$provenance$` trigger check | **YES** |
+| policy | schema `$prov$` `policies` | `$provenance$` policy check | **YES** |
+| staging column definitions | schema `$prov$` `staging_columns_def` | `$provenance$` **and** `$drop_cols$` | **YES** (both rollback sites identical) |
+
 ## Corrections applied (review round 4)
 
 Codex verdict `REVISE_BEFORE_DB_TEST`, with all core RPCs, append/seal atomicity, `captured_at` supersession,
@@ -435,7 +513,7 @@ count unchanged at **28**.
   and `objects->'packet_revision'` are all checked, for the schema row and the RPC row alike.
 - **Stale packet identity constants replaced** — the `checksum` constants had been unchanged across three correction
   rounds, making a revision-3-era ledger row indistinguishable from this one. They are now explicit deterministic
-  revision tokens, `sha256('<version>|packet-revision-4')`, documented as **not** file hashes. Nothing has been applied
+  revision tokens, `sha256('<version>|packet-revision-5')`, documented as **not** file hashes. Nothing has been applied
   to any database, so there is no historical ledger row to migrate.
 - **Schema-qualified catalog lookups** — the staging-index provenance lookups (both write and read side) are qualified
   with `relnamespace='public'::regnamespace`, and policy lookups are restricted to the two S1 relations via
@@ -492,7 +570,7 @@ migration/rollback provenance safety. Frozen rev-3 unchanged; no RPC behavior al
   reconcile. K is unaffected (streak uses actual membership). Open decision: adopt `first_absent_run_id` for strict
   rev-3 §H1 provenance, or keep the "first recorded" semantics.
 - **Advisory-lock hash collisions** — two accounts sharing a 64-bit key serialize needlessly (not incorrect).
-- **Packet identity tokens** (`e99efc36…`, `b0323980…`) are deterministic revision tokens — `sha256('<version>|packet-revision-4')`
+- **Packet identity tokens** (`7cd1e978…`, `65a21a63…`) are deterministic revision tokens — `sha256('<version>|packet-revision-5')`
   — not file-byte hashes, and they are labelled as such in the packets and in the table above. The **source-artifact**
   hash `9902B301…` is a real hash of the frozen design document and is compared by both the RPC preflight and rollback.
 - ~~Function-provenance limit~~ — **RESOLVED in round 3.** Apply-time `pg_get_functiondef`-based fingerprints are now

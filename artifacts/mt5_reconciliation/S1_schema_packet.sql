@@ -2,11 +2,11 @@
 -- Contract source: S1_append_only_snapshot_membership_design.md revision 3
 -- Status: executable draft, intentionally UNAPPLIED.
 -- Ledger version: mt5_s1_append_only_schema_v1
--- Packet revision: 4  (executable-packet correction round 4)
+-- Packet revision: 5  (executable-packet correction round 5 — runtime parse fix)
 --
 -- PACKET IDENTITY TOKEN (stored in the ledger `checksum` column)
---   e99efc365560b6246f652817612de3bb4b19f49b58f80988067b0546f6d700dc
---   = sha256('mt5_s1_append_only_schema_v1|packet-revision-4')
+--   7cd1e9783853798e31f907cf567cfdfb0b90071427fa4132d56eb177a948139b
+--   = sha256('mt5_s1_append_only_schema_v1|packet-revision-5')
 --   This is a DETERMINISTIC PACKET REVISION TOKEN, reproducible by anyone from that literal string.
 --   It is NOT a hash of this .sql file's bytes and proves nothing about the file or the deployed
 --   objects. Its only job is to make packet revisions distinguishable in the ledger and to keep the
@@ -546,7 +546,7 @@ begin
                              a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||
                              a.attnotnull::text||':'||
                              coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||':'||
-                             a.attidentity||':'||a.attgenerated, ',' order by a.attnum)
+                             a.attidentity::text||':'||a.attgenerated::text, ',' order by a.attnum)
                            from pg_catalog.pg_attribute a
                            left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
                           where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped),'')||'|'||
@@ -574,7 +574,7 @@ begin
       select pg_catalog.jsonb_object_agg(x.tgname, x.fp) from (
         select t.tgname,
                pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
-                 pg_catalog.pg_get_triggerdef(t.oid)||'|'||t.tgenabled
+                 pg_catalog.pg_get_triggerdef(t.oid)||'|'||t.tgenabled::text
                ,'UTF8'),'sha256'),'hex') as fp
           from pg_catalog.pg_trigger t
          where t.tgrelid='public.mt5_sync_run_positions'::regclass and not t.tgisinternal
@@ -584,7 +584,7 @@ begin
         -- deterministic, search_path-independent key: relname.policyname
         select ((select c2.relname from pg_catalog.pg_class c2 where c2.oid=pol.polrelid)||'.'||pol.polname) as key,
                pg_catalog.encode(extensions.digest(pg_catalog.convert_to(
-                 pol.polname||'|'||pol.polcmd||'|'||pol.polpermissive::text||'|'||
+                 pol.polname||'|'||pol.polcmd::text||'|'||pol.polpermissive::text||'|'||
                  coalesce((select pg_catalog.string_agg(pg_catalog.pg_get_userbyid(r),',' order by pg_catalog.pg_get_userbyid(r))
                            from pg_catalog.unnest(pol.polroles) as r),'')||'|'||
                  coalesce(pg_catalog.pg_get_expr(pol.polqual,pol.polrelid),'')||'|'||
@@ -620,7 +620,7 @@ begin
                pg_catalog.format_type(a.atttypid,a.atttypmod)||'|'||
                a.attnotnull::text||'|'||
                coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||'|'||
-               a.attidentity||'|'||a.attgenerated as def
+               a.attidentity::text||'|'||a.attgenerated::text as def
           from pg_catalog.pg_attribute a
           left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
          where a.attrelid='public.mt5_import_staging'::regclass
@@ -638,7 +638,7 @@ begin
                            a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||
                            a.attnotnull::text||':'||
                            coalesce(pg_catalog.pg_get_expr(d.adbin,d.adrelid),'')||':'||
-                           a.attidentity||':'||a.attgenerated, ',' order by a.attnum)
+                           a.attidentity::text||':'||a.attgenerated::text, ',' order by a.attnum)
                          from pg_catalog.pg_attribute a
                          left join pg_catalog.pg_attrdef d on d.adrelid=a.attrelid and d.adnum=a.attnum
                         where a.attrelid=c.oid and a.attnum>0 and not a.attisdropped),'')||'|'||
@@ -698,15 +698,15 @@ insert into public.mt5_schema_migrations(
 ) values (
   'mt5_s1_append_only_schema_v1',
   'MT5 S1 append-only snapshot schema and Phase 0A lifecycle privilege narrowing',
-  -- packet identity token = sha256('mt5_s1_append_only_schema_v1|packet-revision-4'); NOT a file hash
-  'e99efc365560b6246f652817612de3bb4b19f49b58f80988067b0546f6d700dc',
+  -- packet identity token = sha256('mt5_s1_append_only_schema_v1|packet-revision-5'); NOT a file hash
+  '7cd1e9783853798e31f907cf567cfdfb0b90071427fa4132d56eb177a948139b',
   -- source_artifact_sha256 = SHA-256 of the frozen design document's bytes (revision 3). This one IS
   -- a real file hash: the .md is a static committed artifact and is verifiable outside the database.
   '9902B301B3E170A7FD5AA348C9892395CEBEE129DF1B5F63FAB9F62D53CA266D',
   'applied',
   pg_catalog.jsonb_build_object(
     'ledger_created_by_s1', not current_setting('mt5.s1_ledger_preexisting')::boolean,
-    'packet_revision', 4,
+    'packet_revision', 5,
     'tables', array['mt5_sync_runs','mt5_sync_run_positions'],
     'staging_columns', array['lifecycle_updated_at','missing_since_run_id'],
     'staging_pre_count', current_setting('mt5.s1_staging_count')::bigint,
