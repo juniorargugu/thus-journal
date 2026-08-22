@@ -225,3 +225,144 @@ python ops/mt5_import/writer.py --scope deals --days 7 --user-id <uuid> --source
 - **0C-3c** — balance rows + cursor (`mt5_import_cursors`); cursor advances only after every covered
   write is inserted/confirmed-duplicate.
 - **0C-3d** — open-lifecycle reconcile (`position_state` `closed`/`gone`), with a suspicious-drop guard.
+
+---
+
+## `s1_snapshot.py` + `s1_client.py` + `s1_rows.py` — MT5 S1 one-shot snapshot adapter
+
+**Status:** implemented and tested locally; **the first production observation has NOT been run.**
+
+Writes the S1 append-only snapshot through the installed revision-5 RPCs
+(`artifacts/mt5_reconciliation/S1_rpc_packet.sql`). This is a **separate path** from the Phase-0A
+staging writer above: `writer.py`, `staging_db.py`, `build_rows.py` and `probe.py` are unchanged and
+are not involved.
+
+- **`s1_rows.py`** — pure. The exact ten-column S1 payload (`S1_ROW_KEYS`, re-derived from the
+  packet's `jsonb_to_recordset` column list), row validation, envelope assembly and the canonical
+  SHA-256. No MT5, no network, no clock.
+- **`s1_client.py`** — RPC-only PostgREST client, structurally allow-listed to six connector RPCs
+  (`ALLOWED_RPCS`). No table URL, no generic `rpc()`, POST only. The browser read RPC
+  `mt5_get_current_snapshot_v1` and `mt5_mark_reconcile_failed_v1` are deliberately **absent**.
+- **`s1_snapshot.py`** — the one-shot orchestrator: preview / armed write / expiry recovery.
+- **`test_s1_snapshot.py`** — 235 pure checks. `python ops/mt5_import/s1_snapshot.py --self-test`.
+
+### The strict broker read (why this adapter exists)
+
+Phase-0A uses `mt5.positions_get() or ()`, which turns a **failed** read into "zero open positions".
+That is harmless for a mutable staging inbox and **catastrophic** for S1: a first snapshot can never
+be flagged suspicious (`previous_positions_count = 0`, and the policy needs `v_prev >= 3`), so a
+fabricated empty read would be sealed as healthy, fresh, authoritative truth.
+`read_positions_strict()` therefore **raises** on `None` — including `None` + `RES_S_OK` — and only
+a real tuple (possibly empty) can represent zero positions. **`probe.py` is optional diagnostic
+context and is NOT the safety authority: it carries the same collapse.**
+
+### Preview -> approve -> write (the envelope binds them)
+
+```bash
+# 1. PREVIEW (default). Reads MT5, prints the observation, seals it into a git-ignored envelope.
+#    NO database call. Prints "ENVELOPE SHA-256: <64-hex>".
+python ops/mt5_import/s1_snapshot.py --user-id <uuid> --source-account <mt5_login>
+
+# 2. Human reads the preview and approves.
+
+# 3. ARMED WRITE. Replays that envelope's canonical write payload. Performs ZERO MT5 calls.
+#   set local env: SUPABASE_URL=..., SUPABASE_SERVICE_KEY=<service_role>, MT5_S1_WRITE=1
+python ops/mt5_import/s1_snapshot.py --write --confirm WRITE_S1_SNAPSHOT \
+    --envelope ops/mt5_import/out/s1_capture_<ts>.json \
+    --envelope-sha256 <the full 64-hex hash printed by the preview>
+```
+
+The write path recomputes the canonical hash and refuses on mismatch **before any database call**,
+so approval is bound to the **canonical write payload**. The guarantee is semantic, not
+file-level: any write-relevant change to the envelope content (an id, a count, a price,
+`captured_at`, `lease_seconds`, …) changes the hash, while insignificant JSON whitespace or
+key-order differences do not. It also refuses an envelope older than
+`--max-envelope-age-seconds` (default **900**, against the sealed 1800 s S1 freshness window) and
+never silently refreshes `captured_at`.
+
+### Recovery
+
+```bash
+# A crashed cycle blocks the account with ERR_RUN_ACTIVE. After the lease expires:
+#   set local env: SUPABASE_URL=..., SUPABASE_SERVICE_KEY=<service_role>, MT5_S1_WRITE=1
+python ops/mt5_import/s1_snapshot.py --expire-run <run_id> --confirm EXPIRE_STALE_RUN \
+    --user-id <uuid> --source-account <mt5_login>
+```
+
+`--expire-run` calls **only** `mt5_expire_stale_run_v1`. No broker read, no cycle stage, no loop.
+
+**`--expire-run` is NOT a generic retry.** It is a deliberate **terminal** recovery action, to be
+used only after all three of:
+
+1. the lease has **actually expired** (otherwise the RPC answers `ERR_LEASE_NOT_EXPIRED`),
+2. the current run state has been **inspected read-only**, and
+3. the operator explicitly chooses to expire it.
+
+On a `started` run it leaves `snapshot_status=failed` with `error_code=LEASE_EXPIRED`.
+On a **complete + reconcile-pending** run it leaves:
+
+```
+snapshot_status  = complete
+reconcile_status = failed
+error_code       = RECONCILE_LEASE_EXPIRED
+```
+
+The completed broker snapshot **survives as broker evidence**, but lifecycle reconciliation is
+**terminal for that run** — it never returns to pending. A subsequent observation must use a
+**new cycle** (a new capture, a new `run_id`). **Never recover with manual SQL.**
+
+Re-running the **same envelope** is a valid recovery **only while the run is still `started`**
+(create/append replay idempotently). Once the snapshot is sealed it is **not**: `create_run`
+answers `ERR_RUN_SEALED` and the adapter fails closed with `SEALED_RUN_REVIEW_REQUIRED` — see
+below.
+
+### Failure policy
+
+| Where | What the adapter does |
+|---|---|
+| `create_run` fails (contract or transport) | report and stop; **no** `mark_*` — it never touches a run it does not own |
+| `create_run` -> `ERR_RUN_SEALED` | **FAIL CLOSED** — `SEALED_RUN_REVIEW_REQUIRED`, exit 10. No append, complete, reconcile, `mark_*` or expire. See below |
+| append / complete contract failure | `mt5_mark_snapshot_failed_v1` (`APPEND_FAILED` / `SEAL_FAILED`); the original error is always reported, and a cleanup failure never hides it |
+| append / complete **transport** failure | outcome unknown -> **no** `mark_*`, so an idempotent replay stays possible |
+| reconcile fails | one of four review statuses (table below), exit 8. The adapter **never** auto-calls `mt5_mark_reconcile_failed_v1` — that RPC is not even in the client allowlist |
+
+### `ERR_RUN_SEALED` fails closed (no automatic sealed-run recovery)
+
+If `create_run` answers `ERR_RUN_SEALED`, the adapter prints `SEALED_RUN_REVIEW_REQUIRED`, exits
+**10**, and calls **nothing else** — no append, no complete, no reconcile, no `mark_*`, no expire.
+
+`ERR_RUN_SEALED` proves only that `run_id`, user, account, `captured_at`, connector / build /
+server and policy match the sealed run. It proves **nothing** about the immutable per-position
+facts: a different envelope can keep the same ids and the same count while changing `symbol_raw`,
+`side`, `volume`, `price_open`, `price_current`, `profit`, `open_time_utc`, `source_time_msc` or
+`contract_size` — and that envelope carries its own perfectly valid canonical SHA-256, so the hash
+gate does not catch it either. Completion replay and the stored manifest cannot close the gap
+because both are recomputed from the **already-sealed rows**: they can only prove the database
+agrees with itself.
+
+Reconciling on that basis would apply lifecycle mutations on the authority of facts the invocation
+cannot verify. The S1 API exposes no reviewed fact-complete envelope-vs-sealed-row comparison at
+this boundary, so the adapter **fails closed** and hands the decision to a human: accept the sealed
+run, deliberately expire an unreconciled stale cycle after the lease expires, or capture a new
+observation. A richer sealed-run recovery protocol can be designed separately if operations show it
+is needed.
+
+### Reconcile outcomes needing review
+
+Every branch preserves state, calls no `mark_*` and no expire, and exits 8. None of them tells the
+operator to "retry the same envelope" — once the snapshot is sealed that path correctly fails closed.
+
+| Situation | Status |
+|---|---|
+| live contract refusal; run stays `complete` + `pending` | `RECONCILE_PENDING_REVIEW_REQUIRED` |
+| `ERR_LEASE_EXPIRED` during reconcile | `RECONCILE_LEASE_EXPIRED_REVIEW_REQUIRED` |
+| `reconcile_status` already `failed` (the RPC echoes the stored `error_code`) | `RECONCILE_TERMINAL_REVIEW_REQUIRED` |
+| transport failure — applied or not, unknown | `RECONCILE_RESULT_UNKNOWN` |
+
+All four route the operator to a **read-only run-state inspection** first.
+
+### Not in this adapter
+
+No scheduler / timer / daemon / loop. No Journal trades, `trade_groups`, capture or check-in events,
+Telegram. No S1.1 (no account balance, equity or currency). No staging INSERT/PATCH. No browser
+consumption of `mt5_get_current_snapshot_v1`.
