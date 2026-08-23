@@ -230,9 +230,14 @@ NOW = datetime(2026, 8, 22, 9, 15, 0, tzinfo=timezone.utc)
 
 
 def capture(mt5, **over):
+    # connector_version is resolved BY MODE, mirroring resolve_connector_version() in the real CLI.
+    # A v2 capture stamped with the S1 namespace is invalid (verification V13 would never see the
+    # run), so a fixture must not be able to build one by accident.
     kw = {"user_id": UID, "source_account": ACCT, "lease_seconds": 300,
-          "connector_version": "s1-oneshot/0.1", "policy_version": "s1.v1", "max_positions": 200}
+          "policy_version": "s1.v1", "max_positions": 200}
     kw.update(over)
+    kw.setdefault("connector_version", s1_snapshot.resolve_connector_version(
+        None, with_account_facts=bool(kw.get("with_account_facts"))))
     return s1_snapshot.capture_observation(mt5, **kw)
 
 
@@ -1024,8 +1029,9 @@ def t_idempotent_replay():
 def t_client_surface():
     check(s1_client.ALLOWED_RPCS == frozenset({
         "mt5_create_run_v1", "mt5_append_run_positions_v1", "mt5_complete_snapshot_v1",
-        "mt5_reconcile_snapshot_v1", "mt5_mark_snapshot_failed_v1", "mt5_expire_stale_run_v1"}),
-        "client: allowlist is exactly the six connector RPCs")
+        "mt5_reconcile_snapshot_v1", "mt5_mark_snapshot_failed_v1", "mt5_expire_stale_run_v1",
+        "mt5_append_run_account_v1"}),
+        "client: allowlist is exactly the seven connector RPCs (six S1 + one S1.1)")
     check("mt5_get_current_snapshot_v1" not in s1_client.ALLOWED_RPCS,
           "client: browser read RPC is not reachable from service_role")
 

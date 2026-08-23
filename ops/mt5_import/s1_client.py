@@ -42,10 +42,12 @@ RPC_COMPLETE = "mt5_complete_snapshot_v1"
 RPC_RECONCILE = "mt5_reconcile_snapshot_v1"
 RPC_MARK_SNAPSHOT_FAILED = "mt5_mark_snapshot_failed_v1"
 RPC_EXPIRE_STALE_RUN = "mt5_expire_stale_run_v1"
+RPC_APPEND_ACCOUNT = "mt5_append_run_account_v1"   # S1.1, service_role only
 
 ALLOWED_RPCS = frozenset({
     RPC_CREATE_RUN, RPC_APPEND_ROWS, RPC_COMPLETE, RPC_RECONCILE,
     RPC_MARK_SNAPSHOT_FAILED, RPC_EXPIRE_STALE_RUN,
+    RPC_APPEND_ACCOUNT,
 })
 
 # Reason codes mt5_mark_snapshot_failed_v1 accepts (packet: p_reason_code not in (...) -> ERR_BAD_INPUT).
@@ -178,6 +180,18 @@ class S1Client:
             "p_account": source_account,
             "p_lease_token": lease_token,
             "p_rows": rows,
+        }, run_id=run_id)
+
+    def append_run_account(self, *, run_id, user_id, source_account, lease_token, facts):
+        """S1.1 -> {o_ok, o_inserted, o_error_code}. `facts` is ONE jsonb object carrying exactly
+        the eight observation facts. Scope, captured_at, connector_version and the fingerprint are
+        SERVER-derived from the locked parent run and are deliberately not sent."""
+        return self._call(RPC_APPEND_ACCOUNT, {
+            "p_run_id": run_id,
+            "p_user": user_id,
+            "p_account": source_account,
+            "p_lease_token": lease_token,
+            "p_facts": facts,
         }, run_id=run_id)
 
     def complete_snapshot(self, *, run_id, user_id, source_account, lease_token,

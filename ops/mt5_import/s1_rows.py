@@ -36,6 +36,7 @@ import hashlib
 import json
 import math
 import re
+from datetime import datetime as _datetime, timezone as _timezone
 
 try:                                     # package mode: python -m ops.mt5_import.s1_snapshot
     from . import common, tz
@@ -68,6 +69,20 @@ _MT5_PRICE_CURRENT = "price_current"
 _MT5_PROFIT = "profit"
 
 _ISO_Z_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+# account_read_at additionally accepts fractional seconds: the frozen design's own example carries
+# microseconds, and the T1.5 sample can land in the same wall-clock second as captured_at.
+_ISO_Z_FRAC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$")
+
+
+def _parse_iso_z(value):
+    """'YYYY-MM-DDTHH:MM:SS[.ffffff]Z' -> aware UTC datetime, or None. Never raises."""
+    if not isinstance(value, str) or not _ISO_Z_FRAC_RE.match(value):
+        return None
+    fmt = "%Y-%m-%dT%H:%M:%S.%fZ" if "." in value else "%Y-%m-%dT%H:%M:%SZ"
+    try:
+        return _datetime.strptime(value, fmt).replace(tzinfo=_timezone.utc)
+    except ValueError:                                          # pragma: no cover - regex guards
+        return None
 
 ENVELOPE_FORMAT = "mt5.s1.oneshot.envelope/1"
 # EVERY key below is write-relevant and is covered by the canonical SHA-256. The hash is
@@ -84,6 +99,102 @@ ENVELOPE_KEY_SET = frozenset(ENVELOPE_KEYS)
 
 LEASE_SECONDS_MIN = 30      # packet: p_lease_seconds not between 30 and 3600 -> ERR_BAD_INPUT
 LEASE_SECONDS_MAX = 3600
+
+# --- S1.1 account observation (envelope v2) ----------------------------------------------------
+# v1 is S1-only and UNCHANGED FOREVER. v2 = every v1 field plus exactly one canonical account
+# block, and the canonical SHA covers it. An S1.1 write path must REJECT v1; the S1-only write
+# path must REJECT v2 (accepting it would silently discard approved account facts and manufacture
+# the "completed S1.1 run with no account row" anomaly). See the frozen design, sections 3 and 13.
+ENVELOPE_FORMAT_V1 = ENVELOPE_FORMAT
+ENVELOPE_FORMAT_V2 = "mt5.s1.oneshot.envelope/2"
+
+ENVELOPE_KEYS_V2 = ENVELOPE_KEYS + ("account",)
+
+# --- connector namespace contract --------------------------------------------------------------
+# The connector_version namespace is NOT decoration: verification V13 (design section 13) keys the
+# "a completed run MUST carry exactly one account row" invariant off the S1.1 prefix, and V14 keys
+# the never-backfill exemption off its absence. A v2 capture stamped with an S1 connector would be
+# INVISIBLE to V13, so a missing account row would never be reported as an anomaly; a v1 capture
+# stamped with an S1.1 connector would be reported as an anomaly forever, and the only "fix" for it
+# is the backfill the design forbids.
+#
+# The two prefixes are disjoint ('s1.1-' never starts with 's1-'), so exactly one of the two
+# classifiers can be true for any value. Anything matching neither belongs to no reviewed mode and
+# is refused rather than guessed at.
+#
+# This is the ONE definition. mt5_append_run_account_v1 enforces the same prefix server-side, and
+# S1_1_verification_packet.sql quotes it as `like 's1.1-oneshot/%'`.
+CONNECTOR_NAMESPACE_S1 = "s1-oneshot/"
+CONNECTOR_NAMESPACE_S11 = "s1.1-oneshot/"
+
+# Stable operator-facing codes. Named after the mode that was SELECTED, not the value supplied.
+CONNECTOR_VERSION_NOT_S1 = "CONNECTOR_VERSION_NOT_S1"
+CONNECTOR_VERSION_NOT_S1_1 = "CONNECTOR_VERSION_NOT_S1_1"
+
+
+def is_s1_connector(value):
+    """True only for the S1-only (membership) namespace."""
+    return isinstance(value, str) and value.startswith(CONNECTOR_NAMESPACE_S1)
+
+
+def is_s11_connector(value):
+    """True only for the S1.1 (membership + account observation) namespace."""
+    return isinstance(value, str) and value.startswith(CONNECTOR_NAMESPACE_S11)
+
+
+def connector_namespace_error(value, *, s11):
+    """Return (code, message) when `value` does not belong to the selected mode, else None.
+
+    Never rewrites: an explicitly supplied wrong connector version is an operator intent error, and
+    silently correcting it would hide which mode actually ran.
+    """
+    if s11:
+        if is_s11_connector(value):
+            return None
+        return (CONNECTOR_VERSION_NOT_S1_1,
+                f"{CONNECTOR_VERSION_NOT_S1_1} - S1.1 mode (--with-account-facts / envelope v2) "
+                f"requires a connector_version in the {CONNECTOR_NAMESPACE_S11!r} namespace, got "
+                f"{value!r}. Verification V13 only sees runs in that namespace, so a run stamped "
+                f"outside it could lose its account row without ever being reported as an anomaly. "
+                f"Not rewritten: pick the mode you meant.")
+    if is_s1_connector(value):
+        return None
+    return (CONNECTOR_VERSION_NOT_S1,
+            f"{CONNECTOR_VERSION_NOT_S1} - S1-only mode (envelope v1) requires a connector_version "
+            f"in the {CONNECTOR_NAMESPACE_S1!r} namespace, got {value!r}. An S1.1-namespace run "
+            f"with no account row is S1_1_ACCOUNT_ROW_MISSING_ANOMALY to V13, and the anomaly can "
+            f"never be cleared (backfilling account evidence is forbidden). Not rewritten: pick "
+            f"the mode you meant.")
+
+
+ENVELOPE_KEY_SET_V2 = frozenset(ENVELOPE_KEYS_V2)
+
+# Exactly the eight observation facts the RPC's p_facts accepts. Scope/provenance
+# (user_id, source_account, captured_at, connector_version) and the fingerprint are SERVER-derived
+# from the locked parent run and deliberately absent here.
+ACCOUNT_KEYS = (
+    "account_read_at", "account_observation_status", "equity", "balance",
+    "currency", "equity_quality", "balance_quality", "failure_reason",
+)
+ACCOUNT_KEY_SET = frozenset(ACCOUNT_KEYS)
+
+ACCOUNT_STATUS_OBSERVED = "observed"
+ACCOUNT_STATUS_FAILED = "failed"
+ACCOUNT_STATUSES = (ACCOUNT_STATUS_OBSERVED, ACCOUNT_STATUS_FAILED)
+QUALITY_USABLE, QUALITY_INVALID, QUALITY_ABSENT = "usable", "invalid", "absent"
+QUALITIES = (QUALITY_USABLE, QUALITY_INVALID, QUALITY_ABSENT)
+
+# The ONLY v1 failure_reason. It means exactly "the second broker account_info() read failed" and
+# must never encode a transport, RPC, lease, fingerprint or constraint error -- those are
+# operational errors belonging to the connector state machine.
+ACCOUNT_READ_FAILED = "ACCOUNT_READ_FAILED"
+
+# Fixed fail-closed contemporaneity bound. NOT configurable in S1.1 v1, by design.
+ACCOUNT_WINDOW_SECONDS = 30
+
+_MT5_EQUITY = "equity"
+_MT5_BALANCE = "balance"
+_MT5_CURRENCY = "currency"
 
 
 # --- small pure helpers -----------------------------------------------------------------------
@@ -252,13 +363,180 @@ def validate_rows(rows):
 
 
 # --- envelope ---------------------------------------------------------------------------------
-def build_envelope(*, run_id, lease_token, user_id, source_account, captured_at, lease_seconds,
-                   connector_version, terminal_build, terminal_server, policy_version, rows):
-    """Assemble the sealed observation. Rows are sorted by position_id for determinism.
-    Carries NO secret, NO access token, NO .env content and NO raw MT5 object dump."""
-    ordered = sort_rows(rows)
+def normalise_equity(raw):
+    """Broker equity -> (stored_value, quality). NEVER raises, never invents.
+
+    A non-finite broker value is a VALUE-QUALITY problem, not a read failure: it stores NULL with
+    quality 'invalid' and the membership snapshot proceeds. Zero and negative FINITE equity keep
+    their observed value -- a blown account is real evidence -- and are marked 'invalid' so they
+    can never be a denominator.
+    """
+    if raw is None:
+        return None, QUALITY_ABSENT
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None, QUALITY_INVALID
+    if not math.isfinite(raw):
+        return None, QUALITY_INVALID               # NaN / +Inf / -Inf
+    return (float(raw), QUALITY_USABLE) if raw > 0 else (float(raw), QUALITY_INVALID)
+
+
+def normalise_balance(raw):
+    """Broker balance -> (stored_value, quality). A negative FINITE balance is legitimate broker
+    evidence (a debit balance is real) and stays 'usable'; balance is context only and never
+    enters a denominator."""
+    if raw is None:
+        return None, QUALITY_ABSENT
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None, QUALITY_INVALID
+    if not math.isfinite(raw):
+        return None, QUALITY_INVALID
+    return float(raw), QUALITY_USABLE
+
+
+def normalise_currency(raw):
+    """Broker currency -> a non-blank string, or None. Blank is absence, never ''."""
+    if not isinstance(raw, str):
+        return None
+    trimmed = raw.strip()
+    return trimmed or None
+
+
+def build_account_block(acct, *, account_read_at):
+    """Build the canonical v2 account block from the SECOND account_info() sample.
+
+    `acct` is the mapping returned by that read, or None when the read failed/raised.
+    A failed read is fully determined: all values NULL, both qualities 'absent',
+    failure_reason='ACCOUNT_READ_FAILED'. An observed read always has failure_reason=None.
+    """
+    if acct is None:
+        return {
+            "account_read_at":            account_read_at,
+            "account_observation_status": ACCOUNT_STATUS_FAILED,
+            "equity":                     None,
+            "balance":                    None,
+            "currency":                   None,
+            "equity_quality":             QUALITY_ABSENT,
+            "balance_quality":            QUALITY_ABSENT,
+            "failure_reason":             ACCOUNT_READ_FAILED,
+        }
+    equity, equity_quality = normalise_equity(acct.get(_MT5_EQUITY))
+    balance, balance_quality = normalise_balance(acct.get(_MT5_BALANCE))
     return {
-        "envelope_format":   ENVELOPE_FORMAT,
+        "account_read_at":            account_read_at,
+        "account_observation_status": ACCOUNT_STATUS_OBSERVED,
+        "equity":                     equity,
+        "balance":                    balance,
+        "currency":                   normalise_currency(acct.get(_MT5_CURRENCY)),
+        "equity_quality":             equity_quality,
+        "balance_quality":            balance_quality,
+        "failure_reason":             None,        # reserved for whole-read failure only
+    }
+
+
+def validate_account_block(block, captured_at=None):
+    """Return a list of hard errors ([] == valid) for a v2 account block."""
+    errors = []
+    if not isinstance(block, dict):
+        return ["account block is not a JSON object"]
+    keys = set(block.keys())
+    if keys != ACCOUNT_KEY_SET:
+        miss = sorted(ACCOUNT_KEY_SET - keys)
+        extra = sorted(keys - ACCOUNT_KEY_SET)
+        return [f"account key set mismatch (missing={miss}, unexpected={extra})"]
+
+    read_at = block["account_read_at"]
+    if not (isinstance(read_at, str) and _ISO_Z_FRAC_RE.match(read_at)):
+        errors.append("account_read_at must be 'YYYY-MM-DDTHH:MM:SS[.ffffff]Z'")
+
+    status = block["account_observation_status"]
+    if status not in ACCOUNT_STATUSES:
+        errors.append(f"account_observation_status must be one of {list(ACCOUNT_STATUSES)}")
+    for key in ("equity_quality", "balance_quality"):
+        if block[key] not in QUALITIES:
+            errors.append(f"{key} must be one of {list(QUALITIES)}")
+
+    for key in ("equity", "balance"):
+        val = block[key]
+        if val is not None and not _is_real_number(val):
+            errors.append(f"{key} must be a finite number or null")
+
+    currency = block["currency"]
+    if currency is not None and (not isinstance(currency, str) or not currency.strip()):
+        errors.append("currency must be a non-blank string or null")
+
+    reason = block["failure_reason"]
+    if reason is not None and reason != ACCOUNT_READ_FAILED:
+        errors.append(f"failure_reason must be null or {ACCOUNT_READ_FAILED!r}")
+
+    if errors:
+        return errors                              # shape rules below assume the domains hold
+
+    # quality <-> value coherence, same total semantics as the DB CHECKs
+    equity, equity_quality = block["equity"], block["equity_quality"]
+    if equity_quality == QUALITY_USABLE and not (equity is not None and equity > 0):
+        errors.append("equity_quality 'usable' requires a finite equity > 0")
+    if equity_quality == QUALITY_ABSENT and equity is not None:
+        errors.append("equity_quality 'absent' requires equity null")
+    if equity_quality == QUALITY_INVALID and equity is not None and equity > 0:
+        errors.append("equity_quality 'invalid' cannot carry a positive equity")
+
+    balance, balance_quality = block["balance"], block["balance_quality"]
+    if balance_quality == QUALITY_USABLE and balance is None:
+        errors.append("balance_quality 'usable' requires a non-null balance")
+    if balance_quality in (QUALITY_ABSENT, QUALITY_INVALID) and balance is not None:
+        errors.append(f"balance_quality {balance_quality!r} requires balance null")
+
+    # status shape. The failed branch tests reason IS NOT NULL explicitly -- the same
+    # three-valued-logic trap the DB CHECK closes.
+    if status == ACCOUNT_STATUS_OBSERVED:
+        if reason is not None:
+            errors.append("an observed account row must have failure_reason null")
+    else:
+        if reason is None or reason != ACCOUNT_READ_FAILED:
+            errors.append(f"a failed account row requires failure_reason {ACCOUNT_READ_FAILED!r}")
+        if equity is not None or balance is not None or currency is not None:
+            errors.append("a failed account row must carry no financial value")
+        if equity_quality != QUALITY_ABSENT or balance_quality != QUALITY_ABSENT:
+            errors.append("a failed account row must have both qualities 'absent'")
+
+    # contemporaneity, when the caller supplied the run instant. Fixed 30 s fail-closed bound:
+    # if it is exceeded the preview must RECAPTURE -- never widen it, never restamp captured_at.
+    if captured_at is not None:
+        cap, got = _parse_iso_z(captured_at), _parse_iso_z(read_at)
+        if cap is not None and got is not None:
+            delta = (cap - got).total_seconds()
+            if delta < 0:
+                errors.append("account_read_at is AFTER captured_at")
+            elif delta > ACCOUNT_WINDOW_SECONDS:
+                errors.append(f"account_read_at is {delta:.0f}s before captured_at "
+                              f"(max {ACCOUNT_WINDOW_SECONDS}s) -- recapture, never widen the bound")
+    return errors
+
+
+def envelope_keys(env):
+    """The exact canonical key tuple for this envelope's declared format. Raises on anything else,
+    so an unknown format can never be silently hashed against the wrong key set."""
+    fmt = env.get("envelope_format") if isinstance(env, dict) else None
+    if fmt == ENVELOPE_FORMAT_V2:
+        return ENVELOPE_KEYS_V2
+    if fmt == ENVELOPE_FORMAT_V1:
+        return ENVELOPE_KEYS
+    raise ValueError(f"unsupported envelope_format {fmt!r} "
+                     f"(known: {ENVELOPE_FORMAT_V1!r}, {ENVELOPE_FORMAT_V2!r})")
+
+
+def build_envelope(*, run_id, lease_token, user_id, source_account, captured_at, lease_seconds,
+                   connector_version, terminal_build, terminal_server, policy_version, rows,
+                   account=None):
+    """Assemble the sealed observation. Rows are sorted by position_id for determinism.
+    Carries NO secret, NO access token, NO .env content and NO raw MT5 object dump.
+
+    account=None -> envelope v1 (S1 membership only, unchanged forever).
+    account=<block> -> envelope v2 (S1.1-capable); the canonical SHA covers the block.
+    """
+    ordered = sort_rows(rows)
+    env = {
+        "envelope_format":   ENVELOPE_FORMAT_V1 if account is None else ENVELOPE_FORMAT_V2,
         "run_id":            run_id,
         "lease_token":       lease_token,
         "user_id":           user_id,
@@ -273,6 +551,9 @@ def build_envelope(*, run_id, lease_token, user_id, source_account, captured_at,
         "expected_count":    len(ordered),
         "expected_ids":      expected_ids_from_rows(ordered) if not validate_rows(ordered) else [],
     }
+    if account is not None:
+        env["account"] = dict(account)
+    return env
 
 
 def canonical_envelope_bytes(env: dict) -> bytes:
@@ -287,10 +568,11 @@ def canonical_envelope_bytes(env: dict) -> bytes:
     `allow_nan=False` makes a NaN/Infinity anywhere raise instead of emitting invalid JSON that
     PostgREST would then reject (or worse, coerce).
     """
-    missing = [k for k in ENVELOPE_KEYS if k not in env]
+    keys = envelope_keys(env)
+    missing = [k for k in keys if k not in env]
     if missing:
         raise ValueError(f"envelope missing key(s) for hashing: {missing}")
-    payload = {k: env[k] for k in ENVELOPE_KEYS}
+    payload = {k: env[k] for k in keys}
     return json.dumps(payload, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=False, allow_nan=False).encode("utf-8")
 
@@ -306,16 +588,21 @@ def validate_envelope(env):
     if not isinstance(env, dict):
         return ["envelope is not a JSON object"]
 
+    fmt = env.get("envelope_format")
+    if fmt == ENVELOPE_FORMAT_V2:
+        want = ENVELOPE_KEY_SET_V2
+    elif fmt == ENVELOPE_FORMAT_V1:
+        want = ENVELOPE_KEY_SET
+    else:
+        return [f"unsupported envelope_format {fmt!r} "
+                f"(known: {ENVELOPE_FORMAT_V1!r}, {ENVELOPE_FORMAT_V2!r})"]
+
     keys = set(env.keys())
-    if keys != ENVELOPE_KEY_SET:
-        miss = sorted(ENVELOPE_KEY_SET - keys)
-        extra = sorted(keys - ENVELOPE_KEY_SET)
+    if keys != want:
+        miss = sorted(want - keys)
+        extra = sorted(keys - want)
         errors.append(f"envelope key set mismatch (missing={miss}, unexpected={extra})")
         return errors
-
-    if env["envelope_format"] != ENVELOPE_FORMAT:
-        errors.append(f"unsupported envelope_format {env['envelope_format']!r} "
-                      f"(this build writes/reads {ENVELOPE_FORMAT!r})")
 
     for key in ("run_id", "lease_token", "user_id"):
         if not common.is_uuid(env[key]):
@@ -339,6 +626,16 @@ def validate_envelope(env):
         if not isinstance(val, str) or not val.strip():
             errors.append(f"{key} must be a non-blank string")
 
+    # The envelope format and the connector namespace are ONE decision, so they are validated
+    # together and structurally -- every entry point (preview, armed write, class-C resume) already
+    # runs validate_envelope before it reads a credential or constructs a transport, so this cannot
+    # be reached with a database connection open.
+    cv = env["connector_version"]
+    if isinstance(cv, str) and cv.strip():
+        ns_err = connector_namespace_error(cv, s11=(fmt == ENVELOPE_FORMAT_V2))
+        if ns_err:
+            errors.append(ns_err[1])
+
     build = env["terminal_build"]
     if build is not None and not (isinstance(build, int) and not isinstance(build, bool)):
         errors.append("terminal_build must be an integer or null")
@@ -359,5 +656,9 @@ def validate_envelope(env):
         errors.append("expected_ids does not match the sorted unique position ids of rows")
     if [r["position_id"] for r in rows] != want_ids:
         errors.append("rows are not in ascending position_id order (envelope must be deterministic)")
+
+    if fmt == ENVELOPE_FORMAT_V2:
+        errors.extend(f"account: {e}" for e in
+                      validate_account_block(env["account"], env["captured_at"]))
 
     return errors
