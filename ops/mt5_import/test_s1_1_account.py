@@ -805,6 +805,108 @@ def t_generated_armed_command():
 
 
 # =============================================================================================
+# APPROVAL-SCREEN TRUTHFULNESS -- the surface a human authorises a production write from.
+#
+# Driven through the REAL parse_args -> run_preview path in both modes, never against constants:
+# the defect being locked out was precisely that the constants were right and the screen was not.
+# =============================================================================================
+FALSE_S11_CLAIM = "run S1.1 (no account balance / equity / currency)"
+
+
+def t_approval_screen_is_mode_aware():
+    rc1, v1, e1 = run_cli_preview([])
+    rc2, v2, e2 = run_cli_preview(["--with-account-facts"])
+    check(rc1 == 0 and rc2 == 0, "screen: both previews succeed")
+    check(e1["envelope_format"] == s1_rows.ENVELOPE_FORMAT
+          and e2["envelope_format"] == s1_rows.ENVELOPE_FORMAT_V2,
+          "screen: the two previews really did seal a v1 and a v2 envelope")
+
+    # ---- A. S1 / v1 -----------------------------------------------------------------------
+    check("MT5 S1 FIRST SNAPSHOT" in v1, "screen/v1: still identifies itself as S1")
+    check("MT5 S1.1 SNAPSHOT" not in v1, "screen/v1: does not claim to be S1.1")
+    check("mt5_sync_run_account" not in v1,
+          "screen/v1: never claims an account row will be written")
+    check(FALSE_S11_CLAIM in v1,
+          "screen/v1: correctly states S1.1 will NOT run (true for a v1 envelope)")
+    check(s1_snapshot.side_effect_preview(2) in v1,
+          "screen/v1: prints exactly the S1 side-effect block")
+
+    # ---- B. S1.1 / v2 ---------------------------------------------------------------------
+    check("MT5 S1.1 SNAPSHOT" in v2, "screen/v2: identifies itself as S1.1")
+    check("MT5 S1 FIRST SNAPSHOT" not in v2, "screen/v2: is not titled as plain S1")
+
+    will_write = v2.split("WILL WRITE")[1].split("WILL NOT:")[0]
+    will_not = v2.split("WILL NOT:")[1].split("ENVELOPE ")[0]
+
+    check("mt5_sync_run_account" in will_write,
+          "screen/v2: WILL WRITE names mt5_sync_run_account")
+    check("1 immutable row in mt5_sync_run_account" in will_write,
+          "screen/v2: WILL WRITE says exactly ONE account row")
+    check("mt5_sync_runs" in will_write and "mt5_sync_run_positions" in will_write,
+          "screen/v2: WILL WRITE still names the run and the position rows")
+    check("2 immutable row(s) in mt5_sync_run_positions" in will_write,
+          "screen/v2: the position count is the real captured count")
+    check("complete the snapshot" in will_write, "screen/v2: WILL WRITE discloses completion")
+    check("reconcile the snapshot" in will_write, "screen/v2: WILL WRITE discloses reconciliation")
+    check("mt5_import_staging" in will_write,
+          "screen/v2: the bounded staging annotation is still disclosed")
+
+    # the false statement must be gone from the WHOLE screen, not merely moved out of WILL NOT
+    check(FALSE_S11_CLAIM not in v2,
+          "screen/v2: the false 'S1.1 will not run' claim is absent from the entire screen")
+    check("mt5_sync_run_account" not in will_not,
+          "screen/v2: WILL NOT does not contradict WILL WRITE")
+    for token in ("Journal trades", "trade_groups", "checkin", "Telegram",
+                  "schedule, loop or start another cycle"):
+        check(token in will_not, f"screen/v2: WILL NOT still declares {token!r}")
+
+    # exactly one side-effect block: no stale second summary left behind
+    check(v2.count("WILL WRITE") == 1 and v2.count("WILL NOT:") == 1,
+          "screen/v2: exactly one side-effect block")
+
+    # ---- C. safety: the screen is the ONLY thing that changed ------------------------------
+    cmd = [l for l in v2.splitlines() if "s1_snapshot.py" in l and "--write" in l]
+    check(len(cmd) == 1 and "--with-account-facts" in cmd[0],
+          "screen/v2: the armed command is unchanged and still carries the mode flag")
+    parsed = s1_snapshot.parse_args(join_shell_command(v2))
+    check(parsed.with_account_facts is True and parsed.write is True,
+          "screen/v2: the displayed command still parses back into an armed S1.1 write")
+    check(parsed.envelope_sha256 == s1_rows.envelope_sha256(e2),
+          "screen/v2: the displayed hash still binds THIS envelope")
+
+    # a v2 envelope still cannot be written without the mode flag: the screen change relaxed the
+    # format gate in neither direction.
+    rc, out, cli = run_write(e2, {}, s11=False)
+    check(rc == 2 and "ENVELOPE_FORMAT_NOT_S1" in out,
+          "screen: the S1 write path still refuses a v2 envelope without --with-account-facts")
+    check(cli.calls == [], "screen: refused before any RPC")
+
+
+def t_approval_screen_does_not_touch_the_envelope():
+    """Canonicalisation is independent of the display: the same captured facts must produce the
+    same bytes and the same SHA regardless of what the screen says."""
+    env = v2_envelope()
+    sha_before = s1_rows.envelope_sha256(env)
+    facts = {"login": int(ACCT), "server": "PiSecurities-Live", "terminal_build": 6090,
+             "margin_mode": 2, "account_block": env["account"]}
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        s1_snapshot.print_preview(env, {}, {}, facts, envelope_path="x.json", sha256=sha_before)
+    check(s1_rows.envelope_sha256(env) == sha_before,
+          "screen: rendering the approval screen does not mutate the envelope or its SHA")
+    check(s1_rows.validate_envelope(env) == [],
+          "screen: the envelope is still valid after rendering")
+    check("mt5_sync_run_account" in buf.getvalue(),
+          "screen: print_preview took the S1.1 branch from the envelope format alone")
+
+    # the block is a pure function of (count, mode) -- no hidden state, and the modes differ
+    a = s1_snapshot.side_effect_preview(4, s11=True)
+    b = s1_snapshot.side_effect_preview(4, s11=True)
+    check(a == b and a != s1_snapshot.side_effect_preview(4),
+          "screen: side_effect_preview is deterministic and the two modes differ")
+
+
+# =============================================================================================
 # MEDIUM 4 -- one classifier, both paths, every deterministic code.
 # =============================================================================================
 DETERMINISTIC_CODES = (
@@ -884,6 +986,7 @@ ALL = [
     t_namespace_contract, t_generated_armed_command,
     t_shared_classifier_covers_every_deterministic_code,
     t_transport_unknown_never_classified, t_connector_namespace_and_reason,
+    t_approval_screen_is_mode_aware, t_approval_screen_does_not_touch_the_envelope,
 ]
 
 

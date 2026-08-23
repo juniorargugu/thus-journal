@@ -1069,12 +1069,45 @@ def t_client_surface():
           "client: POST is the only HTTP method")
 
 
+# The pre-S1.1 S1 approval text, frozen VERBATIM. side_effect_preview() is mode-aware now, and
+# the arrival of a second mode must not be able to perturb the S1 screen by even one character --
+# an operator who approved this exact wording before must be approving the same thing now.
+S1_SIDE_EFFECTS_FROZEN = (
+    "WILL WRITE:\n"
+    "  - 1 row in mt5_sync_runs (this observation)\n"
+    "  - 3 immutable row(s) in mt5_sync_run_positions\n"
+    "  - bounded mt5_import_staging lifecycle annotation during reconcile\n"
+    "      (kind='open' rows for this user/account only: position_state, missing_since_run_id,\n"
+    "       lifecycle_updated_at. kind='close' rows are never candidates.)\n"
+    "WILL NOT:\n"
+    "  - create Journal trades\n"
+    "  - create trade_groups (G2)\n"
+    "  - create checkin / capture events\n"
+    "  - send Telegram\n"
+    "  - run S1.1 (no account balance / equity / currency)\n"
+    "  - schedule, loop or start another cycle\n"
+)
+
+
 def t_side_effects_declared():
     text = s1_snapshot.side_effect_preview(3)
     for token in ("mt5_sync_runs", "mt5_sync_run_positions", "mt5_import_staging lifecycle",
                   "Journal trades", "trade_groups", "checkin", "Telegram", "S1.1",
                   "schedule, loop or start another cycle"):
         check(token in text, f"side-effects: preview declares {token!r}")
+
+    # the S1 default is unchanged, byte for byte
+    check(text == S1_SIDE_EFFECTS_FROZEN,
+          "side-effects: the S1 approval text is byte-identical to the pre-S1.1 wording")
+    check(s1_snapshot.side_effect_preview(3, s11=False) == S1_SIDE_EFFECTS_FROZEN,
+          "side-effects: an explicit s11=False is the same S1 text")
+
+    # ...and the S1 screen must NEVER advertise an account write: in S1 mode no
+    # mt5_sync_run_account row is created, so claiming one would over-state the write.
+    check("mt5_sync_run_account" not in text,
+          "side-effects: the S1 screen does not claim an mt5_sync_run_account row")
+    check("run S1.1 (no account balance / equity / currency)" in text,
+          "side-effects: the S1 screen still states that S1.1 will NOT run")
 
     # S1.1 fields can never be captured or sent: they are not S1 columns and not envelope keys,
     # and the exact-key-set rule rejects them if anything ever tried.

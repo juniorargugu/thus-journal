@@ -225,7 +225,40 @@ def collect_warnings(rows, missing_by_pid, symbols_meta):
     return warnings
 
 
-def side_effect_preview(n_positions: int) -> str:
+def side_effect_preview(n_positions: int, *, s11: bool = False) -> str:
+    """The human write-approval surface. It must name every table the LATER ARMED WRITE touches,
+    in the mode this envelope was actually captured in.
+
+    The two modes have different write sets, so one summary cannot serve both. Shown the S1 text,
+    an S1.1 envelope under-states the write by a whole table (mt5_sync_run_account) and then
+    asserts the opposite under WILL NOT -- the one thing an approval screen may never do.
+
+    The S1 branch is a separate literal returned verbatim rather than a shared template
+    with holes: adding S1.1 must not be able to perturb the S1 approval surface at all.
+
+    DISPLAY ONLY. Nothing here participates in capture, the envelope, its canonical SHA, arming,
+    or the RPC sequence.
+    """
+    if s11:
+        # create_run -> append_run_positions -> append_run_account -> complete_snapshot ->
+        # reconcile_snapshot. The account row lands BEFORE completion, so the same completion
+        # seals membership and account facts together.
+        return (
+            "WILL WRITE  (S1.1 -- account facts ENABLED):\n"
+            "  - 1 row in mt5_sync_runs (this observation)\n"
+            f"  - {n_positions} immutable row(s) in mt5_sync_run_positions\n"
+            "  - 1 immutable row in mt5_sync_run_account (equity / balance / currency)\n"
+            "  - complete the snapshot (one completion seals membership AND the account row)\n"
+            "  - reconcile the snapshot: bounded mt5_import_staging lifecycle annotation\n"
+            "      (kind='open' rows for this user/account only: position_state, missing_since_run_id,\n"
+            "       lifecycle_updated_at. kind='close' rows are never candidates.)\n"
+            "WILL NOT:\n"
+            "  - create Journal trades\n"
+            "  - create trade_groups (G2)\n"
+            "  - create checkin / capture events\n"
+            "  - send Telegram\n"
+            "  - schedule, loop or start another cycle\n"
+        )
     return (
         "WILL WRITE:\n"
         "  - 1 row in mt5_sync_runs (this observation)\n"
@@ -482,8 +515,12 @@ def _print_account_facts(block, captured_at=None):
 def print_preview(envelope, missing_by_pid, symbols_meta, account_facts, *, envelope_path, sha256):
     rows = envelope["rows"]
     n = len(rows)
+    # Mode is resolved from the SEALED envelope, not from argv: the screen must describe the
+    # artefact the armed write would actually replay.
+    _v2 = envelope["envelope_format"] == s1_rows.ENVELOPE_FORMAT_V2
     print("=" * 78)
-    print("MT5 S1 FIRST SNAPSHOT - PROPOSED OBSERVATION  [PREVIEW: NOTHING WRITTEN]")
+    print("MT5 S1.1 SNAPSHOT - PROPOSED OBSERVATION  [PREVIEW: NOTHING WRITTEN]" if _v2 else
+          "MT5 S1 FIRST SNAPSHOT - PROPOSED OBSERVATION  [PREVIEW: NOTHING WRITTEN]")
     print("=" * 78)
     print("broker read            : HEALTHY (positions_get returned a tuple)")
     print(f"account (source)       : {common.mask_login(account_facts.get('login'))}")
@@ -499,7 +536,6 @@ def print_preview(envelope, missing_by_pid, symbols_meta, account_facts, *, enve
     print(f"proposed run_id        : {envelope['run_id']}")
     print(f"policy_version         : {envelope['policy_version']}")
     print(f"lease_seconds          : {envelope['lease_seconds']}")
-    _v2 = envelope["envelope_format"] == s1_rows.ENVELOPE_FORMAT_V2
     print(f"connector_version      : {envelope['connector_version']}   "
           f"[resolved for {'S1.1 (--with-account-facts)' if _v2 else 'S1-only'} mode; namespace "
           f"{s1_rows.CONNECTOR_NAMESPACE_S11 if _v2 else s1_rows.CONNECTOR_NAMESPACE_S1!r}]")
@@ -539,7 +575,7 @@ def print_preview(envelope, missing_by_pid, symbols_meta, account_facts, *, enve
         print("  (none)")
 
     print()
-    print(side_effect_preview(n))
+    print(side_effect_preview(n, s11=_v2))
     print(f"ENVELOPE               : {envelope_path}")
     print(f"ENVELOPE SHA-256       : {sha256}")
     print()
