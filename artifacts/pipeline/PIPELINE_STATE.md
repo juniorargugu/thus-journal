@@ -1,7 +1,10 @@
 # THUS Journal — Pipeline State
 
-**Updated (local):** 2026-07-10
-**Local HEAD:** `042aeed` == `origin/main` — **in sync**. (Docs/migration commits after `f01eb33` do not touch `index.html`.)
+**Updated (local):** 2026-08-23
+**Active branch:** `work/mt5-s1-snapshot-lifecycle` @ `d145699` — MT5 snapshot reconciliation lane (**J**), unpushed. The `main`/production facts below are unchanged by it: lane J has shipped **no** browser bundle and **no** deploy.
+**Current worktree HEAD:** `d145699476db068b22ce36e2d8bb8b067a9edb68` (branch `work/mt5-s1-snapshot-lifecycle`).
+**Current local `origin/main`:** `f37a0ef593b78791b0b1f00096106735b4c59ab3`.
+**Historical production/browser baseline:** `042aeed` — the last commit at which this file's lane A–I production facts were captured (2026-07-10); docs/migration commits after `f01eb33` do not touch `index.html`, so prod still serves the `f01eb33` bundle described below. `042aeed` is **not** current HEAD and is **not** current `origin/main`.
 **Production bundle:** **`f01eb33` / v3.23.0** — unchanged. `index.html` is byte-identical to `f01eb33` at every commit through `042aeed`, so prod thus999.com still serves the `f01eb33` bundle (595,900 B, sha256 `4f8564da…`).
 **Deploy posture:** **DEPLOYED + VERIFIED** — pushed `71283c3..f01eb33` (13 commits: G2 v0.4 loader/render/reset + MT5 dry-run harness merge `3f4a67d` + version bump `f01eb33`); Netlify published. App version **v3.23.0** (single-source `APP_VERSION`). G2 v0.4 loader/render is **live default-off**; write gate NOT enabled. **No-auth default-off smoke PASS** (app mounts; flags null; 0 `create_trade_group_v1`; 0 `/rest/v1/trades` + 0 `/rest/v1/trade_groups` writes on load; grouping UI absent; no ⛓ badge). **Authenticated Positions/Journal/P&L visual smoke PASS (user browser, 2026-07-08)** → **v3.23.0 deploy verification COMPLETE.**
 **RPC `isMerged` hardening (Lane F):** migration `20260708` **APPLIED + VERIFIED in prod Supabase (2026-07-10)** — user-run precheck returned 0, `create_trade_group_v1` replaced (function-body-only), BEGIN/ROLLBACK behavior test confirmed `merged_child_not_allowed` on a merged child (false/null/absent allowed; ungroup unchanged; no rows persisted). Defense-in-depth guard now live. **Write gate / real group still gated** (need explicit approval — separate from this migration).
@@ -28,6 +31,7 @@
 | **G** | RLS / security hardening | High-risk | Fresh **read-only** audit required first | RLS/schema = STOP |
 | **H** | P2-5 image externalization | **CLOSED** (18/18 backfilled) | Backup retention decision later (holds sensitive base64) | delete backup = user approval |
 | **I** | Mentor / GUGU notes | Backlog | — | — |
+| **J** | **MT5 snapshot reconciliation (S1 / S1.1 → T-pipeline)** | **S1 DONE. S1.1 DONE — first production canary CLOSED 2026-08-23** (`run_seq=2`, healthy, 1 account row, `not_open_confirmed=2`) | Codex review of the T1/T2 contract freeze, then **T1** trusted position-change detector, then **T2** quiet window + `capture_event` | every step user-gated; writer/scheduler/T4 = STOP |
 
 ---
 
@@ -42,3 +46,4 @@
 - **G — RLS/security.** Requires a fresh read-only audit; never edit RLS/policies under autopilot.
 - **H — P2-5 image externalization.** Closed/backfilled. Sensitive raw backup lives outside git; delete only on explicit approval.
 - **I — Mentor/GUGU notes.** Backlog only.
+- **J — MT5 snapshot reconciliation.** Lives on `work/mt5-s1-snapshot-lifecycle` (unpushed; no `index.html` change, no deploy). **S1** append-only snapshot membership: frozen + applied. **S1.1** contemporaneous account observation: design frozen, packets applied, implementation `ef2c176`, approval-screen fix `d145699`, and the **first production canary executed 2026-08-23T09:02:51Z — CLOSED** ([`../mt5_reconciliation/S1_1_first_production_canary_closeout.md`](../mt5_reconciliation/S1_1_first_production_canary_closeout.md)): `run_id=b8182608…`, `run_seq=2`, status complete / health healthy / reconcile complete, 4 membership rows, **exactly 1 `mt5_sync_run_account` row** (`observed`, equity+balance `usable`, THB, timing window valid), lifecycle `still_open=0 missing_once=0 not_open_confirmed=2 conflicts=0`, final verification packet PASS, no active cycle after. Each of the five RPCs ran exactly once with zero retries and the armed path made **zero MT5 calls** (it replays a sealed envelope). **Next:** Codex review of [`../mt5_reconciliation/T1_T2_contract_freeze_addendum.md`](../mt5_reconciliation/T1_T2_contract_freeze_addendum.md) (7 frozen decisions + the T1 boundary), then **T1** (detection only — no Journal mutation, no Telegram, no quiet-window persistence, no scheduler), then **T2** (quiet window + `capture_event`). **NOT AUTHORIZED / NOT ACTIVE:** continuous MT5 writer · scheduler · third snapshot · automatic polling · T4 Journal promotion · FX workstream · browser-facing S1.1 exposure consumer (`mt5_sync_run_account` stays `service_role` SELECT only).

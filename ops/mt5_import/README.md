@@ -230,7 +230,9 @@ python ops/mt5_import/writer.py --scope deals --days 7 --user-id <uuid> --source
 
 ## `s1_snapshot.py` + `s1_client.py` + `s1_rows.py` — MT5 S1 one-shot snapshot adapter
 
-**Status:** implemented and tested locally; **the first production observation has NOT been run.**
+**Status:** implemented, tested locally, and **the first production observation HAS been run** —
+the S1.1 canary of 2026-08-23 (`run_seq=2`, complete/healthy/reconciled). See
+[`../../artifacts/mt5_reconciliation/S1_1_first_production_canary_closeout.md`](../../artifacts/mt5_reconciliation/S1_1_first_production_canary_closeout.md).
 
 Writes the S1 append-only snapshot through the installed revision-5 RPCs
 (`artifacts/mt5_reconciliation/S1_rpc_packet.sql`). This is a **separate path** from the Phase-0A
@@ -240,11 +242,11 @@ are not involved.
 - **`s1_rows.py`** — pure. The exact ten-column S1 payload (`S1_ROW_KEYS`, re-derived from the
   packet's `jsonb_to_recordset` column list), row validation, envelope assembly and the canonical
   SHA-256. No MT5, no network, no clock.
-- **`s1_client.py`** — RPC-only PostgREST client, structurally allow-listed to six connector RPCs
+- **`s1_client.py`** — RPC-only PostgREST client, structurally allow-listed to seven connector RPCs
   (`ALLOWED_RPCS`). No table URL, no generic `rpc()`, POST only. The browser read RPC
   `mt5_get_current_snapshot_v1` and `mt5_mark_reconcile_failed_v1` are deliberately **absent**.
 - **`s1_snapshot.py`** — the one-shot orchestrator: preview / armed write / expiry recovery.
-- **`test_s1_snapshot.py`** — 235 pure checks. `python ops/mt5_import/s1_snapshot.py --self-test`.
+- **`test_s1_snapshot.py`** — 338 pure checks. `python ops/mt5_import/s1_snapshot.py --self-test`.
 
 ### The strict broker read (why this adapter exists)
 
@@ -364,5 +366,10 @@ All four route the operator to a **read-only run-state inspection** first.
 ### Not in this adapter
 
 No scheduler / timer / daemon / loop. No Journal trades, `trade_groups`, capture or check-in events,
-Telegram. No S1.1 (no account balance, equity or currency). No staging INSERT/PATCH. No browser
-consumption of `mt5_get_current_snapshot_v1`.
+Telegram. No staging INSERT/PATCH. No browser consumption of `mt5_get_current_snapshot_v1` or of
+`mt5_sync_run_account`.
+
+S1.1 account observation **is** implemented and is **opt-in per invocation**, never a default: only
+`--with-account-facts` captures equity / balance / currency, seals an envelope v2 stamped
+`s1.1-oneshot/…`, and appends one `mt5_sync_run_account` row. Without the flag the adapter is
+S1-only and writes no account facts at all.

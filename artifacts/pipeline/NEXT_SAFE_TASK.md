@@ -1,12 +1,16 @@
 # Next Safe Task
 
-**Updated (local):** 2026-07-10
-**Repo HEAD/origin:** **`042aeed`** == `origin/main` — **in sync**. (Docs/migration commits after `f01eb33` do not
-touch `index.html`.)
+**Updated (local):** 2026-08-23
+**Active branch:** `work/mt5-s1-snapshot-lifecycle` @ `d145699` (lane **J**, unpushed — no bundle change, no deploy).
+**Current worktree HEAD:** `d145699476db068b22ce36e2d8bb8b067a9edb68` (branch `work/mt5-s1-snapshot-lifecycle`).
+**Current local `origin/main`:** `f37a0ef593b78791b0b1f00096106735b4c59ab3`.
+**Historical production/browser baseline:** `042aeed` — the commit at which the lane A–I production facts below were captured (2026-07-10). It is **not** current HEAD and **not** current `origin/main`. Docs/migration commits after `f01eb33` do not touch `index.html`.
 **Production bundle:** **`f01eb33` / v3.23.0** on thus999.com — unchanged. `index.html` is byte-identical to
 `f01eb33` through `042aeed`, so prod still serves the `f01eb33` bundle.
 
-**Just completed:** **RPC `isMerged` hardening migration `20260708` APPLIED + VERIFIED in prod Supabase
+**Just completed (lane J, 2026-08-23):** **MT5 S1.1 first production canary — CLOSED.** `run_id=b8182608…`, `run_seq=2`, complete/healthy/reconciled, 4 membership rows + **the first `mt5_sync_run_account` row** (`observed`, equity+balance `usable`, THB), lifecycle `not_open_confirmed=2`, verification packet PASS. One cycle, zero retries, zero MT5 calls on the armed path, no scheduler, no push, no deploy. See [`../mt5_reconciliation/S1_1_first_production_canary_closeout.md`](../mt5_reconciliation/S1_1_first_production_canary_closeout.md).
+
+**Previously completed (lane F):** **RPC `isMerged` hardening migration `20260708` APPLIED + VERIFIED in prod Supabase
 (2026-07-10)** — user-run precheck returned 0; `create_trade_group_v1` replaced (function-body-only); BEGIN/ROLLBACK
 behavior test confirmed `merged_child_not_allowed` on a merged child (false/null/absent allowed; ungroup unchanged;
 nothing persisted). (Earlier: **v3.23.0 deploy VERIFIED — no-auth default-off + authenticated visual smoke PASS,
@@ -16,6 +20,14 @@ nothing persisted). (Earlier: **v3.23.0 deploy VERIFIED — no-auth default-off 
 ---
 
 ## Recommended next safe task
+
+**Lane J — Codex review of the T1/T2 contract freeze.** Docs-only and autopilot-safe:
+[`../mt5_reconciliation/T1_T2_contract_freeze_addendum.md`](../mt5_reconciliation/T1_T2_contract_freeze_addendum.md) is `DRAFT FOR CODEX REVIEW` and freezes the seven load-bearing decisions T1/T2 depend on (promotion idempotency · manual-journal dedup · group-target selection · **no-FX exposure rule** · **equity as the one denominator** · Close Report scope · skip-vs-unconfirmed visibility), plus the machine-context timing rule and the T1 detection-only boundary. After that review passes:
+
+1. **T1 — trusted position-change detector** (detection only: no Journal mutation, no Telegram, no quiet-window persistence, no scheduler).
+2. **T2 — quiet window + `capture_event`** (does not itself promote to Journal).
+
+The THUS Journal lanes below are unchanged and still user-gated.
 
 **No autopilot-eligible task is pending — the deploy is fully verified.** Every remaining track is a gated
 write path or migration; pick one to open when ready (each needs explicit approval + its own reviewed plan):
@@ -49,6 +61,15 @@ Rationale:
 - **MT5 auto draft import** (Lane D) — touches import/durable paths.
 - **GUGU cadence/cognition** (Lane E) — frozen.
 - **RLS/security hardening** (Lane G) — fresh read-only audit first.
+
+**Lane J — NOT AUTHORIZED / NOT ACTIVE** (each needs its own operator gate + adversarial review):
+- **Continuous MT5 writer** — S1/S1.1 are one-shot, envelope-replay only.
+- **Scheduler / automatic polling** — no timer, no loop, no daemon.
+- **A third production snapshot** — the canary was one cycle; another needs fresh approval.
+- **T4 Journal promotion** — and it additionally needs a durable indexed `mt5PositionId` path first (contract freeze, Decision 2).
+- **FX workstream** — MVP does not convert currencies; a mismatch is `EXPOSURE_UNAVAILABLE_CURRENCY_MISMATCH` (Decision 4).
+- **Browser-facing S1.1 exposure consumer** — `mt5_sync_run_account` stays `service_role` SELECT only; any read RPC is a new, separately reviewed surface.
+- **Implementing T1 or T2** — blocked until the contract freeze review passes.
 
 ---
 
