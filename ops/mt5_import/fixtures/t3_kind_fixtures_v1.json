@@ -1,0 +1,375 @@
+{
+ "cases": [
+  {
+   "actions": [
+    "journal_add",
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "NEW_POSITION"
+   ],
+   "kind": "ENTRY",
+   "name": "entry_new",
+   "valid": true
+  },
+  {
+   "actions": [
+    "journal_add",
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "REAPPEARANCE"
+   ],
+   "kind": "ENTRY",
+   "name": "entry_reappearance",
+   "valid": true
+  },
+  {
+   "actions": [
+    "journal_add",
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "NEW_POSITION",
+    "POSITION_INCREASE"
+   ],
+   "kind": "ENTRY",
+   "name": "entry_new_increase",
+   "valid": true
+  },
+  {
+   "actions": [
+    "journal_add",
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "NEW_POSITION",
+    "POSITION_DECREASE"
+   ],
+   "kind": "ENTRY",
+   "name": "entry_new_decrease",
+   "valid": true
+  },
+  {
+   "actions": [
+    "journal_add",
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_DISAPPEARED",
+    "REAPPEARANCE"
+   ],
+   "kind": "ENTRY",
+   "name": "entry_absence_then_reappearance",
+   "valid": true
+  },
+  {
+   "actions": [
+    "journal_add",
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_INCREASE",
+    "POSITION_DISAPPEARED",
+    "REAPPEARANCE"
+   ],
+   "kind": "ENTRY",
+   "name": "entry_change_absence_reappearance",
+   "valid": true
+  },
+  {
+   "actions": [
+    "journal_add",
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "NEW_POSITION",
+    "POSITION_INCREASE",
+    "POSITION_DISAPPEARED",
+    "REAPPEARANCE",
+    "POSITION_INCREASE"
+   ],
+   "kind": "ENTRY",
+   "name": "entry_full_life_reentry",
+   "valid": true
+  },
+  {
+   "actions": [
+    "journal_add",
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "REAPPEARANCE",
+    "POSITION_INCREASE",
+    "POSITION_DECREASE"
+   ],
+   "kind": "ENTRY",
+   "name": "entry_reappearance_changes",
+   "valid": true
+  },
+  {
+   "actions": [
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_INCREASE"
+   ],
+   "kind": "CHANGE",
+   "name": "change_increase",
+   "valid": true
+  },
+  {
+   "actions": [
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_DECREASE"
+   ],
+   "kind": "CHANGE",
+   "name": "change_decrease",
+   "valid": true
+  },
+  {
+   "actions": [
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_INCREASE",
+    "POSITION_DECREASE",
+    "POSITION_INCREASE"
+   ],
+   "kind": "CHANGE",
+   "name": "change_mixed",
+   "valid": true
+  },
+  {
+   "actions": [
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_DECREASE",
+    "POSITION_DECREASE"
+   ],
+   "kind": "CHANGE",
+   "name": "change_double_decrease",
+   "valid": true
+  },
+  {
+   "actions": [
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_DISAPPEARED"
+   ],
+   "kind": "ABSENCE",
+   "name": "absence_terminal",
+   "valid": true
+  },
+  {
+   "actions": [
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "NEW_POSITION",
+    "POSITION_DISAPPEARED"
+   ],
+   "kind": "ABSENCE",
+   "name": "absence_after_new",
+   "valid": true
+  },
+  {
+   "actions": [
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_INCREASE",
+    "POSITION_DISAPPEARED"
+   ],
+   "kind": "ABSENCE",
+   "name": "absence_after_increase",
+   "valid": true
+  },
+  {
+   "actions": [
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_DISAPPEARED",
+    "REAPPEARANCE",
+    "POSITION_DISAPPEARED"
+   ],
+   "kind": "ABSENCE",
+   "name": "absence_after_reentry",
+   "valid": true
+  },
+  {
+   "actions": [
+    "already_logged",
+    "no_record"
+   ],
+   "event_types": [
+    "NEW_POSITION",
+    "POSITION_INCREASE",
+    "POSITION_DISAPPEARED"
+   ],
+   "kind": "ABSENCE",
+   "name": "absence_full_entry_life",
+   "valid": true
+  },
+  {
+   "actions": [
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_IDENTITY_CONFLICT"
+   ],
+   "kind": "CONFLICT",
+   "name": "conflict_alone",
+   "valid": true
+  },
+  {
+   "actions": [
+    "no_record"
+   ],
+   "event_types": [
+    "NEW_POSITION",
+    "POSITION_IDENTITY_CONFLICT"
+   ],
+   "kind": "CONFLICT",
+   "name": "conflict_after_new",
+   "valid": true
+  },
+  {
+   "actions": [
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_IDENTITY_CONFLICT",
+    "POSITION_DISAPPEARED"
+   ],
+   "kind": "CONFLICT",
+   "name": "conflict_then_disappeared",
+   "valid": true
+  },
+  {
+   "actions": [
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_INCREASE",
+    "POSITION_IDENTITY_CONFLICT",
+    "POSITION_INCREASE"
+   ],
+   "kind": "CONFLICT",
+   "name": "conflict_between_changes",
+   "valid": true
+  },
+  {
+   "actions": [
+    "no_record"
+   ],
+   "event_types": [
+    "POSITION_DISAPPEARED",
+    "REAPPEARANCE",
+    "POSITION_IDENTITY_CONFLICT"
+   ],
+   "kind": "CONFLICT",
+   "name": "conflict_after_reentry",
+   "valid": true
+  },
+  {
+   "event_types": [],
+   "name": "invalid_empty",
+   "valid": false
+  },
+  {
+   "event_types": [
+    "NEW_POSITION",
+    "NEW_POSITION"
+   ],
+   "name": "invalid_new_while_present",
+   "valid": false
+  },
+  {
+   "event_types": [
+    "NEW_POSITION",
+    "REAPPEARANCE"
+   ],
+   "name": "invalid_reappearance_while_present",
+   "valid": false
+  },
+  {
+   "event_types": [
+    "REAPPEARANCE",
+    "NEW_POSITION"
+   ],
+   "name": "invalid_new_after_reappearance",
+   "valid": false
+  },
+  {
+   "event_types": [
+    "POSITION_DISAPPEARED",
+    "NEW_POSITION"
+   ],
+   "name": "invalid_new_after_absence",
+   "valid": false
+  },
+  {
+   "event_types": [
+    "POSITION_DISAPPEARED",
+    "POSITION_INCREASE"
+   ],
+   "name": "invalid_increase_after_absence",
+   "valid": false
+  },
+  {
+   "event_types": [
+    "POSITION_DISAPPEARED",
+    "POSITION_DISAPPEARED"
+   ],
+   "name": "invalid_double_disappearance",
+   "valid": false
+  },
+  {
+   "event_types": [
+    "POSITION_DISAPPEARED",
+    "POSITION_IDENTITY_CONFLICT"
+   ],
+   "name": "invalid_conflict_after_absence",
+   "valid": false
+  },
+  {
+   "event_types": [
+    "NOT_A_TYPE"
+   ],
+   "name": "invalid_unknown_type",
+   "valid": false
+  },
+  {
+   "event_types": [
+    "NEW_POSITION",
+    "NOT_A_TYPE"
+   ],
+   "name": "invalid_unknown_after_new",
+   "valid": false
+  }
+ ],
+ "sha256": "85c076d09738d4f3189e54e2b33f6348ada205304291fd59b4801a8f2e629355",
+ "version": "t3-kind-fixtures/1"
+}

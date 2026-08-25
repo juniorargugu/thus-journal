@@ -1,0 +1,37 @@
+{
+ "version": "t4a-copy-contract/1",
+ "comment": "Frozen bot acknowledgement SEMANTICS for T4A (Rev-3 contract). Exact Thai stays formatter-owned; the clauses per cell are contract. journal_add copy must ALWAYS carry BOTH clauses: (A) the REQUEST is recorded, (B) the Journal write has NOT happened - until T4B promotion exists. Bare generic success words are forbidden in any journal_add context. Conflict copy is keyed by the EXISTING action, uses the committed human labels (never raw ids), and names the refused replacement.",
+ "action_labels": {
+  "journal_add": "เพิ่มเข้า Journal",
+  "already_logged": "ลงเองแล้ว",
+  "no_record": "ไม่ต้องจด"
+ },
+ "forbidden_generic_success_in_journal_add_context": [
+  "บันทึกแล้ว",
+  "เรียบร้อยแล้ว",
+  "เพิ่มแล้ว"
+ ],
+ "cells": {
+  "journal_add": {
+   "first_insert": ["request_recorded", "journal_not_modified"],
+   "same_action_replay": ["request_was_already_recorded", "journal_not_modified"],
+   "as_existing_in_conflict": ["existing_journal_add_request_named", "journal_not_modified", "replacement_refused_with_new_label"]
+  },
+  "already_logged": {
+   "first_insert": ["terminal_fact_stated"],
+   "same_action_replay": ["decision_already_recorded_with_label"],
+   "as_existing_in_conflict": ["existing_decision_named_with_label", "replacement_refused_with_new_label"]
+  },
+  "no_record": {
+   "first_insert": ["terminal_fact_stated"],
+   "same_action_replay": ["decision_already_recorded_with_label"],
+   "as_existing_in_conflict": ["existing_decision_named_with_label", "replacement_refused_with_new_label"]
+  }
+ },
+ "action_independent_outcomes": {
+  "ERR_ACTION_NOT_ALLOWED": ["cannot_record_this_action_for_this_evidence", "no_success_claim"],
+  "validated_rpc_error": ["no_success_claim", "specific_refusal_copy"],
+  "transport_or_malformed": ["outcome_unknown", "no_success_claim", "no_auto_retry", "session_survives_ttl_for_explicit_retry"],
+  "db_success_then_answer_failure": ["decision_stands", "no_rollback", "never_classified_failed", "next_tap_resolves_idempotently"]
+ }
+}
