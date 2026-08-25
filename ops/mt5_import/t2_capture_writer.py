@@ -10,7 +10,8 @@ canonical capture-event candidate.
         -> select the candidate(s) containing the operator's ANCHOR pair
         -> t2_capture_adapter.build_rpc_request()
         -> DRY-RUN report                (default; cannot persist)
-        -> mt5_append_capture_event_v1   (PERSIST; separate explicit gate, blocked here)
+        -> mt5_append_capture_event_v1   (PERSIST; fully-armed operator canary path,
+                                          exactly ONE explicitly named candidate)
 
 THE ANCHOR PAIR IS A SELECTOR, NOT A BOUNDARY
   `--before-run-id` / `--after-run-id` say which observation the operator is asking about.
@@ -95,6 +96,64 @@ EVIDENCE-SET VALIDITY (checked before ANY filtering, in this order)
   Both checks run inside the PURE planner, not only at the I/O boundary, because tests and
   callers can reach plan_capture() without ever constructing an EvidenceReader.
 
+PERSIST WRITE CONTRACT (phase-enabled for the reviewed first-append canary)
+  Dry run remains the DEFAULT and remains structurally read-only. The persist path exists
+  behind FOUR keys plus a targeting rule, every one required, none persisted anywhere:
+
+    --persist  +  --confirm PERSIST-CAPTURE-EVENTS  +  env MT5_T2_WRITE=1
+    --position-id <int>          the WRITE-SAFETY SELECTOR
+
+  EXACTLY ONE candidate per invocation. The selector never narrows the canonical
+  reconstruction — detection, coalescing and the dry-run truth still cover every candidate —
+  it narrows only WHAT MAY BE WRITTEN: the single closed, anchored, eligible candidate whose
+  position_id it names. Zero matches refuse. More than one match refuses. "First" is never
+  chosen silently, and a second eligible candidate is never persisted merely because it is
+  ready.
+
+  Persist additionally REFUSES any quiet window other than PRODUCTION_QUIET_WINDOW_SECONDS:
+  the v0.1 production policy (900 s) is frozen and forward-only, and W is fingerprint-bearing,
+  so a persist under a drifted W must be impossible without a reviewed code change. Dry-run
+  analysis may still use any window.
+
+  The write itself is CAPABILITY-GATED. A raw adapter request can NEVER be handed to the
+  network: the only path is
+
+      canonical report -> prepare_selected_persist()   (re-verifies phase + all three arming
+                          keys + W == 900 + exact single-candidate selection)
+                       -> ArmedSelectedAppend          (internal capability; validates its own
+                          invariants and pins a digest of the one request it carries)
+                       -> CaptureAppendClient.append(capability)   (refuses anything that is
+                          not an intact capability)
+                       -> mt5_append_capture_event_v1.
+
+  No direct INSERT/UPDATE/DELETE exists anywhere in this file, and the RPC's exact return
+  contract (o_ok, o_inserted, o_event_id, o_event_key, o_error_code) is validated as a full
+  truth table — success requires a canonical o_event_id AND a canonical 64-hex o_event_key
+  with no error code; failure requires o_inserted = 0 and a nonblank error code. Anything
+  incoherent stops processing.
+
+  OUTCOME STATE MACHINE (frozen):
+    A. NOT SENT / REFUSED     — every failure BEFORE a send is attempted. Nothing was written.
+    B. OUTCOME UNCERTAIN      — a send was attempted but no trustworthy result came back
+                                (transport error, malformed result). NEVER auto-retried, and
+                                NEVER reported as a refusal: the row may exist.
+    C. SERVER-CONFIRMED       — a validated result row arrived. A validated INSERT makes the
+                                operation permanently WRITE_OCCURRED: no later count, read-back
+                                or rendering failure may reclassify it. A post-write
+                                verification failure is APPEND_INSERTED_POSTVERIFY_FAILED —
+                                "the RPC confirmed the insert, the id/key are known, DO NOT
+                                blindly retry, reconcile read-only first" — and it blocks the
+                                deliberate replay, because the replay is verification, not
+                                recovery.
+
+  --replay-verify sends the SAME capability a second time ONLY after a fully validated insert
+  AND a successful identity-bound post-write verification, to prove idempotent replay
+  (o_inserted = 0, SAME o_event_id / o_event_key, count unchanged). The persisted row is read
+  back and bound to the selected request AND the RPC result (row id == o_event_id, event_key
+  == o_event_key, user/account/position/basis/W == the request's) — a row that merely exists
+  is not verification. `payload_fingerprint` is server-only: its canonical shape is validated
+  and surfaced, never predicted.
+
 HARD BOUNDARIES
   - No second T1/T2 implementation. Every event-semantics, windowing, identity, canonical-wire
     and payload rule is delegated to the committed modules above. This file decides only WHICH
@@ -129,6 +188,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as _dt
+import hashlib
 import json
 import os
 import sys
@@ -166,11 +226,52 @@ ALLOWED_RPCS = frozenset({RPC_APPEND_CAPTURE})
 WRITE_ENV = "MT5_T2_WRITE"
 CONFIRM_PERSIST = "PERSIST-CAPTURE-EVENTS"
 
-#: Phase gate. The append RPC has never been called in production and this phase does not
-#: authorize the first call. A later explicit gate flips this constant; until then the persist
-#: path refuses even when the operator supplies every arming key, so "append RPC calls = 0" is
-#: structural rather than procedural.
-PERSIST_ENABLED_IN_THIS_PHASE = False
+#: Phase gate — OPEN for the reviewed first-append canary. Flipping this back to False
+#: re-closes the whole persist path structurally (arming refuses, CaptureAppendClient refuses
+#: construction). While open, persistence still requires every arming key AND the
+#: single-candidate selector below; the default invocation remains read-only.
+PERSIST_ENABLED_IN_THIS_PHASE = True
+
+#: The FROZEN v0.1 production quiet-window policy. PERSIST refuses any other value: the
+#: policy is forward-only and W is fingerprint-bearing, so changing it must cost a reviewed
+#: code change, never a CLI flag. Dry runs may analyse with any window.
+PRODUCTION_QUIET_WINDOW_SECONDS = 900.0
+
+#: The EXACT return contract of mt5_append_capture_event_v1 (rpc packet:
+#: `returns table(o_ok boolean, o_inserted integer, o_event_id uuid, o_event_key text,
+#: o_error_code text)`). Field names are the server's, never invented here.
+RPC_RESULT_FIELDS = ("o_ok", "o_inserted", "o_event_id", "o_event_key", "o_error_code")
+
+#: Columns read back from the persisted row: the fields T3 requires (id / created_at /
+#: event_key / payload_fingerprint) plus every identity field the read-back is bound against.
+#: payload_fingerprint is server-derived and NOT in the RPC return, so surfacing it honestly
+#: means reading the stored row, not computing it.
+CAPTURE_EVENT_ROW_COLUMNS = ("id", "created_at", "event_key", "payload_fingerprint",
+                             "user_id", "source_account", "position_id", "basis_run_id",
+                             "quiet_window_seconds")
+
+#: FAILURE-BRANCH CONTRACT of the applied RPC (T2_capture_events_rpc_packet.sql, packet
+#: revision 5, applied migration mt5_t2_capture_events_rpc_v1). Maps every o_error_code the
+#: applied SQL can emit to the (o_event_id, o_event_key) shape its return branch carries:
+#: "null" = that branch returns NULL, "present" = that branch always returns a value. All 71
+#: validation returns in the applied SQL are `select false, 0, null::uuid, null::text, code`;
+#: the ERR_CAPTURE_CONFLICT branch answers with the EXISTING row's id and key; the
+#: bounded-retry ERR_CAPTURE_RACE branch computed the key but has no row id to name. The
+#: applied SQL has NO generic catch-all branch, so an error code outside this table is a
+#: contract violation and the response is refused, never interpreted.
+RPC_FAILURE_SHAPES = {
+    **{code: ("null", "null") for code in (
+        "ERR_BAD_INPUT", "ERR_CAPTURE_PAYLOAD_KEYS", "ERR_CAPTURE_DOMAIN",
+        "ERR_CAPTURE_FORBIDDEN_FIELD", "ERR_CAPTURE_SCOPE", "ERR_CAPTURE_PAYLOAD_INVALID",
+        "ERR_CAPTURE_TIME_ORDER", "ERR_CAPTURE_WINDOW_MISMATCH", "ERR_CAPTURE_PROVENANCE",
+        "ERR_CAPTURE_IDENTITY", "ERR_CAPTURE_DETECTION", "ERR_CAPTURE_BASIS_MISMATCH",
+        "ERR_BASIS_RUN_NOT_FOUND", "ERR_BASIS_RUN_SCOPE", "ERR_BASIS_RUN_NOT_COMPLETE",
+        "ERR_BASIS_RUN_NOT_HEALTHY", "ERR_RUN_NOT_FOUND", "ERR_RUN_SCOPE",
+        "ERR_RUN_NOT_COMPLETE", "ERR_RUN_NOT_HEALTHY", "ERR_RUN_SEQ_MISMATCH",
+        "ERR_RUN_NOT_ADJACENT")},
+    "ERR_CAPTURE_CONFLICT": ("present", "present"),
+    "ERR_CAPTURE_RACE": ("null", "present"),
+}
 
 #: The AUTHORITATIVE completion instant. See the module docstring: not captured_at, not
 #: reconciled_at, not wall-clock, and not operator-selectable.
@@ -662,6 +763,460 @@ def plan_capture(*, runs, memberships, user_id, source_account, before_run_id, a
 
 
 # =============================================================================================
+# Persist targeting + RPC-result contract — pure, exercised by test_t2_capture_writer.py.
+# =============================================================================================
+def validate_position_selector(value):
+    """The write-safety selector must be a positive bigint-style integer. Fail closed on
+    bool / str / float / None — a selector that had to be coerced is not an exact target."""
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise CaptureWriterError(
+            f"--position-id {value!r} is not a positive integer position id — the persist "
+            f"selector is exact or it is nothing")
+    return value
+
+
+def select_persist_request(report, *, position_id):
+    """EXACTLY ONE closed, anchored, eligible candidate for `position_id` — or a refusal.
+
+    Selection happens strictly AFTER canonical reconstruction: `report` already contains the
+    complete truth (every canonical candidate, every anchored candidate, and one prepared RPC
+    request per CLOSED anchored candidate). This function only decides what may be WRITTEN:
+
+      0 matching requests  -> refuse (an open, unanchored, or absent candidate is never
+                              promoted to persistable by naming it)
+      2+ matching requests -> refuse (impossible through the real pipeline — T1 emits at most
+                              one event per position per adjacent pair — but a corrupted or
+                              hand-built report must not get to pick "first")
+      exactly 1            -> returned VERBATIM, after cross-checks
+
+    Other ready candidates are listed in the refusal by position_id only, and are NEVER
+    persisted implicitly.
+    """
+    validate_position_selector(position_id)
+    requests = report["rpc_requests"]
+    matches = [r for r in requests if r["p_candidate"]["position_id"] == position_id]
+    if not matches:
+        others = sorted({r["p_candidate"]["position_id"] for r in requests})
+        raise CaptureWriterError(
+            f"no closed, anchored, eligible candidate exists for position {position_id} in "
+            f"this reconstruction — nothing is persisted. Persistable position(s) here: "
+            f"{others or 'none'}; each needs its own explicit invocation")
+    if len(matches) > 1:
+        raise CaptureWriterError(
+            f"{len(matches)} prepared requests claim position {position_id} — exactly one "
+            f"candidate may be persisted per invocation and this harness never chooses "
+            f"'first', so the whole persist is refused")
+    summaries = [c for c in report["anchored_candidates"] if c["position_id"] == position_id]
+    if len(summaries) != 1:
+        raise CaptureWriterError(
+            f"candidate summary for position {position_id} is not unique "
+            f"({len(summaries)} entries) — the report is not internally consistent, refusing")
+    summary = summaries[0]
+    if not (summary["closed"] is True and summary["eligible_for_this_invocation"] is True):
+        raise CaptureWriterError(
+            f"candidate for position {position_id} is not closed+eligible "
+            f"(closed={summary['closed']!r}, "
+            f"eligible={summary['eligible_for_this_invocation']!r}) — refusing")
+    request = matches[0]
+    scope = report["scope"]
+    if request["p_user"] != scope["user_id"] or request["p_account"] != scope["source_account"]:
+        raise CaptureWriterError(
+            f"prepared request for position {position_id} does not carry the requested "
+            f"scope — refusing a cross-scope write")
+    return request
+
+
+def canonical_event_key_or_raise(value, *, field):
+    """Exactly 64 lowercase hex characters. No trimming, no case folding, no coercion — a
+    malformed server key is a contract violation that stops processing, never a fixable
+    spelling."""
+    if not (isinstance(value, str) and len(value) == 64
+            and all(c in "0123456789abcdef" for c in value)):
+        raise CaptureWriterError(
+            f"{field} {value!r} is not a canonical event key (exactly 64 lowercase hex)")
+    return value
+
+
+def parse_rpc_result(rows, *, call_label):
+    """One RPC response -> the single validated result row, checked as a FULL truth table.
+
+    PostgREST renders a `returns table(...)` function as a JSON array of row objects, so a
+    valid answer is EXACTLY one row carrying EXACTLY the five contract columns:
+
+      o_ok = true   ->  o_error_code NULL, o_inserted in {0, 1}, o_event_id REQUIRED
+                        canonical uuid, o_event_key REQUIRED canonical 64-hex.
+                        inserted=1 is a fresh insert; inserted=0 is an exact replay.
+      o_ok = false  ->  o_inserted = 0 and a nonblank o_error_code that the applied RPC
+                        actually emits, with o_event_id/o_event_key in EXACTLY the shape of
+                        the SQL branch that named the error (RPC_FAILURE_SHAPES): both null
+                        for every validation refusal, both present for ERR_CAPTURE_CONFLICT
+                        (the EXISTING row's identity), null id + present key for
+                        ERR_CAPTURE_RACE. Present values must still be canonical.
+
+    Any other combination — an unknown error code included — is not the applied contract
+    and is refused rather than interpreted.
+    """
+    if not isinstance(rows, list) or len(rows) != 1:
+        raise CaptureWriterError(
+            f"{call_label}: RPC answered {type(rows).__name__} with "
+            f"{len(rows) if isinstance(rows, list) else 'n/a'} row(s); the contract is "
+            f"exactly one result row")
+    row = rows[0]
+    if not isinstance(row, dict) or set(row) != set(RPC_RESULT_FIELDS):
+        raise CaptureWriterError(
+            f"{call_label}: result columns {sorted(row) if isinstance(row, dict) else row!r} "
+            f"are not exactly {sorted(RPC_RESULT_FIELDS)}")
+    if not isinstance(row["o_ok"], bool):
+        raise CaptureWriterError(f"{call_label}: o_ok {row['o_ok']!r} is not a boolean")
+    if (not isinstance(row["o_inserted"], int) or isinstance(row["o_inserted"], bool)
+            or row["o_inserted"] not in (0, 1)):
+        raise CaptureWriterError(
+            f"{call_label}: o_inserted {row['o_inserted']!r} is not 0 or 1")
+    for field in ("o_event_id", "o_event_key", "o_error_code"):
+        value = row[field]
+        if value is not None and not (isinstance(value, str) and value.strip()):
+            raise CaptureWriterError(f"{call_label}: {field} {value!r} is neither null nor a "
+                                     f"nonblank string")
+    if row["o_event_id"] is not None and not t2a._canonical_uuid(row["o_event_id"]):
+        raise CaptureWriterError(
+            f"{call_label}: o_event_id {row['o_event_id']!r} is not a canonical uuid")
+    if row["o_event_key"] is not None:
+        canonical_event_key_or_raise(row["o_event_key"],
+                                     field=f"{call_label}: o_event_key")
+
+    if row["o_ok"]:
+        # SUCCESS CONTRACT — both the fresh insert AND the exact replay return the row's
+        # identity; a success without it is not the SQL contract.
+        if row["o_error_code"] is not None:
+            raise CaptureWriterError(
+                f"{call_label}: o_ok with o_error_code {row['o_error_code']!r} — "
+                f"contradictory")
+        if row["o_event_id"] is None:
+            raise CaptureWriterError(f"{call_label}: success without an o_event_id")
+        if row["o_event_key"] is None:
+            raise CaptureWriterError(f"{call_label}: success without an o_event_key")
+    else:
+        # FAILURE CONTRACT — bound branch-by-branch to the applied SQL. The RPC never
+        # writes on failure, always names the error, and returns o_event_id/o_event_key in
+        # exactly the shape of the branch that named it (RPC_FAILURE_SHAPES). An unknown
+        # code or an impossible id/key shape means the response does not come from the
+        # applied contract and cannot be trusted.
+        if row["o_inserted"] != 0:
+            raise CaptureWriterError(
+                f"{call_label}: o_ok=false with o_inserted={row['o_inserted']} — the RPC "
+                f"never claims a write on failure")
+        if row["o_error_code"] is None:
+            raise CaptureWriterError(
+                f"{call_label}: o_ok=false without an o_error_code")
+        shape = RPC_FAILURE_SHAPES.get(row["o_error_code"])
+        if shape is None:
+            raise CaptureWriterError(
+                f"{call_label}: o_error_code {row['o_error_code']!r} is not an error the "
+                f"applied RPC revision emits — an unknown contract is refused, not "
+                f"interpreted")
+        for field, required in (("o_event_id", shape[0]), ("o_event_key", shape[1])):
+            if required == "null" and row[field] is not None:
+                raise CaptureWriterError(
+                    f"{call_label}: the applied {row['o_error_code']} branch never returns "
+                    f"{field}, but the response carries {row[field]!r}")
+            if required == "present" and row[field] is None:
+                raise CaptureWriterError(
+                    f"{call_label}: the applied {row['o_error_code']} branch always "
+                    f"returns {field}, but the response has null")
+    return row
+
+
+def validate_persisted_row(row, *, request, rpc_result):
+    """Bind the read-back row to the SELECTED request and the VALIDATED RPC result.
+
+    Cardinality alone proves nothing — a row that merely exists could be anyone's. Every
+    identity fact the client knew before the write (scope, position, basis run, window) and
+    every fact the server confirmed (o_event_id, o_event_key) must match EXACTLY; only
+    server-only values (created_at, payload_fingerprint) are shape-validated instead of
+    compared. source_account is exact TEXT — never normalised to match.
+    """
+    if not isinstance(row, dict) or set(row) != set(CAPTURE_EVENT_ROW_COLUMNS):
+        raise CaptureWriterError(
+            f"persisted row columns {sorted(row) if isinstance(row, dict) else row!r} are "
+            f"not exactly {sorted(CAPTURE_EVENT_ROW_COLUMNS)}")
+    candidate = request["p_candidate"]
+    expected = {
+        "id": rpc_result["o_event_id"],
+        "event_key": rpc_result["o_event_key"],
+        "user_id": request["p_user"],
+        "source_account": request["p_account"],
+        "position_id": candidate["position_id"],
+        "basis_run_id": candidate["basis_run_id"],
+    }
+    for field, want in expected.items():
+        got = row[field]
+        if got != want:
+            raise CaptureWriterError(
+                f"persisted row {field} {got!r} does not match the expected {want!r} — the "
+                f"row that came back is not the row this invocation wrote")
+    window = row["quiet_window_seconds"]
+    try:
+        window_value = float(window)
+    except (TypeError, ValueError):
+        raise CaptureWriterError(
+            f"persisted row quiet_window_seconds {window!r} is not numeric") from None
+    if (window_value != float(candidate["quiet_window_seconds"])
+            or window_value != PRODUCTION_QUIET_WINDOW_SECONDS):
+        raise CaptureWriterError(
+            f"persisted row quiet_window_seconds {window!r} is not the frozen production "
+            f"window {PRODUCTION_QUIET_WINDOW_SECONDS:g}")
+    canonical_uuid_or_raise(row["id"], field="persisted row id")
+    canonical_event_key_or_raise(row["event_key"], field="persisted row event_key")
+    canonical_event_key_or_raise(row["payload_fingerprint"],
+                                 field="persisted row payload_fingerprint")
+    parse_instant(row["created_at"])                     # shape only: server-owned instant
+    return row
+
+
+#: Module-private mint token: ArmedSelectedAppend refuses construction without it, so the
+#: ONLY way to obtain a write capability through the supported API is prepare_selected_persist.
+_MINT_TOKEN = object()
+
+
+class ArmedSelectedAppend:
+    """INTERNAL write capability: exactly ONE selected request, minted only by
+    prepare_selected_persist() after every arming and selection check passed.
+
+    The capability validates its own invariants — it cannot hold zero or several requests, a
+    request for a different position than it names, or a non-production window — and it pins
+    a canonical digest of the request at mint time. The transport re-verifies that digest
+    before every send, so the capability cannot be re-used with a different or mutated
+    request: what was selected is byte-for-byte what is sent, on the first call and on the
+    deliberate replay alike.
+    """
+
+    __slots__ = ("request", "position_id", "digest")
+
+    def __init__(self, *, _token=None, request, position_id):
+        if _token is not _MINT_TOKEN:
+            raise CaptureWriterError(
+                "ArmedSelectedAppend can only be minted by prepare_selected_persist() — a "
+                "self-built capability is not a write authorization")
+        if not (isinstance(request, dict)
+                and set(request) == {"p_user", "p_account", "p_candidate"}):
+            raise CaptureWriterError("capability request is not a build_rpc_request() "
+                                     "argument set")
+        candidate = request["p_candidate"]
+        validate_position_selector(position_id)
+        if candidate.get("position_id") != position_id:
+            raise CaptureWriterError(
+                f"capability position {position_id} does not match the request's "
+                f"{candidate.get('position_id')!r}")
+        identities = candidate.get("detection_identities")
+        if not (isinstance(identities, list) and identities
+                and all(identity[3] == position_id for identity in identities)):
+            raise CaptureWriterError(
+                f"capability for position {position_id} carries identities that are not all "
+                f"its own — a foreign candidate can never hitchhike in a capability")
+        if (float(candidate.get("quiet_window_seconds", -1.0))
+                != PRODUCTION_QUIET_WINDOW_SECONDS):
+            raise CaptureWriterError(
+                f"capability window {candidate.get('quiet_window_seconds')!r} is not the "
+                f"frozen production window {PRODUCTION_QUIET_WINDOW_SECONDS:g}")
+        object.__setattr__(self, "request", request)
+        object.__setattr__(self, "position_id", position_id)
+        object.__setattr__(self, "digest", self._canonical_digest(request))
+
+    def __setattr__(self, name, value):
+        raise CaptureWriterError("ArmedSelectedAppend is immutable")
+
+    @staticmethod
+    def _canonical_digest(request):
+        try:
+            wire = json.dumps(request, sort_keys=True, separators=(",", ":"))
+        except (TypeError, ValueError) as exc:
+            raise CaptureWriterError(
+                f"capability request is not JSON-serialisable: {exc}") from None
+        return hashlib.sha256(wire.encode("utf-8")).hexdigest()
+
+    def verify_intact(self):
+        """The request now must be the request that was minted. Refuses mutation/swap."""
+        if self._canonical_digest(self.request) != self.digest:
+            raise CaptureWriterError(
+                "capability request no longer matches its minted digest — a mutated or "
+                "swapped request is refused, never sent")
+        return self
+
+
+def prepare_selected_persist(report, *, position_id, persist, confirm, write_env,
+                             quiet_window_seconds):
+    """The ONLY minting path for a write capability. Re-verifies EVERYTHING itself —
+    phase gate, all three arming keys, the frozen production window, and the exact
+    single-candidate selection — so a caller that skipped the CLI cannot skip the contract.
+    """
+    mode, reason = arming_status(persist=persist, confirm=confirm, write_env=write_env)
+    if mode != "armed":
+        raise CaptureWriterError(
+            f"persist capability refused: "
+            f"{reason if reason else 'not armed (--persist was not requested)'}")
+    try:
+        window = float(quiet_window_seconds)
+    except (TypeError, ValueError):
+        raise CaptureWriterError(
+            f"persist capability refused: quiet window {quiet_window_seconds!r} is not "
+            f"numeric") from None
+    if window != PRODUCTION_QUIET_WINDOW_SECONDS:
+        raise CaptureWriterError(
+            f"persist capability refused: quiet window {quiet_window_seconds!r} is not the "
+            f"frozen production value {PRODUCTION_QUIET_WINDOW_SECONDS:g} — the policy is "
+            f"forward-only")
+    request = select_persist_request(report, position_id=position_id)
+    return ArmedSelectedAppend(_token=_MINT_TOKEN, request=request,
+                               position_id=position_id)
+
+
+#: Verdicts that mean the RPC validated a genuine INSERT. Permanent: no later failure of any
+#: count / read-back / render may reclassify the operation as anything but a write.
+_WRITE_OCCURRED_VERDICTS = (
+    "APPEND_INSERTED_POSTVERIFY_FAILED",
+    "INSERTED_NO_REPLAY_REQUESTED",
+    "INSERTED_AND_REPLAY_IDEMPOTENT",
+    "INSERTED_BUT_REPLAY_NOT_IDEMPOTENT",
+    "INSERTED_REPLAY_OUTCOME_UNCERTAIN",
+    "INSERTED_REPLAY_POSTVERIFY_FAILED",
+)
+
+#: The only verdicts that exit 0. Everything else is evidence plus a nonzero exit.
+_CLEAN_VERDICTS = ("INSERTED_NO_REPLAY_REQUESTED", "INSERTED_AND_REPLAY_IDEMPOTENT")
+
+
+def execute_selected_persist(client, reader, capability, *, replay_verify, count_before):
+    """The whole write operation, as the frozen outcome state machine. NEVER raises after a
+    send has been attempted: EVERY ordinary exception past that point — transport failure,
+    JSON decoding, a contract violation, any other Exception — is captured INSIDE the
+    outcome, because an exception escaping to a generic handler is how a completed write
+    gets misreported as a refusal. Only process-termination signals (KeyboardInterrupt,
+    SystemExit, GeneratorExit — BaseException, not Exception) still escape.
+
+      call 1 attempted, no validated result -> UNCERTAIN (row may exist; no retry)
+      validated o_ok=false                  -> SERVER_CONFIRMED, no write (FIRST_CALL_REFUSED)
+      validated o_inserted=0 on call 1      -> SERVER_CONFIRMED, no new write (ALREADY_A_REPLAY)
+      validated o_inserted=1                -> write_occurred=True, PERMANENTLY
+
+    The two verification phases are tracked INDEPENDENTLY — they never share a flag:
+
+      insert_post_verify_*   count == before+1 AND the identity-bound row read-back, directly
+                             after the confirmed insert. Failure yields
+                             APPEND_INSERTED_POSTVERIFY_FAILED: the write stands, the id/key
+                             are preserved, and the deliberate replay is BLOCKED (it is
+                             verification, not recovery).
+      replay_post_verify_*   after a validated idempotent replay answer (o_inserted=0, SAME
+                             id and key), the count must STILL be before+1. Failure yields
+                             INSERTED_REPLAY_POSTVERIFY_FAILED while the insert and ITS
+                             verification remain truthfully PASS.
+
+    A failed or uncertain replay never un-claims the confirmed insert, and no path ever
+    makes a third call.
+    """
+    if not isinstance(capability, ArmedSelectedAppend):
+        raise CaptureWriterError(          # pre-send: still a legitimate REFUSED
+            "execute_selected_persist requires the armed-selected capability")
+    capability.verify_intact()             # pre-send: a tampered capability is REFUSED here,
+    #                                        never misreported as an uncertain send
+    out = {"write_state": None, "write_occurred": False, "verdict": None,
+           "first": None, "replay": None, "uncertainty": None,
+           "insert_post_verify_ok": None, "insert_post_verify_error": None,
+           "replay_post_verify_ok": None, "replay_post_verify_error": None,
+           "row": None, "count_before": count_before, "count_after": None,
+           "replay_count_after": None, "calls_attempted": 0, "position_id":
+           capability.position_id}
+
+    # ---- CALL 1 ------------------------------------------------------------------------
+    out["calls_attempted"] = 1
+    try:
+        first = parse_rpc_result(client.append(capability), call_label="append call 1")
+    except CaptureWriterError as exc:
+        out["write_state"] = "UNCERTAIN"
+        out["verdict"] = "APPEND_OUTCOME_UNCERTAIN"
+        out["uncertainty"] = str(exc)
+        return out
+    except Exception as exc:               # noqa: BLE001 — call 1: the POST was attempted,
+        # so a JSON decode error, a ValueError, ANY ordinary exception makes the outcome
+        # UNKNOWABLE — never REFUSED, never an escape. BaseException still terminates.
+        out["write_state"] = "UNCERTAIN"
+        out["verdict"] = "APPEND_OUTCOME_UNCERTAIN"
+        out["uncertainty"] = f"{type(exc).__name__}: {exc}"
+        return out
+    out["first"] = first
+    out["write_state"] = "SERVER_CONFIRMED"
+    if not first["o_ok"]:
+        out["verdict"] = f"FIRST_CALL_REFUSED:{first['o_error_code']}"
+        return out
+    if first["o_inserted"] != 1:
+        out["verdict"] = "FIRST_CALL_WAS_ALREADY_A_REPLAY"
+        return out
+    out["write_occurred"] = True                      # PERMANENT from this line on
+
+    # ---- POST-INSERT VERIFICATION (best-effort; failures stay INSIDE the outcome) -------
+    error = None
+    try:
+        count_after = reader.capture_event_count(user_id=capability.request["p_user"])
+        out["count_after"] = count_after
+        if count_after != count_before + 1:
+            error = (f"capture_event_count moved {count_before} -> {count_after}; a single "
+                     f"fresh insert expects exactly +1")
+        else:
+            row = reader.capture_event_by_id(user_id=capability.request["p_user"],
+                                             event_id=first["o_event_id"])
+            validate_persisted_row(row, request=capability.request, rpc_result=first)
+            out["row"] = row
+    except Exception as exc:                          # noqa: BLE001 — MUST NOT escape
+        error = f"{type(exc).__name__}: {exc}"
+    if error is not None:
+        out["insert_post_verify_ok"] = False
+        out["insert_post_verify_error"] = error
+        out["verdict"] = "APPEND_INSERTED_POSTVERIFY_FAILED"
+        return out                                    # replay BLOCKED: verify, don't recover
+    out["insert_post_verify_ok"] = True
+    if not replay_verify:
+        out["verdict"] = "INSERTED_NO_REPLAY_REQUESTED"
+        return out
+
+    # ---- CALL 2: deliberate identical replay --------------------------------------------
+    out["calls_attempted"] = 2
+    try:
+        second = parse_rpc_result(client.append(capability), call_label="replay call 2")
+    except CaptureWriterError as exc:
+        out["verdict"] = "INSERTED_REPLAY_OUTCOME_UNCERTAIN"
+        out["uncertainty"] = str(exc)
+        return out
+    except Exception as exc:               # noqa: BLE001 — call 2: same rule as call 1. The
+        # replay outcome is UNKNOWABLE, the confirmed insert stands, and NO third call runs.
+        out["verdict"] = "INSERTED_REPLAY_OUTCOME_UNCERTAIN"
+        out["uncertainty"] = f"{type(exc).__name__}: {exc}"
+        return out
+    out["replay"] = second
+    if not (second["o_ok"] and second["o_inserted"] == 0
+            and second["o_event_id"] == first["o_event_id"]
+            and second["o_event_key"] == first["o_event_key"]):
+        out["verdict"] = "INSERTED_BUT_REPLAY_NOT_IDEMPOTENT"
+        return out
+    # ---- POST-REPLAY VERIFICATION (independent of the insert verification) --------------
+    error = None
+    try:
+        replay_count = reader.capture_event_count(user_id=capability.request["p_user"])
+        out["replay_count_after"] = replay_count
+        if replay_count != count_before + 1:
+            error = (f"count moved to {replay_count} after the replay; "
+                     f"expected it to remain {count_before + 1}")
+    except Exception as exc:                      # noqa: BLE001 — MUST NOT escape (replay)
+        error = f"{type(exc).__name__}: {exc}"
+    if error is not None:
+        out["replay_post_verify_ok"] = False
+        out["replay_post_verify_error"] = error
+        out["verdict"] = "INSERTED_REPLAY_POSTVERIFY_FAILED"
+        return out
+    out["replay_post_verify_ok"] = True
+    out["verdict"] = "INSERTED_AND_REPLAY_IDEMPOTENT"
+    return out
+
+
+# =============================================================================================
 # Read-only evidence reader. GET is the only verb this class can issue.
 # =============================================================================================
 class EvidenceReader:
@@ -921,6 +1476,20 @@ class EvidenceReader:
                 out[row["run_id"]].append(row)
         return out
 
+    def capture_event_by_id(self, *, user_id, event_id):
+        """The persisted capture row (GET). Cardinality only — IDENTITY is deliberately not
+        proven here: validate_persisted_row() binds the row to the selected request and the
+        RPC result, because a row that merely exists could be anyone's."""
+        canonical_uuid_or_raise(event_id, field="event_id")
+        q = (f"?select={','.join(CAPTURE_EVENT_ROW_COLUMNS)}"
+             f"&user_id={self._eq(user_id)}&id={self._eq(event_id)}")
+        rows, _ = self._get(CAPTURE_EVENTS, q)
+        if len(rows) != 1:
+            raise CaptureWriterError(
+                f"{CAPTURE_EVENTS}: expected exactly one row for event {event_id}, "
+                f"got {len(rows)}")
+        return rows[0]
+
     def capture_event_count(self, *, user_id):
         """Exact count for THIS user only.
 
@@ -940,9 +1509,10 @@ class EvidenceReader:
 class CaptureAppendClient:
     """The ONE place that may ever call mt5_append_capture_event_v1.
 
-    Not constructed at all unless arming_status() returns 'armed', which
-    PERSIST_ENABLED_IN_THIS_PHASE currently makes impossible. Kept narrow so the later gate
-    reviews a handful of lines rather than a new subsystem:
+    Constructed only on the fully-armed persist path (arming_status() == 'armed' AND an
+    explicit --position-id selection succeeded); construction itself still refuses whenever
+    PERSIST_ENABLED_IN_THIS_PHASE is False, so re-closing the phase is one constant. Narrow
+    on purpose:
 
       - exactly one RPC name, asserted against ALLOWED_RPCS;
       - one call per CLOSED CANONICAL candidate, arguments exactly as build_rpc_request()
@@ -962,11 +1532,18 @@ class CaptureAppendClient:
         self.base = base_url.rstrip("/")
         self._key = service_key
 
-    def append(self, request):
-        """One approved RPC call for one closed canonical candidate. Returns the server row."""
-        if set(request) != {"p_user", "p_account", "p_candidate"}:
-            raise CaptureWriterError("request is not a build_rpc_request() argument set")
-        return self._post_rpc(RPC_APPEND_CAPTURE, request)
+    def append(self, capability):
+        """One RPC call for ONE armed-selected capability. A raw adapter request — however
+        well-formed — is NOT a write authorization and is refused: minting the capability is
+        where arming, selection cardinality and the frozen window were proven, and the digest
+        check makes the sent bytes the minted bytes."""
+        if not isinstance(capability, ArmedSelectedAppend):
+            raise CaptureWriterError(
+                "CaptureAppendClient.append accepts ONLY the ArmedSelectedAppend capability "
+                "minted by prepare_selected_persist() — a raw request dict is not a write "
+                "authorization")
+        capability.verify_intact()
+        return self._post_rpc(RPC_APPEND_CAPTURE, capability.request)
 
     def _post_rpc(self, name, payload):
         if name not in ALLOWED_RPCS:
@@ -1072,13 +1649,107 @@ def _render(report, *, capture_count_before, capture_count_after):
     add("")
     add(f"mt5_capture_events count (THIS user)  before={capture_count_before}  "
         f"after={capture_count_after}")
-    add(f"append RPC calls made                 0  (persist disabled: "
-        f"PERSIST_ENABLED_IN_THIS_PHASE={PERSIST_ENABLED_IN_THIS_PHASE})")
+    add("append RPC calls made                 0  (dry run — this invocation is structurally "
+        "read-only; persisting needs --persist --confirm + MT5_T2_WRITE=1 + --position-id)")
     if report["closed_anchored_candidates"]:
         add("")
         add("CANDIDATES_READY_FOR_EXPLICIT_APPEND_GATE")
         add(f"  {report['closed_anchored_candidates']} COMPLETE canonical CLOSED candidate(s)")
         add("  would be persistable by a future gate. NOT persisted here.")
+    return "\n".join(out)
+
+
+def _render_persist(outcome):
+    out = []
+    add = out.append
+    add("=" * 78)
+    add("MT5 T2 CAPTURE — PERSIST (single named candidate)")
+    add("=" * 78)
+    add(f"  target position                {outcome['position_id']}")
+    add(f"  append RPC calls attempted     {outcome['calls_attempted']}")
+    add(f"  write_state                    {outcome['write_state']}")
+    add(f"  WRITE OCCURRED                 {outcome['write_occurred']}")
+    for label, result in (("CALL 1 (append)", outcome["first"]),
+                          ("CALL 2 (identical replay)", outcome["replay"])):
+        if result is None:
+            add(f"  {label}: no validated result")
+            continue
+        add(f"  {label}:")
+        for field in RPC_RESULT_FIELDS:
+            add(f"      {field:<13} {result[field]!r}")
+    add(f"  VERDICT                        {outcome['verdict']}")
+    if outcome["uncertainty"]:
+        add(f"  uncertainty                    {outcome['uncertainty']}")
+        if outcome["write_occurred"]:
+            add("  The INSERT above is confirmed; only the REPLAY outcome is unknown. "
+                "DO NOT retry. Reconcile with a read-only dry run first.")
+        else:
+            add("  The row MAY exist. DO NOT retry. Reconcile with a read-only dry run "
+                "first.")
+    add("")
+    if outcome["write_occurred"]:
+        add("SERVER-CONFIRMED WRITE — this fact is permanent regardless of anything below.")
+        add(f"  o_event_id   {outcome['first']['o_event_id']}")
+        add(f"  o_event_key  {outcome['first']['o_event_key']}")
+    # ---- PHASE REPORT: each verification phase independently; the OVERALL line follows
+    #      the VERDICT alone. No single flag may ever make a partial success look like a
+    #      full pass: a failed replay verification is an overall FAILURE even though the
+    #      insert and its own verification remain truthfully PASS.
+    verdict = outcome["verdict"]
+    if outcome["write_occurred"]:
+        add("INITIAL INSERT: CONFIRMED")
+    elif outcome["write_state"] == "SERVER_CONFIRMED":
+        add("INITIAL INSERT: NONE (the server confirmed that no new row was written)")
+    else:
+        add("INITIAL INSERT: OUTCOME UNCERTAIN")
+    if outcome["insert_post_verify_ok"] is True:
+        add("INITIAL VERIFICATION: PASS (count +1; row identity-bound to the selected "
+            "request and the RPC result)")
+    elif outcome["insert_post_verify_ok"] is False:
+        add("INITIAL VERIFICATION: FAILED")
+        add(f"  {outcome['insert_post_verify_error']}")
+        add("  The RPC confirmed the insert and the id/key above are known good.")
+        add("  DO NOT BLINDLY RETRY. The deliberate replay was NOT attempted.")
+        add("  Reconcile READ-ONLY first; only then decide the next step.")
+    else:
+        add("INITIAL VERIFICATION: NOT ATTEMPTED")
+    if verdict == "INSERTED_NO_REPLAY_REQUESTED":
+        add("REPLAY: NOT REQUESTED")
+    elif verdict == "APPEND_INSERTED_POSTVERIFY_FAILED":
+        add("REPLAY: BLOCKED — initial verification failed (replay is verification, "
+            "never recovery)")
+    elif verdict == "INSERTED_REPLAY_OUTCOME_UNCERTAIN":
+        add("REPLAY: OUTCOME UNCERTAIN — the replay POST was attempted but returned no "
+            "validated result. NO third call was made.")
+    elif outcome["replay"] is not None:
+        add("REPLAY: SERVER RESPONSE RECEIVED")
+    else:
+        add("REPLAY: NOT ATTEMPTED")
+    if outcome["replay_post_verify_ok"] is True:
+        add("REPLAY VERIFICATION: PASS (same id/key, o_inserted=0, count unchanged)")
+    elif outcome["replay_post_verify_ok"] is False:
+        add("REPLAY VERIFICATION: FAILED")
+        add(f"  {outcome['replay_post_verify_error']}")
+    elif verdict == "INSERTED_BUT_REPLAY_NOT_IDEMPOTENT":
+        add("REPLAY VERIFICATION: FAILED (the replay answered a DIFFERENT identity)")
+    else:
+        add("REPLAY VERIFICATION: NOT ATTEMPTED")
+    if verdict in _CLEAN_VERDICTS:
+        add("OVERALL: PASS")
+    else:
+        add("OVERALL: FAILURE — this is NOT a clean canary result.")
+        if outcome["write_occurred"]:
+            add("  The initial insert IS real and MUST be treated as persisted evidence.")
+        add("  DO NOT BLINDLY RETRY.")
+        add("  READ-ONLY RECONCILIATION REQUIRED before any further write decision.")
+    if outcome["row"] is not None:
+        add("")
+        add("PERSISTED ROW (read back; identity-bound)")
+        for field in CAPTURE_EVENT_ROW_COLUMNS:
+            add(f"  {field:<21} {outcome['row'].get(field)!r}")
+    add("")
+    add(f"mt5_capture_events count (THIS user)  before={outcome['count_before']}  "
+        f"after_insert={outcome['count_after']}  after_replay={outcome['replay_count_after']}")
     return "\n".join(out)
 
 
@@ -1106,9 +1777,19 @@ def build_parser():
     ap.add_argument("--json", dest="as_json", action="store_true",
                     help="Emit the machine-readable report instead of the text one.")
     ap.add_argument("--persist", action="store_true",
-                    help="Arm the append gate (disabled in this phase).")
+                    help="Arm the append gate. Requires --confirm, env MT5_T2_WRITE=1 and "
+                         "--position-id; persists EXACTLY ONE named candidate.")
     ap.add_argument("--confirm", default=None,
                     help=f"Exact literal {CONFIRM_PERSIST}, required with --persist.")
+    ap.add_argument("--position-id", dest="position_id", type=int, default=None,
+                    help="WRITE-SAFETY SELECTOR (persist only): the exact position_id of the "
+                         "single candidate this invocation may persist. Never narrows the "
+                         "dry-run/canonical truth.")
+    ap.add_argument("--replay-verify", dest="replay_verify", action="store_true",
+                    help="Persist only: after a fully VERIFIED first insert (validated "
+                         "RPC result, count +1, identity-bound read-back), send the "
+                         "IDENTICAL request once more to prove idempotent replay. Not a "
+                         "retry, and never attempted when any of that failed.")
     ap.add_argument("--self-test", action="store_true",
                     help="Run the pure test suite (no DB, no network).")
     return ap
@@ -1126,22 +1807,46 @@ def main(argv):
     if mode == "stop":
         print(f"REFUSED: {reason}", file=sys.stderr)
         return 2
-    if mode != "dry-run":
-        # Unreachable while PERSIST_ENABLED_IN_THIS_PHASE is False. Kept so the later gate has
-        # one obvious place to implement, rather than a half-written path running today.
-        print("REFUSED: the persist path has no authorized implementation in this phase.",
+
+    # The selector belongs EXCLUSIVELY to persist mode: a dry run always reports every
+    # canonical candidate (the selector must never narrow evidence), and persist never runs
+    # without one (the selector must always narrow the mutation set to exactly one).
+    if mode == "dry-run" and args.position_id is not None:
+        print("REFUSED: --position-id is a write-safety selector for --persist; a dry run "
+              "always reports every canonical candidate and needs no selector.",
               file=sys.stderr)
         return 2
+    if mode == "dry-run" and args.replay_verify:
+        print("REFUSED: --replay-verify only has meaning with --persist.", file=sys.stderr)
+        return 2
 
-    # Required for a dry run, but NOT declared required= in argparse: that would make
-    # --self-test (which needs none of them) impossible to invoke. Same refusal, reachable.
+    # Required for any reconstruction, but NOT declared required= in argparse: that would
+    # make --self-test (which needs none of them) impossible to invoke.
     missing = [name for name, value in (
         ("--user-id", args.user_id), ("--source-account", args.source_account),
         ("--before-run-id", args.before_run_id), ("--after-run-id", args.after_run_id),
         ("--quiet-window-seconds", args.quiet_window_seconds)) if value is None]
     if missing:
-        print(f"REFUSED: a dry run requires {', '.join(missing)}", file=sys.stderr)
+        print(f"REFUSED: this invocation requires {', '.join(missing)}", file=sys.stderr)
         return 2
+
+    if mode == "armed":
+        if args.position_id is None:
+            print("REFUSED: --persist requires --position-id: exactly one candidate may be "
+                  "persisted per invocation, and it must be NAMED, never inferred.",
+                  file=sys.stderr)
+            return 2
+        try:
+            validate_position_selector(args.position_id)
+        except CaptureWriterError as exc:
+            print(f"REFUSED: {exc}", file=sys.stderr)
+            return 2
+        if float(args.quiet_window_seconds) != PRODUCTION_QUIET_WINDOW_SECONDS:
+            print(f"REFUSED: persist requires the frozen production quiet window "
+                  f"({PRODUCTION_QUIET_WINDOW_SECONDS:g}s); got "
+                  f"{args.quiet_window_seconds!r}. The policy is forward-only — changing it "
+                  f"is a reviewed code change, not a CLI value.", file=sys.stderr)
+            return 2
 
     for field, value in (("--user-id", args.user_id),
                          ("--before-run-id", args.before_run_id),
@@ -1182,18 +1887,54 @@ def main(argv):
         after_run_id=args.after_run_id, quiet_window_seconds=args.quiet_window_seconds,
         now=now)
 
-    after_count = reader.capture_event_count(user_id=args.user_id)
+    if mode == "dry-run":
+        after_count = reader.capture_event_count(user_id=args.user_id)
+        if args.as_json:
+            print(json.dumps({"report": report,
+                              "capture_event_count_before": before_count,
+                              "capture_event_count_after": after_count,
+                              "append_rpc_calls": 0},
+                             indent=2, sort_keys=True, default=str))
+        else:
+            print(_render(report, capture_count_before=before_count,
+                          capture_count_after=after_count))
+        return 0
+
+    # ---- PERSIST (armed): exactly one named candidate ---------------------------------
+    # Selection is applied AFTER the full canonical reconstruction above — the report still
+    # carries every candidate; only the mutation set narrows. prepare_selected_persist()
+    # re-verifies arming + window + selection itself, so the CLI checks above are a fast
+    # path, not the boundary. Every failure HERE is pre-send: nothing was written.
+    try:
+        capability = prepare_selected_persist(
+            report, position_id=args.position_id, persist=args.persist,
+            confirm=args.confirm, write_env=os.environ.get(WRITE_ENV),
+            quiet_window_seconds=args.quiet_window_seconds)
+        client = CaptureAppendClient(base_url, service_key)
+    except CaptureWriterError as exc:
+        print(f"REFUSED (nothing sent): {exc}", file=sys.stderr)
+        return 2
+
+    # From here on, NOTHING may be reported as REFUSED: a send will be attempted, and
+    # execute_selected_persist() owns the outcome state machine. The belt below exists for a
+    # bug in this harness itself — even then the truthful claim is UNCERTAIN, never refusal.
+    try:
+        outcome = execute_selected_persist(client, reader, capability,
+                                           replay_verify=args.replay_verify,
+                                           count_before=before_count)
+    except Exception as exc:                          # noqa: BLE001
+        print(f"APPEND OUTCOME UNCERTAIN — the harness failed mid-operation "
+              f"({type(exc).__name__}: {exc}). The row MAY exist. NO retry was attempted "
+              f"and none will be: reconcile read-only first.", file=sys.stderr)
+        return 2
 
     if args.as_json:
-        print(json.dumps({"report": report,
-                          "capture_event_count_before": before_count,
-                          "capture_event_count_after": after_count,
-                          "append_rpc_calls": 0},
+        print(json.dumps({"persist": outcome,
+                          "append_rpc_calls": outcome["calls_attempted"]},
                          indent=2, sort_keys=True, default=str))
     else:
-        print(_render(report, capture_count_before=before_count,
-                      capture_count_after=after_count))
-    return 0
+        print(_render_persist(outcome))
+    return 0 if outcome["verdict"] in _CLEAN_VERDICTS else 2
 
 
 if __name__ == "__main__":

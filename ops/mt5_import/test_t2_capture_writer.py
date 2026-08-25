@@ -10,8 +10,10 @@ Run with:  python -X utf8 ops/mt5_import/test_t2_capture_writer.py
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import inspect
+import io
 import json
 import os
 import sys
@@ -1397,38 +1399,44 @@ def t_dry_run_is_the_default():
           "arming keys without --persist still means dry run")
 
 
-def t_persist_cannot_execute_in_this_phase():
-    check(w.PERSIST_ENABLED_IN_THIS_PHASE is False, "the phase gate is closed")
-    mode, reason = w.arming_status(persist=True, confirm=w.CONFIRM_PERSIST, write_env="1")
-    check(mode == "stop", "even fully armed, persist is refused in this phase")
-    check("PERSIST_ENABLED_IN_THIS_PHASE" in reason,
-          "the refusal names the phase gate, not a missing key")
-    msg = boom(lambda: w.CaptureAppendClient("https://example.invalid", "k"))
-    check(msg is not None and "disabled in this phase" in msg,
-          "the append client cannot even be constructed")
+def t_phase_gate_is_open_and_still_restorable():
+    """The phase is now deliberately OPEN for the reviewed canary — and closing it again must
+    still shut the whole path structurally, so the constant stays a real kill switch."""
+    check(w.PERSIST_ENABLED_IN_THIS_PHASE is True, "the phase gate is open for the canary")
+    check(w.arming_status(persist=True, confirm=w.CONFIRM_PERSIST, write_env="1")
+          == ("armed", None),
+          "fully armed now reaches 'armed' instead of the phase refusal")
+    original = w.PERSIST_ENABLED_IN_THIS_PHASE
+    w.PERSIST_ENABLED_IN_THIS_PHASE = False
+    try:
+        mode, reason = w.arming_status(persist=True, confirm=w.CONFIRM_PERSIST, write_env="1")
+        check(mode == "stop", "re-closing the phase refuses even a fully-armed persist")
+        check(reason is not None and "PERSIST_ENABLED_IN_THIS_PHASE" in reason,
+              "and the refusal names the phase gate")
+        msg = boom(lambda: w.CaptureAppendClient("https://example.invalid", "k"))
+        check(msg is not None and "disabled in this phase" in msg,
+              "and the append client refuses construction again")
+    finally:
+        w.PERSIST_ENABLED_IN_THIS_PHASE = original
+    check(w.PERSIST_ENABLED_IN_THIS_PHASE is True, "the phase gate is restored to open")
 
 
 def t_persist_arming_requires_every_key():
-    """Proved against the gate OPEN, so these checks are not passing for the wrong reason."""
-    original = w.PERSIST_ENABLED_IN_THIS_PHASE
-    w.PERSIST_ENABLED_IN_THIS_PHASE = True
-    try:
-        check(w.arming_status(persist=True, confirm=None, write_env="1")[0] == "stop",
-              "persist without --confirm refused")
-        check(w.arming_status(persist=True, confirm="nope", write_env="1")[0] == "stop",
-              "persist with the wrong --confirm literal refused")
-        check(w.arming_status(persist=True, confirm=w.CONFIRM_PERSIST,
-                              write_env=None)[0] == "stop",
-              f"persist without {w.WRITE_ENV}=1 refused")
-        check(w.arming_status(persist=True, confirm=w.CONFIRM_PERSIST,
-                              write_env="0")[0] == "stop",
-              f"persist with {w.WRITE_ENV}=0 refused")
-        check(w.arming_status(persist=True, confirm=w.CONFIRM_PERSIST,
-                              write_env="1")[0] == "armed",
-              "all three keys together arm it — so the checks above are load-bearing")
-    finally:
-        w.PERSIST_ENABLED_IN_THIS_PHASE = original
-    check(w.PERSIST_ENABLED_IN_THIS_PHASE is False, "the phase gate is restored")
+    """Every arming key is still load-bearing with the phase open — no bypass appeared."""
+    check(w.arming_status(persist=True, confirm=None, write_env="1")[0] == "stop",
+          "persist without --confirm refused")
+    check(w.arming_status(persist=True, confirm="nope", write_env="1")[0] == "stop",
+          "persist with the wrong --confirm literal refused")
+    check(w.arming_status(persist=True, confirm=" PERSIST-CAPTURE-EVENTS", write_env="1")[0]
+          == "stop", "a whitespace-mutated confirm literal is refused, not trimmed")
+    check(w.arming_status(persist=True, confirm=w.CONFIRM_PERSIST, write_env=None)[0]
+          == "stop", f"persist without {w.WRITE_ENV}=1 refused")
+    check(w.arming_status(persist=True, confirm=w.CONFIRM_PERSIST, write_env="0")[0]
+          == "stop", f"persist with {w.WRITE_ENV}=0 refused")
+    check(w.arming_status(persist=True, confirm=w.CONFIRM_PERSIST, write_env="true")[0]
+          == "stop", f"persist with {w.WRITE_ENV}=true refused — '1' exactly")
+    check(w.arming_status(persist=True, confirm=w.CONFIRM_PERSIST, write_env="1")[0]
+          == "armed", "all three keys together arm it — so the checks above are load-bearing")
 
 
 def t_reader_has_no_write_surface():
@@ -1479,6 +1487,940 @@ def t_instants_must_carry_an_offset():
 
 
 # ---------------------------------------------------------------------------------------------
+# ---------------------------------------------------------------------------------------------
+# PERSIST TARGETING — exactly one named candidate may ever reach the RPC
+# ---------------------------------------------------------------------------------------------
+def two_position_plan(window=QW):
+    """Two NEW_POSITION candidates from one anchor pair — both closed, both anchored,
+    both eligible. The canary's real shape (312261388 / 312265597), in fixture form."""
+    runs = [run(R1), run(R2)]
+    mem = {R1: [], R2: [pos(R2, 101, volume=5.0), pos(R2, 202, volume=5.0)]}
+    return plan(runs, mem, window=window)
+
+
+def production_plan():
+    """The same two-candidate shape, coalesced at the FROZEN production window — the only
+    window a write capability can exist for."""
+    return two_position_plan(window=w.PRODUCTION_QUIET_WINDOW_SECONDS)
+
+
+def armed_capability(position_id=101, rep=None):
+    """A genuinely minted capability, through the one supported path."""
+    if rep is None:
+        rep = production_plan()
+    cap = w.prepare_selected_persist(
+        rep, position_id=position_id, persist=True, confirm=w.CONFIRM_PERSIST,
+        write_env="1", quiet_window_seconds=w.PRODUCTION_QUIET_WINDOW_SECONDS)
+    return cap, rep
+
+
+def t_production_window_constant_is_the_frozen_policy():
+    check(w.PRODUCTION_QUIET_WINDOW_SECONDS == 900.0,
+          "the frozen v0.1 production quiet window is 900 seconds")
+
+
+def t_selector_requires_a_positive_integer():
+    for bad in (True, False, 0, -5, "312261388", 3.5, None, [312261388]):
+        msg = boom(lambda b=bad: w.validate_position_selector(b))
+        check(msg is not None, f"selector {bad!r} is refused, never coerced")
+    check(w.validate_position_selector(312261388) == 312261388,
+          "an exact positive integer passes through unchanged")
+
+
+def t_two_eligible_candidates_and_selection_targets_exactly_one():
+    rep = two_position_plan()
+    check(rep["canonical_candidate_count"] == 2 and rep["closed_anchored_candidates"] == 2,
+          "fixture really has TWO closed anchored eligible candidates")
+    r101 = w.select_persist_request(rep, position_id=101)
+    check(r101["p_candidate"]["position_id"] == 101,
+          "selecting 101 yields exactly the 101 request")
+    check(r101 is next(r for r in rep["rpc_requests"]
+                       if r["p_candidate"]["position_id"] == 101),
+          "the returned request IS the prepared adapter request, verbatim")
+    r202 = w.select_persist_request(rep, position_id=202)
+    check(r202["p_candidate"]["position_id"] == 202,
+          "selecting 202 yields exactly the 202 request")
+    check(r101 is not r202, "the two selections are different requests")
+    check((r101["p_user"], r101["p_account"]) == (UID, ACCT),
+          "the selected request carries the requested scope")
+
+
+def t_selection_never_persists_the_unselected_candidate():
+    """THE CANARY PROPERTY: with both real candidates eligible, naming one can never let the
+    other's evidence reach the wire — the selected request carries NO trace of it anywhere."""
+    rep = two_position_plan()
+    selected = w.select_persist_request(rep, position_id=101)
+
+    def position_ids_in(node):
+        """Every position_id-valued field anywhere in the structure, recursively."""
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "position_id":
+                    yield value
+                yield from position_ids_in(value)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                yield from position_ids_in(item)
+
+    found = set(position_ids_in(selected))
+    check(found == {101},
+          f"every position_id field anywhere in the selected request is the named one "
+          f"(found {sorted(found)})")
+    ids = selected["p_candidate"]["detection_identities"]
+    check(len(ids) == 1 and ids[0][3] == 101,
+          "the identity set is exactly the named candidate's single identity")
+    check(all(202 not in identity for identity in ids),
+          "the unselected candidate's identity appears nowhere in the wire identity set")
+
+
+def t_selection_refuses_zero_matches():
+    rep = two_position_plan()
+    msg = boom(lambda: w.select_persist_request(rep, position_id=999))
+    check(msg is not None and "no closed, anchored, eligible candidate" in msg,
+          "a nonexistent target refuses the persist outright")
+    check(msg is not None and "101" in msg and "202" in msg,
+          "...naming the persistable positions without persisting them")
+    check(msg is not None and "own explicit invocation" in msg,
+          "...and saying each needs its own explicit invocation")
+
+
+def t_selection_refuses_duplicate_matches():
+    rep = two_position_plan()
+    forged = copy.deepcopy(rep)
+    forged["rpc_requests"].append(copy.deepcopy(
+        next(r for r in forged["rpc_requests"] if r["p_candidate"]["position_id"] == 101)))
+    msg = boom(lambda: w.select_persist_request(forged, position_id=101))
+    check(msg is not None and "never chooses 'first'" in msg,
+          "duplicate matching requests refuse the whole persist — 'first' is never chosen")
+
+
+def t_selection_cannot_promote_an_open_candidate():
+    """Before the deadline the candidates are OPEN: no rpc_request exists for them, so naming
+    one refuses — while the canonical truth still SHOWS both (the selector never hides)."""
+    runs = [run(R1), run(R2)]
+    mem = {R1: [], R2: [pos(R2, 101, volume=5.0), pos(R2, 202, volume=5.0)]}
+    rep = plan(runs, mem, now=done_at(R2) + 1.0)          # inside the window
+    check(rep["canonical_candidate_count"] == 2 and rep["anchored_candidate_count"] == 2,
+          "both OPEN candidates remain fully visible in the canonical truth")
+    check(rep["rpc_requests"] == [], "but no request exists for an open candidate")
+    msg = boom(lambda: w.select_persist_request(rep, position_id=101))
+    check(msg is not None and "no closed, anchored, eligible candidate" in msg,
+          "naming an open candidate cannot make it persistable")
+
+
+def t_selection_cannot_reach_an_unanchored_candidate():
+    """A closed canonical candidate the operator did not anchor stays out of reach even when
+    named — eligible_for_this_invocation stays the write boundary."""
+    runs = [run(R1), run(R2), run(R3)]
+    mem = {R1: [pos(R1, 101, volume=2.0)], R2: [pos(R2, 101, volume=2.0)],
+           R3: [pos(R3, 101, volume=6.0)]}
+    rep = plan(runs, mem, before=R1, after=R2)            # anchor produced nothing
+    check(rep["canonical_candidate_count"] == 1, "the neighbouring candidate is visible")
+    check(rep["canonical_candidates"][0]["closed"] is True, "and it is CLOSED")
+    msg = boom(lambda: w.select_persist_request(rep, position_id=101))
+    check(msg is not None and "no closed, anchored, eligible candidate" in msg,
+          "but naming it under a different anchor cannot persist it")
+
+
+def t_selection_refuses_inconsistent_eligibility():
+    rep = two_position_plan()
+    forged = copy.deepcopy(rep)
+    for c in forged["anchored_candidates"]:
+        if c["position_id"] == 101:
+            c["eligible_for_this_invocation"] = False
+    msg = boom(lambda: w.select_persist_request(forged, position_id=101))
+    check(msg is not None and "not closed+eligible" in msg,
+          "a summary that disagrees with the request list refuses the persist")
+
+
+def t_selection_refuses_cross_scope_request():
+    rep = two_position_plan()
+    forged = copy.deepcopy(rep)
+    for r in forged["rpc_requests"]:
+        if r["p_candidate"]["position_id"] == 101:
+            r["p_user"] = OTHER_UID
+    msg = boom(lambda: w.select_persist_request(forged, position_id=101))
+    check(msg is not None and "requested scope" in msg,
+          "a request that lost the requested scope is refused")
+
+
+def t_selection_does_not_mutate_or_narrow_the_report():
+    rep = two_position_plan()
+    frozen = copy.deepcopy(rep)
+    w.select_persist_request(rep, position_id=101)
+    check(rep == frozen, "selection mutates nothing — the canonical truth is untouched")
+    check(rep["canonical_candidate_count"] == 2 and rep["anchored_candidate_count"] == 2,
+          "both candidates are still reported after a selection")
+
+
+# ---------------------------------------------------------------------------------------------
+# WRITE CAPABILITY BOUNDARY — a raw request can never reach the network
+# ---------------------------------------------------------------------------------------------
+EV_ID = "3f1a0000-0000-4000-8000-00000000e001"
+EV_ID2 = "3f1a0000-0000-4000-8000-00000000e002"
+EV_KEY = "0f" * 32                                   # canonical: 64 lowercase hex
+EV_KEY2 = "e1" * 32
+FP_OK = "ab" * 32
+
+
+def rpc_row(*, ok=True, inserted=1, event_id=EV_ID, key=EV_KEY, error=None):
+    return {"o_ok": ok, "o_inserted": inserted, "o_event_id": event_id,
+            "o_event_key": key, "o_error_code": error}
+
+
+class FakeAppendClient:
+    """Duck-typed transport: records the capability of every send, replays scripted rows."""
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.requests = []
+
+    def append(self, capability):
+        self.requests.append(capability)
+        nxt = self.responses.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+
+class FakeVerifyReader:
+    """Post-write verification double: scripted counts and one scripted row (or exception)."""
+
+    def __init__(self, *, counts, row):
+        self.counts = list(counts)
+        self.row = row
+        self.count_calls = 0
+        self.row_calls = 0
+
+    def capture_event_count(self, *, user_id):
+        self.count_calls += 1
+        nxt = self.counts.pop(0)
+        if isinstance(nxt, Exception):
+            raise nxt
+        return nxt
+
+    def capture_event_by_id(self, *, user_id, event_id):
+        self.row_calls += 1
+        if isinstance(self.row, Exception):
+            raise self.row
+        return self.row
+
+
+def bound_row(cap, *, event_id=EV_ID, key=EV_KEY, **overrides):
+    """A read-back row correctly bound to the capability's request + the RPC result."""
+    candidate = cap.request["p_candidate"]
+    row = {"id": event_id, "created_at": "2026-08-24T16:07:00Z", "event_key": key,
+           "payload_fingerprint": FP_OK, "user_id": cap.request["p_user"],
+           "source_account": cap.request["p_account"],
+           "position_id": candidate["position_id"],
+           "basis_run_id": candidate["basis_run_id"],
+           "quiet_window_seconds": w.PRODUCTION_QUIET_WINDOW_SECONDS}
+    row.update(overrides)
+    return row
+
+
+def run_persist(cap, responses, *, counts, row, replay=True, count_before=0):
+    client = FakeAppendClient(responses)
+    reader = FakeVerifyReader(counts=counts, row=row)
+    out = w.execute_selected_persist(client, reader, cap, replay_verify=replay,
+                                     count_before=count_before)
+    return out, client, reader
+
+
+def t_append_client_refuses_raw_requests():
+    """THE CODEX BYPASS REPRO: both REAL prepared requests from the two-candidate report,
+    handed straight to the transport — each must be refused before any network."""
+    rep = production_plan()
+    request_a = next(r for r in rep["rpc_requests"] if r["p_candidate"]["position_id"] == 101)
+    request_b = next(r for r in rep["rpc_requests"] if r["p_candidate"]["position_id"] == 202)
+    client = w.CaptureAppendClient("https://example.invalid", "k")
+    for label, raw in (("A/101", request_a), ("B/202", request_b), ("dict", {"p_user": UID})):
+        msg = boom(lambda r=raw: client.append(r))
+        check(msg is not None and "not a write authorization" in msg,
+              f"raw request {label} cannot reach the transport")
+
+
+def t_capability_mint_requires_the_internal_token():
+    rep = production_plan()
+    request = rep["rpc_requests"][0]
+    msg = boom(lambda: w.ArmedSelectedAppend(
+        request=request, position_id=request["p_candidate"]["position_id"]))
+    check(msg is not None and "prepare_selected_persist" in msg,
+          "a self-built capability is refused without the internal mint token")
+    msg = boom(lambda: w.ArmedSelectedAppend(
+        _token=object(), request=request,
+        position_id=request["p_candidate"]["position_id"]))
+    check(msg is not None, "a forged token object does not mint either")
+
+
+def t_capability_requires_full_arming_and_the_frozen_window():
+    rep = production_plan()
+    for label, kwargs in (
+            ("persist not requested", dict(persist=False, confirm=w.CONFIRM_PERSIST,
+                                           write_env="1", quiet_window_seconds=900.0)),
+            ("wrong confirm literal", dict(persist=True, confirm="nope",
+                                           write_env="1", quiet_window_seconds=900.0)),
+            ("missing env", dict(persist=True, confirm=w.CONFIRM_PERSIST,
+                                 write_env=None, quiet_window_seconds=900.0)),
+            ("env not exactly 1", dict(persist=True, confirm=w.CONFIRM_PERSIST,
+                                       write_env="true", quiet_window_seconds=900.0)),
+            ("non-production window", dict(persist=True, confirm=w.CONFIRM_PERSIST,
+                                           write_env="1", quiet_window_seconds=300.0)),
+            ("non-numeric window", dict(persist=True, confirm=w.CONFIRM_PERSIST,
+                                        write_env="1", quiet_window_seconds="soon"))):
+        msg = boom(lambda kw=kwargs: w.prepare_selected_persist(rep, position_id=101, **kw))
+        check(msg is not None and "persist capability refused" in msg,
+              f"prepare refuses to mint when {label} — arming is re-proven inside the "
+              f"boundary, not only by the CLI")
+    cap, _ = armed_capability()
+    check(isinstance(cap, w.ArmedSelectedAppend), "fully armed + selected mints exactly one")
+
+
+def t_capability_binds_exactly_one_named_request():
+    cap, rep = armed_capability(101)
+    check(cap.position_id == 101, "the capability names its position")
+    check(cap.request is next(r for r in rep["rpc_requests"]
+                              if r["p_candidate"]["position_id"] == 101),
+          "the capability holds the prepared adapter request VERBATIM")
+
+    def position_ids_in(node):
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "position_id":
+                    yield value
+                yield from position_ids_in(value)
+        elif isinstance(node, (list, tuple)):
+            for item in node:
+                yield from position_ids_in(item)
+
+    check(set(position_ids_in(cap.request)) == {101},
+          "every position_id anywhere in the capability's request is the named one — "
+          "candidate 202 cannot hitchhike")
+    ids = cap.request["p_candidate"]["detection_identities"]
+    check(len(ids) == 1 and ids[0][3] == 101, "exactly one identity, and it is 101's")
+    check(not isinstance(cap.request, list), "a capability cannot hold a LIST of requests")
+
+
+def t_capability_rejects_forged_shapes():
+    rep = production_plan()
+    request = copy.deepcopy(next(r for r in rep["rpc_requests"]
+                                 if r["p_candidate"]["position_id"] == 101))
+    mismatched = copy.deepcopy(request)
+    msg = boom(lambda: w.ArmedSelectedAppend(_token=w._MINT_TOKEN, request=mismatched,
+                                             position_id=202))
+    check(msg is not None and "does not match" in msg,
+          "a capability naming 202 refuses a request built for 101")
+    foreign = copy.deepcopy(request)
+    foreign["p_candidate"]["detection_identities"][0] = list(
+        foreign["p_candidate"]["detection_identities"][0])
+    foreign["p_candidate"]["detection_identities"][0][3] = 202
+    msg = boom(lambda: w.ArmedSelectedAppend(_token=w._MINT_TOKEN, request=foreign,
+                                             position_id=101))
+    check(msg is not None and "hitchhike" in msg,
+          "an identity for another position can never ride inside a capability")
+    drifted = copy.deepcopy(request)
+    drifted["p_candidate"]["quiet_window_seconds"] = 300.0
+    msg = boom(lambda: w.ArmedSelectedAppend(_token=w._MINT_TOKEN, request=drifted,
+                                             position_id=101))
+    check(msg is not None and "frozen production window" in msg,
+          "a capability cannot exist for a non-production window")
+
+
+def t_capability_cannot_be_reused_with_a_different_request():
+    cap, _ = armed_capability(101)
+    check(cap.verify_intact() is cap, "an untouched capability verifies intact")
+    cap.request["p_candidate"]["position_id"] = 202          # simulated post-mint tampering
+    client = w.CaptureAppendClient("https://example.invalid", "k")
+    msg = boom(lambda: client.append(cap))
+    check(msg is not None and "minted digest" in msg,
+          "a mutated/swapped request is refused by the digest check BEFORE any network")
+    msg = boom(lambda: setattr(cap, "request", {"p_user": UID}))
+    check(msg is not None and "immutable" in msg,
+          "the capability's own attributes cannot be reassigned")
+
+
+def t_no_public_path_sends_two_candidates_in_one_invocation():
+    cap, _ = armed_capability(101)
+    out, client, _ = run_persist(
+        cap, [[rpc_row()], [rpc_row(inserted=0)]], counts=[1, 1], row=bound_row(cap))
+    check(out["verdict"] == "INSERTED_AND_REPLAY_IDEMPOTENT", "full clean run")
+    check(all(c is cap for c in client.requests),
+          "every wire send carried the SAME single capability")
+    positions = {c.position_id for c in client.requests}
+    check(positions == {101},
+          "one invocation can only ever touch the one named position — persisting 202 "
+          "requires its own prepare/mint/execute with its own selector")
+
+
+# ---------------------------------------------------------------------------------------------
+# RPC RESULT TRUTH TABLE — full semantic coherence, not just types
+# ---------------------------------------------------------------------------------------------
+def t_event_key_validator_is_exact():
+    check(w.canonical_event_key_or_raise(EV_KEY, field="t") == EV_KEY,
+          "a canonical 64-hex key passes through unchanged")
+    for bad, label in ((EV_KEY.upper(), "uppercase"), (EV_KEY[:63], "63 chars"),
+                       ((EV_KEY + "0"), "65 chars"), (("g" * 64), "non-hex"),
+                       ((" " + EV_KEY[1:]), "leading space"), (None, "None"),
+                       (123, "int")):
+        msg = boom(lambda b=bad: w.canonical_event_key_or_raise(b, field="t"))
+        check(msg is not None, f"event key {label} is refused — no trim, no case folding")
+
+
+def t_rpc_result_truth_table():
+    ok1 = w.parse_rpc_result([rpc_row()], call_label="t")
+    check(ok1["o_inserted"] == 1, "success tuple (true,1,id,key,null) accepted: fresh insert")
+    ok0 = w.parse_rpc_result([rpc_row(inserted=0)], call_label="t")
+    check(ok0["o_inserted"] == 0, "success tuple (true,0,id,key,null) accepted: exact replay")
+    fail_plain = w.parse_rpc_result(
+        [rpc_row(ok=False, inserted=0, event_id=None, key=None, error="ERR_BAD_INPUT")],
+        call_label="t")
+    check(fail_plain["o_error_code"] == "ERR_BAD_INPUT",
+          "failure tuple with null id/key accepted (pre-insert refusals)")
+    conflict = w.parse_rpc_result(
+        [rpc_row(ok=False, inserted=0, error="ERR_CAPTURE_CONFLICT")], call_label="t")
+    check(conflict["o_event_id"] == EV_ID,
+          "conflict failure keeps the EXISTING row's canonical id/key (the SQL returns them)")
+    for bad, label in (
+            ([rpc_row(ok=False, inserted=1, error="ERR_X")], "ok=false inserted=1"),
+            ([rpc_row(ok=False, inserted=0, error=None)], "ok=false error null"),
+            ([rpc_row(ok=False, inserted=0, error="")], "ok=false error empty"),
+            ([rpc_row(inserted=1, event_id=None)], "ok=true insert without id"),
+            ([rpc_row(inserted=1, key=None)], "ok=true insert without key"),
+            ([rpc_row(inserted=0, event_id=None)], "ok=true replay without id"),
+            ([rpc_row(inserted=0, key=None)], "ok=true replay without key"),
+            ([rpc_row(error="ERR_X")], "ok=true with error code"),
+            ([rpc_row(key=EV_KEY.upper())], "uppercase key"),
+            ([rpc_row(key=EV_KEY[:63])], "63-char key"),
+            ([rpc_row(key=EV_KEY + "0")], "65-char key"),
+            ([rpc_row(key="g" * 64)], "non-hex key"),
+            ([rpc_row(event_id="not-a-uuid")], "malformed uuid"),
+            ([rpc_row(ok=False, inserted=0, error="ERR_X", key="G" * 64)],
+             "failure with malformed non-null key"),
+            ([rpc_row(ok=False, inserted=0, error="ERR_X",
+                      event_id="3F1A0000-0000-4000-8000-00000000E001")],
+             "failure with malformed non-null id"),
+            ([rpc_row(inserted=2)], "inserted=2"),
+            ([rpc_row(inserted=-1, ok=False, error="ERR_X")], "inserted=-1"),
+            ([rpc_row(inserted=True)], "boolean inserted"),
+            ([rpc_row(ok="yes")], "non-bool ok"),
+            ([{**rpc_row(), "extra": 1}], "extra column"),
+            ([rpc_row(), rpc_row()], "two rows"),
+            ([], "zero rows")):
+        msg = boom(lambda b=bad: w.parse_rpc_result(b, call_label="t"))
+        check(msg is not None, f"incoherent RPC tuple ({label}) is refused")
+
+
+# ---------------------------------------------------------------------------------------------
+# IDENTITY-BOUND READ-BACK — cardinality alone proves nothing
+# ---------------------------------------------------------------------------------------------
+def t_validate_persisted_row_binds_identity():
+    cap, _ = armed_capability(101)
+    rpc = rpc_row()
+    good = bound_row(cap)
+    check(w.validate_persisted_row(good, request=cap.request, rpc_result=rpc) is good,
+          "a row bound to the request AND the RPC result is accepted")
+    for label, corrupted in (
+            ("row id != o_event_id", bound_row(cap, event_id=EV_ID2)),
+            ("event_key != o_event_key", bound_row(cap, key=EV_KEY2)),
+            ("foreign user", bound_row(cap, user_id=OTHER_UID)),
+            ("foreign account", bound_row(cap, source_account=OTHER_ACCT)),
+            ("account normalised", bound_row(cap, source_account=" " + ACCT)),
+            ("wrong position", bound_row(cap, position_id=202)),
+            ("wrong basis run", bound_row(cap, basis_run_id=R4)),
+            ("wrong window", bound_row(cap, quiet_window_seconds=300.0)),
+            ("non-numeric window", bound_row(cap, quiet_window_seconds="soon")),
+            ("malformed fingerprint", bound_row(cap, payload_fingerprint="XY" * 32)),
+            ("malformed row uuid", bound_row(cap, event_id=EV_ID.upper())),
+            ("bad created_at", bound_row(cap, created_at="yesterday"))):
+        msg = boom(lambda c=corrupted: w.validate_persisted_row(
+            c, request=cap.request, rpc_result=rpc))
+        check(msg is not None, f"row with {label} is refused — the Codex wrong-row case")
+    missing = bound_row(cap)
+    del missing["basis_run_id"]
+    msg = boom(lambda: w.validate_persisted_row(missing, request=cap.request, rpc_result=rpc))
+    check(msg is not None and "not exactly" in msg, "a missing required column is refused")
+    extra = bound_row(cap)
+    extra["decision_state"] = "promoted"
+    msg = boom(lambda: w.validate_persisted_row(extra, request=cap.request, rpc_result=rpc))
+    check(msg is not None and "not exactly" in msg, "an unexpected extra column is refused")
+
+
+# ---------------------------------------------------------------------------------------------
+# OUTCOME STATE MACHINE — pre-write vs uncertain vs server-confirmed, and no retry ever
+# ---------------------------------------------------------------------------------------------
+def t_persist_full_clean_run_with_replay():
+    cap, _ = armed_capability(101)
+    out, client, reader = run_persist(
+        cap, [[rpc_row()], [rpc_row(inserted=0)]], counts=[1, 1], row=bound_row(cap))
+    check(out["verdict"] == "INSERTED_AND_REPLAY_IDEMPOTENT", "clean canary shape verifies")
+    check(out["write_state"] == "SERVER_CONFIRMED" and out["write_occurred"] is True,
+          "the write is server-confirmed")
+    check(out["insert_post_verify_ok"] is True and out["row"] == bound_row(cap),
+          "post-insert verification bound the row")
+    check(out["replay_post_verify_ok"] is True and out["replay_post_verify_error"] is None,
+          "and the replay verification passed as its OWN independent state")
+    check((out["count_before"], out["count_after"], out["replay_count_after"]) == (0, 1, 1),
+          "count went 0 -> 1 and STAYED 1 after the replay")
+    check(out["calls_attempted"] == 2 and len(client.requests) == 2,
+          "exactly two RPC calls")
+    check(reader.count_calls == 2 and reader.row_calls == 1,
+          "verification read the count twice and the row once")
+
+
+def t_persist_without_replay_stops_after_verification():
+    cap, _ = armed_capability(101)
+    out, client, _ = run_persist(cap, [[rpc_row()]], counts=[1], row=bound_row(cap),
+                                 replay=False)
+    check(out["verdict"] == "INSERTED_NO_REPLAY_REQUESTED" and out["calls_attempted"] == 1,
+          "one call when replay is not requested")
+    check(out["insert_post_verify_ok"] is True, "verification still ran")
+    check(out["replay_post_verify_ok"] is None,
+          "replay verification is NOT claimed when no replay was requested")
+
+
+def t_persist_count_failure_keeps_the_confirmed_write():
+    """THE CODEX COUNT REPRO: RPC insert succeeds, then capture_event_count raises."""
+    cap, _ = armed_capability(101)
+    out, client, reader = run_persist(
+        cap, [[rpc_row()]], counts=[w.CaptureWriterError("HTTP 500 on GET mt5_capture_events")],
+        row=bound_row(cap))
+    check(out["verdict"] == "APPEND_INSERTED_POSTVERIFY_FAILED",
+          "a post-write count failure is its own explicit state")
+    check("REFUSED" not in out["verdict"], "and it is NEVER reported as a refusal")
+    check(out["write_occurred"] is True and out["write_state"] == "SERVER_CONFIRMED",
+          "the confirmed write remains a permanent fact")
+    check(out["first"]["o_inserted"] == 1 and out["first"]["o_event_id"] == EV_ID
+          and out["first"]["o_event_key"] == EV_KEY,
+          "o_inserted/o_event_id/o_event_key are all preserved for reconciliation")
+    check(out["insert_post_verify_ok"] is False
+          and "HTTP 500" in out["insert_post_verify_error"],
+          "the verification failure is captured inside the outcome")
+    check(len(client.requests) == 1 and out["calls_attempted"] == 1,
+          "exactly ONE POST occurred — the replay was BLOCKED, and nothing was retried")
+
+
+def t_persist_readback_failure_keeps_the_confirmed_write():
+    cap, _ = armed_capability(101)
+    out, client, _ = run_persist(
+        cap, [[rpc_row()]], counts=[1],
+        row=w.CaptureWriterError("mt5_capture_events: expected exactly one row"))
+    check(out["verdict"] == "APPEND_INSERTED_POSTVERIFY_FAILED",
+          "a read-back failure is the same explicit post-verify state")
+    check(out["write_occurred"] is True and out["first"]["o_event_id"] == EV_ID,
+          "the write and its id/key survive")
+    check(len(client.requests) == 1, "and the replay was blocked")
+
+
+def t_persist_wrong_row_is_a_postverify_failure():
+    """THE CODEX WRONG-ROW REPRO: a row with entirely different identity comes back."""
+    cap, _ = armed_capability(101)
+    alien = bound_row(cap, event_id=EV_ID2, key=EV_KEY2, user_id=OTHER_UID,
+                      source_account=OTHER_ACCT, position_id=999)
+    out, client, _ = run_persist(cap, [[rpc_row()]], counts=[1], row=alien)
+    check(out["verdict"] == "APPEND_INSERTED_POSTVERIFY_FAILED",
+          "an identity-mismatched row FAILS verification instead of being accepted")
+    check(out["write_occurred"] is True, "while the confirmed write stands")
+    check("does not match" in out["insert_post_verify_error"],
+          "and the mismatch is named in the captured error")
+    check(len(client.requests) == 1, "replay blocked after failed verification")
+
+
+def t_persist_transport_uncertainty_is_not_refused():
+    cap, _ = armed_capability(101)
+    out, client, reader = run_persist(
+        cap, [w.CaptureWriterError("network error on RPC mt5_append_capture_event_v1")],
+        counts=[0], row=bound_row(cap))
+    check(out["verdict"] == "APPEND_OUTCOME_UNCERTAIN",
+          "a call-1 transport failure is UNCERTAIN")
+    check(out["write_state"] == "UNCERTAIN" and out["write_occurred"] is False,
+          "no write is claimed and no refusal is claimed")
+    check("network error" in out["uncertainty"], "the transport evidence is preserved")
+    check(len(client.requests) == 1, "sent exactly once — no retry")
+    check(reader.count_calls == 0, "no post-write verification on an uncertain outcome")
+
+
+def t_persist_malformed_result_is_uncertain_not_refused():
+    cap, _ = armed_capability(101)
+    out, client, _ = run_persist(cap, [[rpc_row(key="G" * 64)]], counts=[0],
+                                 row=bound_row(cap))
+    check(out["verdict"] == "APPEND_OUTCOME_UNCERTAIN",
+          "a malformed server result stops processing as UNCERTAIN — the send happened")
+    check(out["write_occurred"] is False and out["uncertainty"] is not None,
+          "nothing is claimed either way; the contract violation is preserved")
+
+
+def t_persist_server_refusal_is_confirmed_no_write():
+    cap, _ = armed_capability(101)
+    out, client, reader = run_persist(
+        cap, [[rpc_row(ok=False, inserted=0, error="ERR_CAPTURE_CONFLICT")]],
+        counts=[0], row=bound_row(cap))
+    check(out["verdict"] == "FIRST_CALL_REFUSED:ERR_CAPTURE_CONFLICT",
+          "a validated server refusal carries the server's own code")
+    check(out["write_state"] == "SERVER_CONFIRMED" and out["write_occurred"] is False,
+          "it is a CONFIRMED outcome — distinct from both refusal-before-send and uncertain")
+    check(len(client.requests) == 1 and reader.count_calls == 0,
+          "one call, no verification, no replay")
+
+
+def t_persist_already_replay_makes_no_second_call():
+    cap, _ = armed_capability(101)
+    out, client, _ = run_persist(cap, [[rpc_row(inserted=0)]], counts=[0],
+                                 row=bound_row(cap))
+    check(out["verdict"] == "FIRST_CALL_WAS_ALREADY_A_REPLAY",
+          "a pre-existing key on call 1 is surfaced")
+    check(out["write_occurred"] is False and len(client.requests) == 1,
+          "no new write is claimed and no second call is made")
+
+
+def t_replay_transport_uncertainty_keeps_the_write():
+    cap, _ = armed_capability(101)
+    out, client, _ = run_persist(
+        cap, [[rpc_row()], w.CaptureWriterError("network error on replay")],
+        counts=[1], row=bound_row(cap))
+    check(out["verdict"] == "INSERTED_REPLAY_OUTCOME_UNCERTAIN",
+          "an uncertain replay is its own state")
+    check(out["write_occurred"] is True and out["first"]["o_event_id"] == EV_ID,
+          "the confirmed call-1 write is never un-claimed by a later uncertainty")
+    check(len(client.requests) == 2, "the replay was attempted exactly once")
+
+
+def t_replay_mismatch_is_flagged_but_write_stands():
+    cap, _ = armed_capability(101)
+    out, _, _ = run_persist(
+        cap, [[rpc_row()], [rpc_row(inserted=0, event_id=EV_ID2, key=EV_KEY2)]],
+        counts=[1], row=bound_row(cap))
+    check(out["verdict"] == "INSERTED_BUT_REPLAY_NOT_IDEMPOTENT",
+          "a replay answering a different identity is flagged, never papered over")
+    check(out["write_occurred"] is True, "while the call-1 write remains a fact")
+
+
+def t_replay_count_growth_is_a_postverify_failure():
+    """THE CODEX 0 -> 1 -> 2 REPRO: the insert verifies clean, then the replay count check
+    finds an impossible extra row. The failure must own the verdict AND the render — the
+    truthful insert-verification PASS may never be presented as overall verification OK."""
+    cap, _ = armed_capability(101)
+    out, client, _ = run_persist(cap, [[rpc_row()], [rpc_row(inserted=0)]], counts=[1, 2],
+                                 row=bound_row(cap))
+    check(out["verdict"] == "INSERTED_REPLAY_POSTVERIFY_FAILED",
+          "a count that MOVED after the replay fails the final verification")
+    check(out["write_occurred"] is True and out["first"]["o_inserted"] == 1,
+          "the initial insert remains known successful")
+    check(out["insert_post_verify_ok"] is True
+          and out["insert_post_verify_error"] is None,
+          "the initial verification remains a truthful, SEPARATE pass")
+    check(out["replay_post_verify_ok"] is False
+          and "expected it to remain 1" in out["replay_post_verify_error"],
+          "the replay verification is FAIL and says exactly what moved")
+    check((out["count_before"], out["count_after"], out["replay_count_after"]) == (0, 1, 2),
+          "the exact 0 -> 1 -> 2 evidence sequence is preserved")
+    check(len(client.requests) == 2 and out["calls_attempted"] == 2,
+          "no additional RPC after the failed replay verification")
+    text = w._render_persist(out)
+    check("INITIAL INSERT: CONFIRMED" in text and "INITIAL VERIFICATION: PASS" in text,
+          "the render reports the insert and ITS verification truthfully")
+    check("REPLAY: SERVER RESPONSE RECEIVED" in text
+          and "REPLAY VERIFICATION: FAILED" in text,
+          "and surfaces the replay verification failure")
+    check("DO NOT BLINDLY RETRY" in text and "READ-ONLY RECONCILIATION REQUIRED" in text,
+          "and demands read-only reconciliation")
+    check("OVERALL: PASS" not in text and "POST-WRITE VERIFICATION: OK" not in text,
+          "and NEVER renders an overall verification OK")
+
+
+def t_first_send_ordinary_exceptions_become_uncertain():
+    """Once the call-1 POST has been attempted, EVERY ordinary exception — JSON decoding,
+    ValueError, CaptureWriterError, anything else — returns through the state machine as
+    APPEND_OUTCOME_UNCERTAIN. Nothing escapes, nothing retries, nothing is REFUSED."""
+    for exc in (json.JSONDecodeError("malformed body", "x", 0), ValueError("boom"),
+                w.CaptureWriterError("transport reset"), RuntimeError("mid-flight")):
+        cap, _ = armed_capability(101)
+        out, client, reader = run_persist(cap, [exc], counts=[0], row=None)
+        check(out["verdict"] == "APPEND_OUTCOME_UNCERTAIN"
+              and out["write_state"] == "UNCERTAIN",
+              f"{type(exc).__name__} after the send attempt is UNCERTAIN, never an escape")
+        check("REFUSED" not in out["verdict"], "and never REFUSED")
+        check(out["write_occurred"] is False and out["uncertainty"],
+              "nothing is claimed either way; the failure evidence is preserved")
+        check(len(client.requests) == 1, "the POST was attempted exactly once — no retry")
+        check(reader.count_calls == 0, "no verification and no replay on uncertainty")
+        check(out["position_id"] == 101, "the candidate identity is preserved")
+
+
+def t_replay_send_ordinary_exceptions_keep_the_write():
+    """Same boundary on the deliberate replay: an ordinary exception after the call-2 POST
+    becomes INSERTED_REPLAY_OUTCOME_UNCERTAIN — the confirmed insert and its verification
+    stand, idempotency is NOT claimed, and no third call is made."""
+    for exc in (json.JSONDecodeError("malformed body", "x", 0), ValueError("boom"),
+                w.CaptureWriterError("transport reset"), RuntimeError("mid-flight")):
+        cap, _ = armed_capability(101)
+        out, client, _ = run_persist(cap, [[rpc_row()], exc], counts=[1],
+                                     row=bound_row(cap))
+        check(out["verdict"] == "INSERTED_REPLAY_OUTCOME_UNCERTAIN",
+              f"{type(exc).__name__} on the replay send is its own uncertainty state")
+        check(out["write_occurred"] is True and out["insert_post_verify_ok"] is True,
+              "the insert AND its verification remain known facts")
+        check(out["replay_post_verify_ok"] is None,
+              "replay verification is NOT claimed in any direction")
+        check(len(client.requests) == 2, "exactly two POSTs — no third call")
+        text = w._render_persist(out)
+        check("REPLAY: OUTCOME UNCERTAIN" in text
+              and "REPLAY VERIFICATION: PASS" not in text
+              and "OVERALL: PASS" not in text,
+              "the render says the replay is uncertain and claims no idempotency pass")
+
+
+def t_failure_shapes_follow_the_applied_sql():
+    """Hand-authored from T2_capture_events_rpc_packet.sql (packet revision 5), NOT from the
+    implementation mapping: all 71 validation returns are (false, 0, null, null, code) over
+    these 22 codes; ERR_CAPTURE_CONFLICT returns the EXISTING row's id+key; ERR_CAPTURE_RACE
+    returns the computed key with NO row id."""
+    validation_codes = (
+        "ERR_BAD_INPUT", "ERR_CAPTURE_PAYLOAD_KEYS", "ERR_CAPTURE_DOMAIN",
+        "ERR_CAPTURE_FORBIDDEN_FIELD", "ERR_CAPTURE_SCOPE", "ERR_CAPTURE_PAYLOAD_INVALID",
+        "ERR_CAPTURE_TIME_ORDER", "ERR_CAPTURE_WINDOW_MISMATCH", "ERR_CAPTURE_PROVENANCE",
+        "ERR_CAPTURE_IDENTITY", "ERR_CAPTURE_DETECTION", "ERR_CAPTURE_BASIS_MISMATCH",
+        "ERR_BASIS_RUN_NOT_FOUND", "ERR_BASIS_RUN_SCOPE", "ERR_BASIS_RUN_NOT_COMPLETE",
+        "ERR_BASIS_RUN_NOT_HEALTHY", "ERR_RUN_NOT_FOUND", "ERR_RUN_SCOPE",
+        "ERR_RUN_NOT_COMPLETE", "ERR_RUN_NOT_HEALTHY", "ERR_RUN_SEQ_MISMATCH",
+        "ERR_RUN_NOT_ADJACENT")
+    for code in validation_codes:
+        got = w.parse_rpc_result([rpc_row(ok=False, inserted=0, event_id=None, key=None,
+                                          error=code)], call_label="t")
+        check(got["o_error_code"] == code, f"{code} with null id/key is the SQL's shape")
+    conflict = w.parse_rpc_result([rpc_row(ok=False, inserted=0, error="ERR_CAPTURE_CONFLICT")],
+                                  call_label="t")
+    check(conflict["o_event_id"] == EV_ID and conflict["o_event_key"] == EV_KEY,
+          "CONFLICT keeps the EXISTING row's id AND key — the SQL always returns both")
+    race = w.parse_rpc_result([rpc_row(ok=False, inserted=0, event_id=None, key=EV_KEY,
+                                       error="ERR_CAPTURE_RACE")], call_label="t")
+    check(race["o_event_id"] is None and race["o_event_key"] == EV_KEY,
+          "RACE returns the computed key but NO row id — the SQL's exact shape")
+    check(set(w.RPC_FAILURE_SHAPES)
+          == set(validation_codes) | {"ERR_CAPTURE_CONFLICT", "ERR_CAPTURE_RACE"},
+          "the implementation table covers exactly the applied SQL's codes — none invented, "
+          "none missing")
+    for bad, label in (
+            (rpc_row(ok=False, inserted=0, event_id=EV_ID, key=None,
+                     error="ERR_CAPTURE_DETECTION"),
+             "generic error with an event_id but no event_key"),
+            (rpc_row(ok=False, inserted=0, event_id=None, key=EV_KEY,
+                     error="ERR_BAD_INPUT"),
+             "validation error carrying a key"),
+            (rpc_row(ok=False, inserted=0, event_id=EV_ID, key=EV_KEY,
+                     error="ERR_RUN_NOT_FOUND"),
+             "success-shape id+key attached to a validation failure branch"),
+            (rpc_row(ok=False, inserted=0, event_id=EV_ID, key=EV_KEY,
+                     error="ERR_CAPTURE_RACE"),
+             "RACE with an event_id (the SQL race branch has no row id)"),
+            (rpc_row(ok=False, inserted=0, event_id=None, key=None,
+                     error="ERR_CAPTURE_RACE"),
+             "RACE without the computed key"),
+            (rpc_row(ok=False, inserted=0, event_id=None, key=EV_KEY,
+                     error="ERR_CAPTURE_CONFLICT"),
+             "CONFLICT without the existing row id"),
+            (rpc_row(ok=False, inserted=0, event_id=EV_ID, key=None,
+                     error="ERR_CAPTURE_CONFLICT"),
+             "CONFLICT without the existing key"),
+            (rpc_row(ok=False, inserted=0, event_id=None, key=None,
+                     error="ERR_CAPTURE_CONFLICT"),
+             "CONFLICT with neither id nor key"),
+            (rpc_row(ok=False, inserted=1, error="ERR_CAPTURE_CONFLICT"),
+             "a KNOWN failure branch claiming a write (o_inserted=1)")):
+        msg = boom(lambda b=bad: w.parse_rpc_result([b], call_label="t"))
+        check(msg is not None, f"SQL-impossible failure shape ({label}) is refused")
+
+
+def t_unknown_error_code_is_refused():
+    """The applied SQL has no generic catch-all branch: an o_error_code it never emits is a
+    contract violation and the whole response is refused, whatever id/key shape it wears."""
+    for bad, label in (
+            (rpc_row(ok=False, inserted=0, event_id=None, key=None,
+                     error="ERR_SOMETHING_NEW"),
+             "unknown code with null id/key"),
+            (rpc_row(ok=False, inserted=0, event_id=EV_ID, key=EV_KEY, error="ERR_X"),
+             "unknown code wearing the success shape"),
+            (rpc_row(ok=False, inserted=0, event_id=None, key=None,
+                     error="err_capture_conflict"),
+             "known code in the wrong case — no normalisation")):
+        msg = boom(lambda b=bad: w.parse_rpc_result([b], call_label="t"))
+        check(msg is not None and "not an error the applied RPC revision emits" in msg,
+              f"unknown o_error_code ({label}) is refused, not interpreted")
+
+
+def t_render_reports_each_phase_independently():
+    cap, _ = armed_capability(101)
+    out, _, _ = run_persist(cap, [[rpc_row()], [rpc_row(inserted=0)]], counts=[1, 1],
+                            row=bound_row(cap))
+    text = w._render_persist(out)
+    check("INITIAL INSERT: CONFIRMED" in text and "INITIAL VERIFICATION: PASS" in text
+          and "REPLAY VERIFICATION: PASS" in text and "OVERALL: PASS" in text,
+          "a fully verified canary renders as PASS in every phase")
+    check("FAILED" not in text and "RECONCILIATION" not in text,
+          "and carries no failure wording")
+    out, _, _ = run_persist(cap, [[rpc_row()]], counts=[1], row=bound_row(cap),
+                            replay=False)
+    text = w._render_persist(out)
+    check("REPLAY: NOT REQUESTED" in text
+          and "REPLAY VERIFICATION: NOT ATTEMPTED" in text and "OVERALL: PASS" in text,
+          "an unrequested replay is stated explicitly")
+    check("REPLAY VERIFICATION: PASS" not in text,
+          "and idempotency verification is NOT claimed without a replay")
+    out, _, _ = run_persist(
+        cap, [[rpc_row()]],
+        counts=[w.CaptureWriterError("HTTP 500 on GET mt5_capture_events")],
+        row=bound_row(cap))
+    text = w._render_persist(out)
+    check("INITIAL INSERT: CONFIRMED" in text and "INITIAL VERIFICATION: FAILED" in text,
+          "a failed insert verification is named while the insert stays confirmed")
+    check("REPLAY: BLOCKED" in text and "OVERALL: FAILURE" in text
+          and "OVERALL: PASS" not in text,
+          "the blocked replay and the overall failure are explicit")
+
+
+def t_render_overall_follows_the_verdict_alone():
+    """Every non-clean verdict renders OVERALL: FAILURE. No flag combination may dress a
+    partial success up as a pass, and the retired overall-OK line stays retired."""
+    cap, _ = armed_capability(101)
+    scenarios = (
+        ("APPEND_OUTCOME_UNCERTAIN",
+         [w.CaptureWriterError("network down")], [0]),
+        ("FIRST_CALL_REFUSED:ERR_CAPTURE_CONFLICT",
+         [[rpc_row(ok=False, inserted=0, error="ERR_CAPTURE_CONFLICT")]], [0]),
+        ("FIRST_CALL_WAS_ALREADY_A_REPLAY",
+         [[rpc_row(inserted=0)]], [0]),
+        ("APPEND_INSERTED_POSTVERIFY_FAILED",
+         [[rpc_row()]], [7]),
+        ("INSERTED_BUT_REPLAY_NOT_IDEMPOTENT",
+         [[rpc_row()], [rpc_row(inserted=0, event_id=EV_ID2, key=EV_KEY2)]], [1]),
+        ("INSERTED_REPLAY_OUTCOME_UNCERTAIN",
+         [[rpc_row()], RuntimeError("mid-flight")], [1]),
+        ("INSERTED_REPLAY_POSTVERIFY_FAILED",
+         [[rpc_row()], [rpc_row(inserted=0)]], [1, 2]),
+    )
+    for want, responses, counts in scenarios:
+        out, _, _ = run_persist(cap, responses, counts=counts, row=bound_row(cap))
+        check(out["verdict"] == want, f"scenario reaches {want}")
+        text = w._render_persist(out)
+        check("OVERALL: FAILURE" in text and "OVERALL: PASS" not in text,
+              f"{want} renders OVERALL: FAILURE, never PASS")
+        check("POST-WRITE VERIFICATION: OK" not in text,
+              f"{want} never renders the retired overall-OK line")
+
+
+def t_replay_requires_prior_full_verification():
+    """§8: call 2 only after call-1 success AND post-write verification success."""
+    cap, _ = armed_capability(101)
+    out, client, _ = run_persist(
+        cap, [[rpc_row()], [rpc_row(inserted=0)]],
+        counts=[7], row=bound_row(cap))          # count wrong -> verification fails
+    check(out["verdict"] == "APPEND_INSERTED_POSTVERIFY_FAILED",
+          "failed verification wins")
+    check(len(client.requests) == 1,
+          "and the deliberate replay is NOT attempted — it is verification, not recovery")
+
+
+def t_execute_refuses_a_non_capability():
+    client = FakeAppendClient([[rpc_row()]])
+    reader = FakeVerifyReader(counts=[1], row=None)
+    rep = production_plan()
+    msg = boom(lambda: w.execute_selected_persist(
+        client, reader, rep["rpc_requests"][0], replay_verify=False, count_before=0))
+    check(msg is not None and "capability" in msg,
+          "execute itself refuses a raw request — a pre-send refusal, nothing sent")
+    check(client.requests == [], "and indeed nothing was sent")
+
+
+# ---------------------------------------------------------------------------------------------
+# MAIN-LEVEL WRITE SAFETY — refusals fire before credentials, so no network is reachable
+# ---------------------------------------------------------------------------------------------
+BASE_ARGS = ["--user-id", UID, "--source-account", ACCT,
+             "--before-run-id", R1, "--after-run-id", R2]
+
+
+def main_stderr(argv, *, env=None):
+    """Run main() with a scrubbed environment and captured stderr. SUPABASE_* is removed so
+    any path that survives to credential resolution refuses THERE — proving the safety
+    refusals fire earlier, with no network reachable at all."""
+    saved = {k: os.environ.pop(k, None)
+             for k in ("SUPABASE_URL", "SUPABASE_SERVICE_KEY", w.WRITE_ENV)}
+    for k, v in (env or {}).items():
+        os.environ[k] = v
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf):
+            code = w.main(argv)
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+    return code, buf.getvalue()
+
+
+def t_main_dry_run_refuses_the_selector():
+    code, err = main_stderr(BASE_ARGS + ["--quiet-window-seconds", "900",
+                                         "--position-id", "312261388"])
+    check(code == 2 and "write-safety selector" in err,
+          "--position-id without --persist is refused as a misused write-safety selector")
+    code, err = main_stderr(BASE_ARGS + ["--quiet-window-seconds", "900", "--replay-verify"])
+    check(code == 2 and "--replay-verify" in err,
+          "--replay-verify without --persist is refused")
+
+
+def t_main_persist_requires_the_selector():
+    code, err = main_stderr(
+        BASE_ARGS + ["--quiet-window-seconds", "900",
+                     "--persist", "--confirm", w.CONFIRM_PERSIST],
+        env={w.WRITE_ENV: "1"})
+    check(code == 2 and "--position-id" in err and "never inferred" in err,
+          "fully-armed persist without --position-id refuses before any network")
+    check("SUPABASE" not in err, "...and never got as far as credential resolution")
+
+
+def t_main_persist_refuses_a_non_production_window():
+    code, err = main_stderr(
+        BASE_ARGS + ["--quiet-window-seconds", "300",
+                     "--persist", "--confirm", w.CONFIRM_PERSIST,
+                     "--position-id", "312261388"],
+        env={w.WRITE_ENV: "1"})
+    check(code == 2 and "frozen production quiet window" in err,
+          "persist with W != 900 is refused: the policy is forward-only")
+    check("900" in err, "...and the refusal names the frozen value")
+    code, err = main_stderr(
+        BASE_ARGS + ["--quiet-window-seconds", "900",
+                     "--persist", "--confirm", w.CONFIRM_PERSIST,
+                     "--position-id", "312261388"],
+        env={w.WRITE_ENV: "1"})
+    check(code == 2 and "SUPABASE_URL" in err,
+          "with W=900 the same invocation proceeds to credential resolution — so the window "
+          "check above was the refusing guard, and no network is possible in this test env")
+
+
+def t_main_persist_refuses_malformed_selector_values():
+    code, err = main_stderr(
+        BASE_ARGS + ["--quiet-window-seconds", "900",
+                     "--persist", "--confirm", w.CONFIRM_PERSIST, "--position-id", "-5"],
+        env={w.WRITE_ENV: "1"})
+    check(code == 2 and "positive integer" in err, "a negative selector is refused")
+    try:
+        w.main(BASE_ARGS + ["--quiet-window-seconds", "900", "--position-id", "abc"])
+        check(False, "argparse should have refused a non-integer selector")
+    except SystemExit as e:
+        check(e.code == 2, "a non-integer selector is refused by the parser with exit 2")
+
+
+def t_append_client_is_rpc_allowlisted():
+    client = w.CaptureAppendClient("https://example.invalid", "k")
+    msg = boom(lambda: client._post_rpc("mt5_create_run_v1", {}))
+    check(msg is not None and "not in the allowlist" in msg,
+          "the client refuses every RPC name except the append RPC — before any network")
+    msg = boom(lambda: client.append({"wrong": 1}))
+    check(msg is not None and "not a write authorization" in msg,
+          "the client refuses anything that is not the minted capability")
+    check(w.ALLOWED_RPCS == frozenset({w.RPC_APPEND_CAPTURE}),
+          "the allowlist holds exactly the append RPC")
+
+
 ALL = [
     t_valid_pair_accepted, t_same_run_rejected, t_missing_run_rejected,
     t_wrong_scope_rejected, t_incomplete_run_rejected, t_unhealthy_run_rejected,
@@ -1515,7 +2457,7 @@ ALL = [
     t_rpc_request_is_the_approved_shape, t_multi_detection_request_carries_both_detections,
     t_no_account_facts_or_decision_state, t_inputs_are_not_mutated,
     t_duplicate_dry_run_is_identical,
-    t_dry_run_is_the_default, t_persist_cannot_execute_in_this_phase,
+    t_dry_run_is_the_default, t_phase_gate_is_open_and_still_restorable,
     t_persist_arming_requires_every_key, t_reader_has_no_write_surface,
     t_read_allowlist_is_enforced, t_staging_is_never_consulted,
     t_canonical_uuid_is_reused_not_restated, t_instants_must_carry_an_offset,
@@ -1565,6 +2507,53 @@ ALL = [
     t_reader_refuses_a_returned_row_outside_scope,
     t_membership_reader_refuses_a_foreign_scope_row,
     t_scope_and_status_hold_together_with_the_suspicious_gap,
+    # persist targeting + RPC execution (first-append canary phase)
+    t_production_window_constant_is_the_frozen_policy,
+    t_selector_requires_a_positive_integer,
+    t_two_eligible_candidates_and_selection_targets_exactly_one,
+    t_selection_never_persists_the_unselected_candidate,
+    t_selection_refuses_zero_matches,
+    t_selection_refuses_duplicate_matches,
+    t_selection_cannot_promote_an_open_candidate,
+    t_selection_cannot_reach_an_unanchored_candidate,
+    t_selection_refuses_inconsistent_eligibility,
+    t_selection_refuses_cross_scope_request,
+    t_selection_does_not_mutate_or_narrow_the_report,
+    t_append_client_refuses_raw_requests,
+    t_capability_mint_requires_the_internal_token,
+    t_capability_requires_full_arming_and_the_frozen_window,
+    t_capability_binds_exactly_one_named_request,
+    t_capability_rejects_forged_shapes,
+    t_capability_cannot_be_reused_with_a_different_request,
+    t_no_public_path_sends_two_candidates_in_one_invocation,
+    t_event_key_validator_is_exact,
+    t_rpc_result_truth_table,
+    t_validate_persisted_row_binds_identity,
+    t_persist_full_clean_run_with_replay,
+    t_persist_without_replay_stops_after_verification,
+    t_persist_count_failure_keeps_the_confirmed_write,
+    t_persist_readback_failure_keeps_the_confirmed_write,
+    t_persist_wrong_row_is_a_postverify_failure,
+    t_persist_transport_uncertainty_is_not_refused,
+    t_persist_malformed_result_is_uncertain_not_refused,
+    t_persist_server_refusal_is_confirmed_no_write,
+    t_persist_already_replay_makes_no_second_call,
+    t_replay_transport_uncertainty_keeps_the_write,
+    t_replay_mismatch_is_flagged_but_write_stands,
+    t_replay_count_growth_is_a_postverify_failure,
+    t_first_send_ordinary_exceptions_become_uncertain,
+    t_replay_send_ordinary_exceptions_keep_the_write,
+    t_failure_shapes_follow_the_applied_sql,
+    t_unknown_error_code_is_refused,
+    t_render_reports_each_phase_independently,
+    t_render_overall_follows_the_verdict_alone,
+    t_replay_requires_prior_full_verification,
+    t_execute_refuses_a_non_capability,
+    t_main_dry_run_refuses_the_selector,
+    t_main_persist_requires_the_selector,
+    t_main_persist_refuses_a_non_production_window,
+    t_main_persist_refuses_malformed_selector_values,
+    t_append_client_is_rpc_allowlisted,
 ]
 
 # A test function that is never registered is a test that never runs — and a suite that
