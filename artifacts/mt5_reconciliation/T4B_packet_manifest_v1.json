@@ -1,0 +1,17 @@
+{
+  "manifest_version": "T4B_packet_manifest_v1",
+  "packet_revision": "6",
+  "digest_domain": "sha256 over LF-normalised bytes; the packet's own T4B_CANONICAL_DIGEST_V1 slot is normalised to 64 zeros before hashing",
+  "source_artifact": "T4B_1_promotion_contract_v1.md",
+  "source_artifact_sha256": "FF3B6F6789A1E5127E11B8C1650BCD745FF375C9A6CB69823D459EAD03084E2B",
+  "packets": {
+    "mt5_t4b_promotion_schema_v1": {
+      "file": "T4B_promotion_schema_packet.sql",
+      "canonical_sha256": "307642904e3ba280c8cd555ee09e11ddfd07e3d3f48b1aba5be8181d5aefda2e"
+    },
+    "mt5_t4b_promotion_rpc_v1": {
+      "file": "T4B_promotion_rpc_packet.sql",
+      "canonical_sha256": "b2bcf6d310f50bc21c6536298543eea4bd080256952ad9c0994608cdc0127d63"
+    }
+  }
+}
