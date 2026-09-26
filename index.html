@@ -541,6 +541,52 @@ const db={
       return{ok:true,rows:data||[]};
     }catch(e){console.warn("[db] loadMt5Staging error",e);return{ok:false,error:(e&&e.message)||"load failed",rows:[]};}
   },
+  // MT5 M1 Exposure (read-only, default-OFF). Two reads, never a write, never throws.
+  // (1) Account discovery: ONE SELECT of only `source_account` from the caller's own staging rows, with an
+  // EXACT total in the same request, deterministic order and NO row limit (not the 200-row
+  // loadMt5Staging). Completeness is PROVEN, not assumed: PostgREST may still cap rows server-side while
+  // the exact count reports the full total, so data.length!==count means rows were withheld and the
+  // account set cannot be trusted. A usable account follows the existing contract — staging
+  // source_account is `text not null` and the RPC refuses a blank one — so it is a non-blank string, used
+  // VERBATIM (never trimmed or digit-stripped: the RPC matches the stored string exactly).
+  async loadMt5DiscoveryAccounts(uid){
+    if(!uid)return{kind:"error",errorCode:"NO_UID"};
+    try{
+      const{data,error,count}=await SUPA.from("mt5_import_staging").select("source_account",{count:"exact"}).eq("user_id",uid).order("id",{ascending:true});
+      if(error)return{kind:"error",errorCode:error.code||null};
+      if(!Number.isSafeInteger(count)||count<0)return{kind:"untrusted",reason:"count_unavailable"};   // incl. NaN from a "*" total
+      if(!Array.isArray(data))return{kind:"untrusted",reason:"bad_shape"};
+      if(data.length!==count)return{kind:"untrusted",reason:"incomplete",returned:data.length,total:count};
+      const valid=[];let invalid=0;
+      for(const r of data){const a=(r&&typeof r==="object")?r.source_account:undefined;if(typeof a==="string"&&a.trim()!=="")valid.push(a);else invalid++;}
+      return{kind:"ok",accounts:[...new Set(valid)].sort(),invalid,rows:count};   // sorted for a stable DISPLAY only — never used to choose
+    }catch(e){return{kind:"error",errorCode:"THROWN"};}
+  },
+  // (2) The snapshot: ONE call to the applied SECURITY DEFINER read RPC mt5_get_current_snapshot_v1. The
+  // raw MT5 login is never logged — only what diagnoses an account-string mismatch (masked form, length,
+  // digits-only, trimmed).
+  async loadMt5CurrentSnapshot(sourceAccount){
+    const a=typeof sourceAccount==="string"?sourceAccount:"";
+    console.info("[mt5-exposure] account",_mt5MaskAccount(a),"len",a.length,"digitsOnly",/^\d+$/.test(a),"trimmed",a===a.trim());
+    try{
+      const{data,error,status}=await SUPA.rpc("mt5_get_current_snapshot_v1",{p_source_account:a});
+      if(error){
+        const c=error.code||null;
+        if(c==="PGRST202"||c==="42501")return{kind:"rpc_missing",errorCode:c};          // function or EXECUTE grant absent
+        if(c==="PGRST301"||c==="PGRST302"||c==="PGRST303"||status===401)return{kind:"refused",errorCode:"ERR_UNAUTHENTICATED"};
+        return{kind:"transport",errorCode:c};
+      }
+      if(!data||typeof data!=="object")return{kind:"transport",errorCode:"BAD_SHAPE"};
+      if(data.ok!==true)return{kind:"refused",errorCode:data.error_code||"UNKNOWN"};
+      const snap=(data.snapshot&&typeof data.snapshot==="object")?data.snapshot:null;   // null for no_snapshot
+      const positions=Array.isArray(data.positions)?data.positions.filter(p=>p&&typeof p==="object"):[];
+      // Non-blocking canaries: nothing is gated on them.
+      if(snap&&snap.freshness_state!==data.freshness_state)console.warn("[mt5-exposure] freshness divergence",data.freshness_state,snap.freshness_state);
+      if(snap&&data.freshness_state==="fresh"&&snap.snapshot_health==="healthy"&&typeof snap.positions_count==="number"&&snap.positions_count!==positions.length)
+        console.warn("[mt5-exposure] positions_count divergence",snap.positions_count,positions.length);
+      return{kind:"ok",freshness:data.freshness_state,snapshot:snap,positions};
+    }catch(e){return{kind:"transport",errorCode:"THROWN"};}
+  },
 };
 
 // ─── Trade Events (ARCHIVED 2026-05-12) ─────────────────────────────────────
@@ -6449,6 +6495,212 @@ const DELTA_STOCK_PRESET={
   contractSize:1,tickSize:0.01,tickValue:0.01,manualPriceOnly:true,
   initialMargin:0,commissionPerLeg:0,vatEnabled:false,
 };
+// ─── MT5 M1: Exposure card (read-only, default-OFF `tj_mt5_exposure`) ─────────────────────────────
+// Reads the applied SECURITY DEFINER RPC mt5_get_current_snapshot_v1 (auth.uid()-scoped; it returns
+// positions ONLY when the run is healthy AND fresh) for the ONE account a dedicated, completeness-proven
+// discovery SELECT finds. Shows per-symbol, side-split GROSS notional in each symbol's own UNCONVERTED
+// currency, and floating P/L in the MT5 account's deposit currency, which M1 does NOT identify. NO gearing
+// %, NO P/L %, NO FX, NO equity, NO cross-symbol total — those need M2 (see PROJECT_STATE.md). Missing or
+// non-finite data renders "—", never 0 / ∞ / NaN. Never chooses between accounts.
+// Enable: localStorage.setItem("tj_mt5_exposure","true") and reload (exact `true` only).
+// Mounted in App on the Positions page (App owns authUid on every base; PagePositions may not).
+const EXPOSURE_FLAG="tj_mt5_exposure";
+// A usable number, or null. Postgres serialises numeric NaN/±Infinity inside jsonb as JSON STRINGS, so
+// the typeof check is what turns them into "—". Never fold null into arithmetic: in JS, null*x === 0.
+const _mt5Num=v=>(typeof v==="number"&&Number.isFinite(v))?v:null;
+// Gross notional |volume × contract_size × price_current|, or null. Finite INPUTS can still overflow to
+// ±Infinity, so every arithmetic stage is re-checked, not only the inputs.
+function _mt5Notional(p){
+  const v=_mt5Num(p.volume),c=_mt5Num(p.contract_size),x=_mt5Num(p.price_current);
+  if(v===null||c===null||x===null)return null;
+  const vc=v*c;if(!Number.isFinite(vc))return null;
+  const n=vc*x;if(!Number.isFinite(n))return null;
+  const g=Math.abs(n);return Number.isFinite(g)?g:null;
+}
+// The ONLY numeric formatter of the card: a missing or non-finite value renders "—", never ∞ / NaN / 0.
+const _mt5Fmt=(n,d)=>(typeof n==="number"&&Number.isFinite(n))?fmtNum(n===0?0:n,d):"—";
+// Pure. One row per symbol+side — Long and Short are never netted. Every accumulator accepts `next` only
+// when it is finite; once a metric is unavailable it stays unavailable (never a partial sum). One
+// unusable profit anywhere makes floating P/L unavailable — it is never the sum of a valid subset.
+function _mt5ExposureRows(positions){
+  const by=new Map();let profit=0,profitBad=0,profitOverflow=false;
+  for(const p of positions){
+    const sym=(typeof p.symbol_raw==="string"&&p.symbol_raw!=="")?p.symbol_raw:"(ไม่มีชื่อ)";
+    const side=p.side==="buy"?"Long":p.side==="sell"?"Short":"?";
+    const key=sym+"|"+side;
+    if(!by.has(key))by.set(key,{key,sym,side,count:0,lots:0,lotsBad:0,notional:0,incomplete:0,overflow:false,cs:new Set()});
+    const r=by.get(key);r.count++;
+    const vol=_mt5Num(p.volume),cs=_mt5Num(p.contract_size);
+    if(cs!==null)r.cs.add(cs);
+    if(vol===null)r.lotsBad++;
+    else if(r.lots!==null){const next=r.lots+Math.abs(vol);r.lots=Number.isFinite(next)?next:null;}
+    const n=_mt5Notional(p);
+    if(n===null)r.incomplete++;
+    else if(r.notional!==null){const next=r.notional+n;if(Number.isFinite(next))r.notional=next;else{r.notional=null;r.overflow=true;}}
+    const pr=_mt5Num(p.profit);
+    if(pr===null)profitBad++;
+    else if(profit!==null){const next=profit+pr;if(Number.isFinite(next))profit=next;else{profit=null;profitOverflow=true;}}
+  }
+  const rows=[...by.values()].map(r=>({key:r.key,sym:r.sym,side:r.side,count:r.count,
+    lots:(r.lotsBad||r.lots===null)?null:r.lots,notional:(r.incomplete||r.notional===null)?null:r.notional,
+    incomplete:r.incomplete,overflow:r.overflow,csKinds:r.cs.size}))
+    .sort((x,y)=>x.sym<y.sym?-1:x.sym>y.sym?1:(x.side<y.side?-1:x.side>y.side?1:0));
+  return{rows,profit:(profitBad||profit===null)?null:profit,profitBad,profitOverflow,count:positions.length};
+}
+// Pure. What to say for a (phase, owned result). `numbers` is true for exactly one state:
+// fresh + healthy + at least one position.
+function _mt5ExposureStatus(phase,res,info){
+  if(phase==="signed_out")return{tone:"muted",text:"ต้องเข้าสู่ระบบ",recheck:false};
+  if(phase==="discovering"||phase==="loading")return{tone:"muted",text:"กำลังโหลด…",recheck:false};
+  if(phase==="discovery_failed")return{tone:"warn",text:"อ่านรายการบัญชี MT5 ไม่สำเร็จ ("+String((info&&info.errorCode)||"?")+")",recheck:true};
+  if(phase==="discovery_untrusted"){
+    const why=info&&info.reason;
+    if(why==="incomplete")return{tone:"warn",text:"รายการบัญชี MT5 ไม่ครบ (ได้ "+info.returned+" จาก "+info.total+" แถว) — ไม่เลือกบัญชีให้",recheck:true};
+    if(why==="invalid_account")return{tone:"warn",text:"พบแถวที่ไม่มีรหัสบัญชี MT5 "+info.invalid+" แถว — ไม่เลือกบัญชีให้",recheck:true};
+    return{tone:"warn",text:"ตรวจความครบของรายการบัญชี MT5 ไม่ได้ — ไม่เลือกบัญชีให้",recheck:true};
+  }
+  if(phase==="no_account")return{tone:"muted",text:"ไม่พบบัญชี MT5 ที่ตรวจพบได้",recheck:true};
+  if(phase==="multi_account")return{tone:"warn",text:"พบมากกว่า 1 บัญชี MT5 — M1 ยังไม่เลือกบัญชีให้อัตโนมัติ",recheck:true};
+  if(!res)return{tone:"muted",text:"กำลังโหลด…",recheck:false};
+  const code=String(res.errorCode||"?");
+  if(res.kind==="transport")return{tone:"warn",text:"เชื่อมต่อไม่สำเร็จ ("+code+")",recheck:true};
+  if(res.kind==="rpc_missing")return{tone:"alarm",text:"RPC ไม่พร้อมสำหรับผู้ใช้นี้ ("+code+")",recheck:true};
+  if(res.kind==="refused"){
+    if(code==="ERR_UNAUTHENTICATED")return{tone:"warn",text:"เซสชันหมดอายุ — กรุณาเข้าสู่ระบบใหม่",recheck:true};
+    if(code==="ERR_BAD_INPUT")return{tone:"warn",text:"บัญชีไม่ถูกต้อง (ERR_BAD_INPUT)",recheck:true};
+    if(code==="ERR_POLICY_INVALID")return{tone:"alarm",text:"นโยบาย snapshot ฝั่งเซิร์ฟเวอร์ผิดปกติ (ERR_POLICY_INVALID)",recheck:true};
+    return{tone:"warn",text:"ถูกปฏิเสธ ("+code+")",recheck:true};
+  }
+  if(res.kind!=="ok")return{tone:"alarm",text:"ผลลัพธ์ไม่รู้จัก ("+String(res.kind)+")",recheck:true};
+  const f=res.freshness,snap=res.snapshot;
+  if(f==="no_snapshot")return{tone:"muted",text:"ยังไม่มี snapshot",recheck:true};
+  if(f==="stale")return{tone:"warn",text:"ข้อมูลไม่สด — ไม่แสดงตัวเลข",recheck:true,meta:true};
+  if(f==="suspicious")return{tone:"warn",text:"snapshot น่าสงสัย — ไม่แสดงตัวเลข",recheck:true,meta:true};
+  if(f==="fresh"){
+    const health=snap?snap.snapshot_health:null;
+    if(health!=="healthy")return{tone:"alarm",text:"ข้อมูลถูกกันไว้: snapshot ไม่ healthy ("+String(health||"ไม่ระบุ")+")",recheck:true,meta:true};
+    if(!res.positions.length)return{tone:"muted",text:"ไม่มี position เปิด",recheck:true,meta:true};
+    return{tone:"ok",text:null,recheck:true,meta:true,numbers:true};
+  }
+  return{tone:"alarm",text:"สถานะไม่รู้จัก ("+String(f)+")",recheck:true};
+}
+// Static (JIT-safe) class strings per tone — no template-constructed class names.
+const _MT5_EXPO_BOX={
+  muted:"mt-2 bg-card border border-border rounded-xl px-3 py-2 text-[11px] text-muted space-y-1",
+  ok:"mt-2 bg-card border border-border rounded-xl px-3 py-2 text-[11px] text-muted space-y-1",
+  warn:"mt-2 bg-card border border-yellow/30 rounded-xl px-3 py-2 text-[11px] text-muted space-y-1",
+  alarm:"mt-2 bg-card border border-red/30 rounded-xl px-3 py-2 text-[11px] text-muted space-y-1",
+};
+const _MT5_EXPO_TXT={muted:"text-muted",ok:"text-txt",warn:"text-yellow",alarm:"text-red"};
+function Mt5ExposureNumbers({agg}){
+  const partial=agg.profit===null||agg.rows.some(r=>r.notional===null||r.lots===null);
+  const incompletePositions=agg.rows.reduce((s,r)=>s+r.incomplete,0);
+  const overflowRows=agg.rows.filter(r=>r.overflow).length;
+  return(
+    <div className="space-y-2 pt-1">
+      <div className="bg-input/20 rounded-lg px-3 py-2">
+        <div className="text-muted">มูลค่าตามสกุลเงินของแต่ละสัญลักษณ์ — ยังไม่แปลงค่า ห้ามนำแต่ละแถวมารวมกัน</div>
+        {agg.rows.map(r=>(
+          <div key={r.key} className="mt-1">
+            <span className="text-txt">{r.sym} · {r.side}</span>{" · "}
+            <span>{_mt5Fmt(r.lots,2)} lot · {r.count} position</span>{" · "}
+            <span className="text-txt tabular-nums">{_mt5Fmt(r.notional,0)}</span>{" "}
+            <span>(สกุลของสัญลักษณ์, ไม่แปลงค่า)</span>
+            {r.csKinds>1&&<span className="block text-yellow">contract size ไม่เท่ากันในกลุ่มนี้</span>}
+          </div>
+        ))}
+        <div className="mt-1 text-muted">รวมทั้งพอร์ตต้องรอ FX (M2)</div>
+      </div>
+      <div data-m1="pl" className="bg-input/20 rounded-lg px-3 py-2">
+        <span className="text-muted">Floating P/L · สกุลเงินบัญชี MT5 (ยังไม่ระบุสกุล) · ไม่รวม swap/ค่าคอม</span>{" "}
+        <span className="text-txt tabular-nums">{_mt5Fmt(agg.profit,2)}</span>
+      </div>
+      {partial&&<div className="text-yellow">ข้อมูลบางส่วนคำนวณไม่ได้: {incompletePositions} position ข้อมูลไม่ครบ · {overflowRows} แถวค่าเกินขอบเขต · {agg.profitBad} position ไม่มี profit{agg.profitOverflow?" · ผลรวม P/L เกินขอบเขต":""}</div>}
+    </div>
+  );
+}
+// The app has no other error boundary: an unforeseen render error inside the card would otherwise
+// unmount the whole Journal. This contains it to the card. Mounted only when the flag is on.
+class Mt5ExposureBoundary extends React.Component{
+  constructor(p){super(p);this.state={failed:false};}
+  static getDerivedStateFromError(){return{failed:true};}
+  componentDidCatch(e){console.warn("[mt5-exposure] render error contained",e&&e.message);}
+  render(){
+    if(this.state.failed)return <div className={_MT5_EXPO_BOX.alarm}><span className="text-red">MT5 Exposure แสดงผลไม่ได้ — ส่วนอื่นของ Journal ไม่ได้รับผลกระทบ</span></div>;
+    return this.props.children;
+  }
+}
+function Mt5ExposureCard({authUid}){
+  // FLAG GATE ONLY. Never add another hook here: React runs every hook of a render before a later
+  // `return null`, so an effect in this function would fetch even with the flag off.
+  const[on]=useState(()=>ls.get(EXPOSURE_FLAG,false)===true);
+  if(!on)return null;
+  return <Mt5ExposureBoundary><Mt5ExposureCardInner authUid={authUid}/></Mt5ExposureBoundary>;
+}
+function Mt5ExposureCardInner({authUid}){
+  // ONE state object stamped with the authUid it belongs to. Render reads ONLY `view`, which is empty
+  // unless st.owner===authUid — so no commit can show another user's accounts or numbers, whatever
+  // order the effects run in.
+  const[st,setSt]=useState({owner:null,phase:"discovering",accounts:[],result:null,info:null});
+  const[nonce,setNonce]=useState(0);
+  const discoveredFor=useRef(null);   // authUid whose discovery SELECT was issued (this mount)
+  const requestedFor=useRef(null);    // authUid|account whose RPC was issued since the last discovery
+  useEffect(()=>{                     // (1) discovery: ONE SELECT per authUid (+1 per re-check); never guesses
+    if(!authUid){discoveredFor.current=null;requestedFor.current=null;setSt({owner:null,phase:"signed_out",accounts:[],result:null,info:null});return;}
+    if(discoveredFor.current===authUid)return;
+    discoveredFor.current=authUid;requestedFor.current=null;
+    const owner=authUid;let alive=true;
+    setSt({owner,phase:"discovering",accounts:[],result:null,info:null});
+    db.loadMt5DiscoveryAccounts(owner).then(d=>{
+      if(!alive)return;
+      if(!d||d.kind==="error"){setSt({owner,phase:"discovery_failed",accounts:[],result:null,info:d||null});return;}
+      if(d.kind!=="ok"){setSt({owner,phase:"discovery_untrusted",accounts:[],result:null,info:d});return;}
+      // Precedence: more than one account refuses first (never choose one); then any row without a usable
+      // account makes the set untrustworthy; only then zero, or exactly one.
+      const accts=d.accounts;
+      const phase=accts.length>1?"multi_account":d.invalid>0?"discovery_untrusted":accts.length===0?"no_account":"loading";
+      setSt({owner,phase,accounts:(phase==="multi_account"||phase==="loading")?accts:[],result:null,
+        info:phase==="discovery_untrusted"?{kind:"untrusted",reason:"invalid_account",invalid:d.invalid}:null});
+    });
+    return()=>{alive=false;};
+  },[authUid,nonce]);
+  const view=(authUid&&st.owner===authUid)?st:{owner:authUid||null,phase:authUid?"discovering":"signed_out",accounts:[],result:null,info:null};
+  const account=(view.phase==="loading"||view.phase==="done")&&view.accounts.length===1?view.accounts[0]:null;
+  const k=(authUid&&account)?authUid+"|"+account:null;
+  useEffect(()=>{                     // (2) the RPC: at most one per authUid|account since the last discovery
+    if(!k)return;
+    if(requestedFor.current===k)return;
+    requestedFor.current=k;
+    const owner=authUid,key=k;let alive=true;
+    db.loadMt5CurrentSnapshot(account).then(r=>{if(!alive)return;setSt(s=>s.owner===owner?{...s,phase:"done",result:{...r,key}}:s);});
+    return()=>{alive=false;};
+  },[k,nonce]);
+  const res=(view.result&&view.result.key===k)?view.result:null;
+  const phase=(view.phase==="done"&&!res)?"loading":view.phase;   // "done" without an owned result renders as loading
+  const inFlight=phase==="discovering"||phase==="loading";
+  const recheck=()=>{
+    if(inFlight||phase==="signed_out")return;
+    if(phase==="done"){requestedFor.current=null;setSt(s=>({...s,phase:"loading",result:null}));}
+    else discoveredFor.current=null;  // every discovery-level state: the account set is what to re-check
+    setNonce(n=>n+1);
+  };
+  const status=_mt5ExposureStatus(phase,res,view.info);
+  const snap=(res&&res.kind==="ok")?res.snapshot:null;
+  const agg=status.numbers?_mt5ExposureRows(res.positions):null;
+  return(
+    <div className={_MT5_EXPO_BOX[status.tone]}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-sm text-txt">MT5 Exposure <span className="text-muted">· อ่านอย่างเดียว</span></span>
+        {status.recheck&&!inFlight&&<button type="button" onClick={recheck} className="text-xs text-muted hover:text-yellow transition px-2 py-0.5 rounded hover:bg-input">ตรวจอีกครั้ง</button>}
+      </div>
+      {status.text&&<div className={_MT5_EXPO_TXT[status.tone]}>{status.text}</div>}
+      {phase==="multi_account"&&<div>{view.accounts.map(a=>_mt5MaskAccount(a)).join(" · ")}</div>}
+      {status.meta&&snap&&<div>snapshot {fmtDT(snap.snapshot_completed_at)} · {typeof snap.positions_count==="number"?snap.positions_count:"—"} position</div>}
+      {agg&&<Mt5ExposureNumbers agg={agg}/>}
+    </div>
+  );
+}
+
 // ─── MT5 Phase 0D-1: read-only staging Inbox (diagnostic, default-OFF) ──────────────────────
 // Renders mt5_import_staging rows owned by the current user through the existing authenticated
 // RLS SELECT-own policy. READ-ONLY: no writes, no RPC, no lifecycle/mapping/group actions — the
@@ -9999,6 +10251,7 @@ function App({session,onSignOut}){
       )}
 
       <main className="max-w-screen-xl mx-auto px-4 py-5">
+        {page==="positions"&&<Mt5ExposureCard authUid={authUid}/>}
         {page==="positions"&&<PagePositions trades={trades} products={products} productRegistry={productRegistry} balance={balance} portfolio={portfolio} groupIdMap={tradeGroupIds} onCommitOpen={commitOpen} onCommitExecuteDraft={commitExecuteDraft} onCommitClose={commitClose} onCommitUpdate={commitUpdateTrade} onCommitMerge={commitMerge} onDeleteTrade={deleteTrade} showConfirm={showConfirm} showToast={showToast} livePrices={livePrices} liveTimestamps={liveTimestampsAll} liveErrors={liveErrorsAll} fetchPricesFn={fetchPrices}/>}
         {page==="journal"  &&<PageJournal   trades={trades} products={products} balance={balance} portfolio={portfolio} onCommitUpdate={commitUpdateTrade} onDeleteTrade={deleteTrade} onCommitImport={commitImportTrades} onProductsChange={setProducts} onBalanceSet={handleImportBalance} onTransactions={handleImportTransactions} showConfirm={showConfirm} showToast={showToast}/>}
         {page==="steps"    &&<PageSteps     trades={trades} products={products} portfolio={portfolio} livePrices={livePrices} onPortfolioChange={setPortfolio} authUid={authUid}/>}
